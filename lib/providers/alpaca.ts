@@ -9,7 +9,7 @@ import {
 type AlpacaConfig = {
   keyId?: string;
   secretKey?: string;
-  feed?: "iex" | "sip";
+  feed?: "iex" | "sip" | "delayed_sip";
 };
 
 function tickerFromSymbol(symbol: CanonicalSymbol) {
@@ -39,8 +39,9 @@ export class AlpacaProvider
 
   async getSnapshot(symbol: CanonicalSymbol): Promise<MarketSnapshot> {
     const ticker = tickerFromSymbol(symbol);
+    const feed = this.config.feed ?? "iex";
     const response = await fetch(
-      `https://data.alpaca.markets/v2/stocks/${encodeURIComponent(ticker)}/snapshot?feed=${this.config.feed ?? "iex"}`,
+      `https://data.alpaca.markets/v2/stocks/${encodeURIComponent(ticker)}/snapshot?feed=${feed}`,
       { headers: this.headers(), signal: AbortSignal.timeout(8_000) },
     );
 
@@ -70,9 +71,10 @@ export class AlpacaProvider
       changePercent: (change / previousClose) * 100,
       volume: data.dailyBar?.v ?? 0,
       marketCap: "Unavailable",
-      isDelayed: this.config.feed !== "sip",
-      delaySeconds: this.config.feed === "sip" ? 0 : 900,
-      provider: `Alpaca ${this.config.feed ?? "iex"}`,
+      isDelayed: feed === "delayed_sip",
+      delaySeconds: feed === "delayed_sip" ? 900 : 0,
+      provider: `Alpaca ${feed}`,
+      marketCoverage: feed === "iex" ? "limited-exchange" : "consolidated",
     };
   }
 

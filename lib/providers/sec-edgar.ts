@@ -7,6 +7,13 @@ type SecEdgarConfig = {
   cikByTicker: Record<string, string>;
 };
 
+const MAX_REQUESTS_PER_WINDOW = 8;
+const RATE_LIMIT_WINDOW_MS = 1_000;
+
+function wait(milliseconds: number) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 export class SecEdgarProvider implements IntelligenceSourceProvider {
   readonly name = "sec-edgar";
 
@@ -21,8 +28,7 @@ export class SecEdgarProvider implements IntelligenceSourceProvider {
       throw new Error("SEC_USER_AGENT must identify the Omnigaze application and operator.");
     }
 
-    const results = await Promise.all(
-      options.symbols.map(async (symbol) => {
+    const fetchSymbol = async (symbol: CanonicalSymbol) => {
         const ticker = symbol.split(":")[1];
         const cik = this.config.cikByTicker[ticker]?.padStart(10, "0");
         if (!cik) return [];
@@ -67,8 +73,14 @@ export class SecEdgarProvider implements IntelligenceSourceProvider {
             publishedAt: filing.acceptedAt ?? `${filing.filingDate}T00:00:00.000Z`,
             payload: filing,
           }));
-      }),
-    );
+      };
+
+    const results: RawSourceEvent[][] = [];
+    for (let offset = 0; offset < options.symbols.length; offset += MAX_REQUESTS_PER_WINDOW) {
+      if (offset > 0) await wait(RATE_LIMIT_WINDOW_MS);
+      const batch = options.symbols.slice(offset, offset + MAX_REQUESTS_PER_WINDOW);
+      results.push(...(await Promise.all(batch.map(fetchSymbol))));
+    }
 
     return results.flat().slice(0, options.limit);
   }

@@ -23,6 +23,7 @@ The current repository is the production-minded foundation. The UI is interactiv
 - MCP 2026-07-28 at `POST /mcp`
 - Vitest, ESLint, and TypeScript release gates
 - pnpm
+- GitHub Actions CI with a locked, four-gate verification pipeline
 
 ## Repository map
 
@@ -40,7 +41,10 @@ lib/
   repositories/         User-owned persistence
   services/             Shared application/MCP domain services
 tests/                  Domain and MCP contract tests
+docs/                   Architecture and engineering decisions
 ```
+
+The end-to-end data flow and failure boundaries are documented in [`docs/architecture.md`](docs/architecture.md).
 
 ## Local development
 

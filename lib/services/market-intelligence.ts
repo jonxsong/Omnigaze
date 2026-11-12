@@ -89,7 +89,7 @@ export function getDefaultWatchlistDashboard() {
 
 export const serviceMeta = {
   mode: "demo" as const,
-  asOf: "2026-11-11T18:43:00.000Z",
+  asOf: "2026-11-12T05:46:00.000Z",
   isDelayed: true,
   provider: "Omnigaze fixture provider",
   notice:

@@ -1,12 +1,11 @@
 import { z } from "zod";
 import {
   getDefaultWatchlistDashboard,
-  getIntelligenceFeed,
-  getMarketSnapshot,
   getOmnigazeView,
   searchSymbols,
   serviceMeta,
 } from "@/lib/services/market-intelligence";
+import { liveMarketData } from "@/lib/services/live-market-data";
 import type { CanonicalSymbol } from "@/lib/market-types";
 
 export const dynamic = "force-dynamic";
@@ -52,6 +51,7 @@ const tools = [
           default: "low",
         },
         limit: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+        since: { type: "string", format: "date-time" },
       },
       additionalProperties: false,
     },
@@ -73,6 +73,16 @@ const tools = [
     name: "get_watchlist_dashboard",
     description:
       "Return the authenticated user's watchlist dashboard and latest material events.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_provider_status",
+    description:
+      "Report which market, news, and filing providers are configured and healthy.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -115,12 +125,12 @@ function jsonRpcError(
   });
 }
 
-function toolContent(data: unknown, meta: Record<string, unknown> = {}) {
+function toolContent(data: unknown, meta: object = serviceMeta) {
   return {
     content: [
       {
         type: "text",
-        text: JSON.stringify({ data, meta: { ...serviceMeta, ...meta } }, null, 2),
+        text: JSON.stringify({ data, meta }, null, 2),
       },
     ],
   };
@@ -154,9 +164,14 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
       case "get_market_snapshot": {
         const parsed = z.object({ symbol_id: symbolSchema }).safeParse(args);
         if (!parsed.success) return validationError(parsed.error);
-        const snapshot = getMarketSnapshot(parsed.data.symbol_id);
-        return snapshot
-          ? toolContent(snapshot)
+        const result = await liveMarketData.getSnapshot(parsed.data.symbol_id);
+        return result.data
+          ? toolContent(result.data, {
+              ...result.meta,
+              asOf: result.data.asOf,
+              isDelayed: result.data.isDelayed,
+              provider: result.data.provider,
+            })
           : toolError("Symbol not found.");
       }
       case "get_intelligence_feed": {
@@ -168,17 +183,19 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
               .optional()
               .default("low"),
             limit: z.number().int().min(1).max(100).optional().default(20),
+            since: z.string().datetime({ offset: true }).optional(),
           })
           .safeParse(args);
-        return parsed.success
-          ? toolContent(
-              getIntelligenceFeed({
-                symbolId: parsed.data.symbol_id,
-                minimumMateriality: parsed.data.minimum_materiality,
-                limit: parsed.data.limit,
-              }),
-            )
-          : validationError(parsed.error);
+        if (!parsed.success) return validationError(parsed.error);
+        const result = await liveMarketData.getIntelligenceFeed({
+          symbols: parsed.data.symbol_id ? [parsed.data.symbol_id] : undefined,
+          minimumMateriality: parsed.data.minimum_materiality,
+          limit: parsed.data.limit,
+          since:
+            parsed.data.since ??
+            new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(),
+        });
+        return toolContent(result.data, result.meta);
       }
       case "get_omnigaze_view": {
         const parsed = z.object({ symbol_id: symbolSchema }).safeParse(args);
@@ -190,6 +207,11 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         const userId = request.headers.get("oai-authenticated-user-id") ?? "local-preview";
         return toolContent(getDefaultWatchlistDashboard(), {
           ownerScope: userId,
+        });
+      }
+      case "get_provider_status": {
+        return toolContent(await liveMarketData.getProviderStatus(), {
+          generatedAt: new Date().toISOString(),
         });
       }
       default:

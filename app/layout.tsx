@@ -2,7 +2,10 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Omnigaze — Your market, one intelligent view",
+  title: {
+    default: "Omnigaze — Your market, one intelligent view",
+    template: "%s | Omnigaze",
+  },
   description:
     "Track the companies you care about and understand the evidence moving them.",
   icons: {

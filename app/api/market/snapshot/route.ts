@@ -1,5 +1,5 @@
-import { getMarketSnapshot, serviceMeta } from "@/lib/services/market-intelligence";
 import type { CanonicalSymbol } from "@/lib/market-types";
+import { liveMarketData } from "@/lib/services/live-market-data";
 
 export const dynamic = "force-dynamic";
 
@@ -12,8 +12,16 @@ export async function GET(request: Request) {
     );
   }
 
-  const snapshot = getMarketSnapshot(symbol as CanonicalSymbol);
-  if (!snapshot) return Response.json({ error: "Symbol not found." }, { status: 404 });
+  const result = await liveMarketData.getSnapshot(symbol as CanonicalSymbol);
+  if (!result.data) {
+    return Response.json(
+      {
+        error: "Market data is unavailable for this symbol.",
+        meta: result.meta,
+      },
+      { status: 503, headers: { "Cache-Control": "no-store" } },
+    );
+  }
 
-  return Response.json({ data: snapshot, meta: serviceMeta });
+  return Response.json(result, { headers: { "Cache-Control": "no-store" } });
 }

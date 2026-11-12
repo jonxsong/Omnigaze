@@ -32,18 +32,18 @@ const seeds: SeedStock[] = [
     exchange: "NASDAQ",
     name: "NVIDIA Corporation",
     sector: "Semiconductors",
-    price: 188.42,
-    previousClose: 182.71,
-    volume: 38_420_000,
+    price: 159.37,
+    previousClose: 173.85,
+    volume: 68_420_000,
     marketCap: "$4.61T",
-    stance: "bullish",
-    confidence: 0.84,
-    headline: "Datacenter demand remains the dominant near-term driver",
+    stance: "mixed",
+    confidence: 0.78,
+    headline: "Governance scrutiny is dominating near-term attention",
     summary:
-      "Recent disclosures reinforce accelerator demand, while export restrictions and customer concentration remain the clearest counterweights.",
+      "A board investigation and questions about executive continuity are adding governance risk, while the underlying demand evidence remains a separate fundamental signal.",
     whyNow:
-      "The stock is outperforming the semiconductor index after new capacity commentary and positive supplier read-throughs.",
-    direction: "positive",
+      "Shares moved sharply around new reporting concerning CEO Jensen Huang. The timing is observable; Omnigaze does not treat it as proof that one controversy solely caused the move.",
+    direction: "negative",
   },
   {
     id: "NASDAQ:MSFT",
@@ -144,7 +144,7 @@ function createSeries(
   const seed = hash(`${ticker}-${range}`);
   const bias = ((seed % 7) - 2) / 750;
 
-  const anchorTime = Date.parse("2026-11-11T18:42:00.000Z");
+  const anchorTime = Date.parse("2026-11-12T05:45:00.000Z");
 
   return Array.from({ length: points }, (_, index) => {
     const progress = index / (points - 1);
@@ -163,7 +163,7 @@ function createSeries(
 }
 
 function buildEvidence(seed: SeedStock): Evidence[] {
-  return [
+  const evidence: Evidence[] = [
     {
       id: `${seed.ticker}-evidence-filing`,
       classification: "fact",
@@ -179,7 +179,7 @@ function buildEvidence(seed: SeedStock): Evidence[] {
       classification: "derived",
       title: "Price and relative-volume observation",
       publisher: "Omnigaze market pipeline",
-      publishedAt: "2026-11-11T18:42:00.000Z",
+      publishedAt: "2026-11-12T05:45:00.000Z",
       url: null,
       locator: "Regular session",
     },
@@ -188,21 +188,50 @@ function buildEvidence(seed: SeedStock): Evidence[] {
       classification: "inference",
       title: "Omnigaze synthesis",
       publisher: "Omnigaze",
-      publishedAt: "2026-11-11T18:43:00.000Z",
+      publishedAt: "2026-11-12T05:46:00.000Z",
       url: null,
       locator: "Near-term view",
     },
   ];
+
+  if (seed.ticker === "NVDA") {
+    evidence.unshift(
+      {
+        id: "NVDA-evidence-board-investigation",
+        classification: "fact",
+        title: "NVIDIA board announces an independent investigation",
+        publisher: "NVIDIA Investor Relations",
+        publishedAt: "2026-11-08T21:41:00.000Z",
+        url: "https://investor.nvidia.com/news/press-release-details/2026/Statement-from-NVIDIA-Board-of-Directors/default.aspx",
+        locator: "Statement from NVIDIA Board of Directors",
+        excerpt:
+          "The company confirmed that its board initiated an independent investigation following reporting about a foreign intelligence effort targeting its CEO.",
+      },
+      {
+        id: "NVDA-evidence-governance-market-response",
+        classification: "fact",
+        title: "Market coverage records a sharp move around governance reports",
+        publisher: "Associated Press",
+        publishedAt: "2026-11-12T04:11:24.000Z",
+        url: "https://apnews.com/article/8bf08407eafe1655ed73112f7494029a",
+        locator: "Market and company-governance coverage",
+        excerpt:
+          "Reporting documented a sharp after-hours share move while new details and board deliberations were being reported.",
+      },
+    );
+  }
+
+  return evidence;
 }
 
 function buildEvents(seed: SeedStock): IntelligenceEvent[] {
-  return [
+  const events: IntelligenceEvent[] = [
     {
       id: `${seed.ticker}-event-primary`,
       symbolId: seed.id,
       headline: seed.headline,
       summary: seed.whyNow,
-      occurredAt: "2026-11-11T18:39:00.000Z",
+      occurredAt: "2026-11-12T05:39:00.000Z",
       materiality: "high",
       possibleDirection: seed.direction,
       status: "verified",
@@ -223,6 +252,31 @@ function buildEvents(seed: SeedStock): IntelligenceEvent[] {
       category: "filing",
     },
   ];
+
+  if (seed.ticker === "NVDA") {
+    events.unshift({
+      id: "NVDA-event-governance-scrutiny",
+      symbolId: seed.id,
+      headline: "Board investigation elevates executive and governance risk",
+      summary:
+        "NVIDIA confirmed an independent board investigation, and subsequent reporting coincided with sharp share moves. This is a temporal association and plausible contributor—not proof that the controversy solely caused the decline.",
+      occurredAt: "2026-11-12T04:11:24.000Z",
+      materiality: "critical",
+      possibleDirection: "negative",
+      status: "preliminary",
+      evidenceIds: [
+        "NVDA-evidence-board-investigation",
+        "NVDA-evidence-governance-market-response",
+      ],
+      category: "governance",
+      claimStatus: "official-investigation",
+      causalLink: "plausible-contributor",
+      topicTags: ["executive conduct", "board oversight", "succession risk"],
+      sourceCount: 2,
+    });
+  }
+
+  return events;
 }
 
 export const stockWorkspaces: StockWorkspace[] = seeds.map((seed) => {
@@ -241,8 +295,8 @@ export const stockWorkspaces: StockWorkspace[] = seeds.map((seed) => {
     },
     snapshot: {
       symbolId: seed.id,
-      asOf: "2026-11-11T18:42:00.000Z",
-      session: "regular",
+      asOf: "2026-11-12T05:45:00.000Z",
+      session: "closed",
       price: seed.price,
       previousClose: seed.previousClose,
       change: Number(change.toFixed(2)),
@@ -252,6 +306,7 @@ export const stockWorkspaces: StockWorkspace[] = seeds.map((seed) => {
       isDelayed: true,
       delaySeconds: 900,
       provider: "Omnigaze demo fixture",
+      marketCoverage: "fixture",
     },
     chart: {
       "1D": createSeries(seed.ticker, seed.price, "1D"),
@@ -264,7 +319,7 @@ export const stockWorkspaces: StockWorkspace[] = seeds.map((seed) => {
     evidence,
     view: {
       symbolId: seed.id,
-      generatedAt: "2026-11-11T18:43:00.000Z",
+      generatedAt: "2026-11-12T05:46:00.000Z",
       horizon: "near-term",
       stance: seed.stance,
       confidence: seed.confidence,
@@ -275,7 +330,13 @@ export const stockWorkspaces: StockWorkspace[] = seeds.map((seed) => {
           label: "Primary catalyst",
           direction: seed.direction,
           explanation: seed.headline,
-          evidenceIds: [`${seed.ticker}-evidence-filing`],
+          evidenceIds:
+            seed.ticker === "NVDA"
+              ? [
+                  "NVDA-evidence-board-investigation",
+                  "NVDA-evidence-governance-market-response",
+                ]
+              : [`${seed.ticker}-evidence-filing`],
         },
         {
           label: "Market confirmation",
@@ -287,8 +348,14 @@ export const stockWorkspaces: StockWorkspace[] = seeds.map((seed) => {
       unknowns: [
         "Whether the current move persists after the next material disclosure.",
         "How much of the price action is company-specific versus sector-wide.",
+        ...(seed.ticker === "NVDA"
+          ? [
+              "The investigation outcome and any implications for executive continuity.",
+              "How much of the observed move is attributable to governance news versus other market factors.",
+            ]
+          : []),
       ],
-      dataCutoff: "2026-11-11T18:42:00.000Z",
+      dataCutoff: "2026-11-12T05:45:00.000Z",
       disclaimer: "Research support only. This is not investment advice.",
     },
   };

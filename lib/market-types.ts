@@ -12,6 +12,20 @@ export type Direction = "positive" | "negative" | "mixed" | "unclear";
 
 export type Materiality = "low" | "medium" | "high" | "critical";
 
+export type ClaimStatus =
+  | "confirmed"
+  | "official-investigation"
+  | "reported"
+  | "allegation"
+  | "disputed"
+  | "corrected";
+
+export type CausalLink =
+  | "unassessed"
+  | "temporal-only"
+  | "plausible-contributor"
+  | "supported";
+
 export interface Instrument {
   id: CanonicalSymbol;
   ticker: string;
@@ -41,6 +55,7 @@ export interface MarketSnapshot {
   isDelayed: boolean;
   delaySeconds: number;
   provider: string;
+  marketCoverage: "limited-exchange" | "consolidated" | "fixture";
 }
 
 export interface Evidence {
@@ -64,7 +79,22 @@ export interface IntelligenceEvent {
   possibleDirection: Direction;
   status: "preliminary" | "verified" | "corrected";
   evidenceIds: string[];
-  category: "earnings" | "filing" | "macro" | "market" | "product";
+  category:
+    | "earnings"
+    | "filing"
+    | "macro"
+    | "market"
+    | "product"
+    | "governance"
+    | "executive"
+    | "legal"
+    | "regulatory"
+    | "reputation"
+    | "geopolitical";
+  claimStatus?: ClaimStatus;
+  causalLink?: CausalLink;
+  topicTags?: string[];
+  sourceCount?: number;
 }
 
 export interface ViewDriver {

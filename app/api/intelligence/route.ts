@@ -1,5 +1,5 @@
-import { getIntelligenceFeed, serviceMeta } from "@/lib/services/market-intelligence";
 import type { CanonicalSymbol, Materiality } from "@/lib/market-types";
+import { liveMarketData } from "@/lib/services/live-market-data";
 
 export const dynamic = "force-dynamic";
 
@@ -14,12 +14,14 @@ export async function GET(request: Request) {
       ? requestedMateriality
       : "low";
   const requestedLimit = Number(params.get("limit") ?? 20);
+  const since = params.get("since") ?? new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString();
 
-  const events = getIntelligenceFeed({
-    symbolId: symbol,
+  const result = await liveMarketData.getIntelligenceFeed({
+    symbols: symbol ? [symbol] : undefined,
+    since,
     minimumMateriality,
     limit: Number.isFinite(requestedLimit) ? requestedLimit : 20,
   });
 
-  return Response.json({ data: events, meta: serviceMeta });
+  return Response.json(result, { headers: { "Cache-Control": "no-store" } });
 }

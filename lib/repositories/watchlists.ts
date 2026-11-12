@@ -4,6 +4,17 @@ import { instruments, watchlistItems, watchlists } from "@/db/schema";
 import { workspaceBySymbol } from "@/lib/demo-market-data";
 import type { CanonicalSymbol } from "@/lib/market-types";
 
+export type WatchlistRepositoryErrorCode =
+  | "watchlist_not_found"
+  | "symbol_not_supported";
+
+export class WatchlistRepositoryError extends Error {
+  constructor(readonly code: WatchlistRepositoryErrorCode) {
+    super(code);
+    this.name = "WatchlistRepositoryError";
+  }
+}
+
 export async function ensureDefaultWatchlist(ownerId: string) {
   const db = getDb();
   const existing = await db
@@ -40,7 +51,9 @@ export async function listUserWatchlists(ownerId: string) {
       name: instruments.name,
     })
     .from(watchlistItems)
-    .innerJoin(instruments, eq(instruments.id, watchlistItems.symbolId));
+    .innerJoin(instruments, eq(instruments.id, watchlistItems.symbolId))
+    .innerJoin(watchlists, eq(watchlists.id, watchlistItems.watchlistId))
+    .where(eq(watchlists.ownerId, ownerId));
 
   return lists.map((list) => ({
     ...list,
@@ -55,7 +68,7 @@ async function assertOwnedWatchlist(ownerId: string, watchlistId: string) {
     .from(watchlists)
     .where(and(eq(watchlists.id, watchlistId), eq(watchlists.ownerId, ownerId)))
     .limit(1);
-  if (!owned[0]) throw new Error("Watchlist not found.");
+  if (!owned[0]) throw new WatchlistRepositoryError("watchlist_not_found");
 }
 
 export async function addSymbolToWatchlist(
@@ -66,7 +79,7 @@ export async function addSymbolToWatchlist(
   const db = getDb();
   await assertOwnedWatchlist(ownerId, watchlistId);
   const workspace = workspaceBySymbol.get(symbolId);
-  if (!workspace) throw new Error("Symbol is not supported.");
+  if (!workspace) throw new WatchlistRepositoryError("symbol_not_supported");
 
   await db
     .insert(instruments)
