@@ -39,10 +39,16 @@ describe("local D1 migration reconciliation", () => {
     ]);
     const result = await buildPendingMigrationSql(applied);
 
-    expect(result.pendingNames).toEqual(["0003_intelligence_inbox_v1.sql"]);
+    expect(result.pendingNames).toEqual([
+      "0003_intelligence_inbox_v1.sql",
+      "0004_ingestion_control_plane_v1.sql",
+    ]);
     expect(result.sql).toContain("CREATE TABLE IF NOT EXISTS `inbox_sync_gates`");
     expect(result.sql).toContain(
       "INSERT OR IGNORE INTO d1_migrations (name) VALUES ('0003_intelligence_inbox_v1.sql')",
+    );
+    expect(result.sql).toContain(
+      "CREATE TABLE IF NOT EXISTS `provider_ingestion_checkpoints`",
     );
     expect(result.sql).not.toContain("CREATE TABLE `portfolio_holdings`");
   });
@@ -126,6 +132,7 @@ describe("local D1 migration reconciliation", () => {
         "0001_thick_reptil.sql",
         "0002_portfolio_v1.sql",
         "0003_intelligence_inbox_v1.sql",
+        "0004_ingestion_control_plane_v1.sql",
       ]);
     } finally {
       sqlite.close();

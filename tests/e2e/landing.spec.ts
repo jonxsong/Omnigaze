@@ -109,6 +109,18 @@ test.describe("Omnigaze public experience", () => {
           service: "Omnigaze web",
           status: "healthy",
           checkedAt,
+          readiness: {
+            ingestion: {
+              mode: "scheduled",
+              status: "healthy",
+              expectedCadenceSeconds: 300,
+              lastSuccessAt: checkedAt,
+              latestEvidenceAt: observedAt,
+              generatedAt: checkedAt,
+              since: new Date(Date.parse(checkedAt) - 86_400_000).toISOString(),
+              providers: [],
+            },
+          },
           providers: [
             {
               provider: "health-only-provider",
@@ -154,6 +166,101 @@ test.describe("Omnigaze public experience", () => {
       .locator("..");
     await expect(observedProvider).toContainText(/Evidence observed (\d+s|1m) ago/);
     await expect(observedProvider).toContainText(/Health checked (just now|\d+s ago)/);
+
+    const ingestionStatus = panel.getByTestId("ingestion-status");
+    await expect(ingestionStatus).toContainText("Scheduled · Healthy");
+    await expect(ingestionStatus).toContainText("Recent collection runs completed.");
+    await expect(ingestionStatus).toContainText(
+      /Last success: (just now|\d+s ago)/,
+    );
+    await expect(ingestionStatus).toContainText(
+      /Latest evidence: (\d+s|1m) ago/,
+    );
+    await expect(ingestionStatus).toContainText("Expected cadence: Every 5 minutes");
+    await expect(ingestionStatus).toContainText(
+      /Status calculated: (just now|\d+s ago)/,
+    );
+  });
+
+  test("request-time collection transparency fits a mobile viewport without implying background alerts", async ({
+    page,
+  }) => {
+    const checkedAt = new Date().toISOString();
+    let ingestion = {
+      mode: "request_time",
+      status: "idle",
+      expectedCadenceSeconds: null,
+      lastSuccessAt: null,
+      latestEvidenceAt: null,
+      generatedAt: checkedAt,
+      since: new Date(Date.parse(checkedAt) - 86_400_000).toISOString(),
+      providers: [],
+    };
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.route("**/api/health", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          service: "Omnigaze web",
+          status: ingestion.status === "unavailable" ? "degraded" : "healthy",
+          checkedAt,
+          readiness: {
+            ingestion,
+          },
+          providers: [],
+        }),
+      });
+    });
+
+    await page.goto("/dashboard");
+    await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+    await page.getByRole("button", { name: "View data status" }).click();
+
+    const panel = page.getByRole("region", { name: "Source and provider status" });
+    const ingestionStatus = panel.getByTestId("ingestion-status");
+    await expect(ingestionStatus).toContainText("Request-time · Idle");
+    await expect(ingestionStatus).toContainText("No collection run has completed yet.");
+    await expect(ingestionStatus).toContainText(
+      "Last success: No successful collection recorded",
+    );
+    await expect(ingestionStatus).toContainText(
+      "Latest evidence: No collected evidence timestamp",
+    );
+    await expect(ingestionStatus).toContainText(
+      "Expected cadence: No background cadence",
+    );
+    await expect(panel).toContainText("Request-time while open");
+    await expect(panel).toContainText("Alerts are in-app only");
+    await expect(panel).not.toContainText("Background alerts");
+
+    ingestion = {
+      ...ingestion,
+      mode: "unavailable",
+      status: "unavailable",
+    };
+    await panel
+      .getByRole("button", { name: "Refresh displayed data and status" })
+      .click();
+    await expect(ingestionStatus).toContainText("Status unavailable");
+    await expect(ingestionStatus).toContainText(
+      "Collection status could not be read.",
+    );
+    await expect(ingestionStatus).toContainText("Last success: Unavailable");
+    await expect(ingestionStatus).toContainText("Latest evidence: Unavailable");
+    await expect(ingestionStatus).toContainText("Expected cadence: Unavailable");
+    await expect(ingestionStatus).not.toContainText(
+      "No successful collection recorded",
+    );
+
+    const overflow = await page.evaluate(() => ({
+      viewport: document.documentElement.clientWidth,
+      page: document.documentElement.scrollWidth,
+      panel: document.querySelector("#data-status-panel")?.scrollWidth ?? 0,
+      panelClient: document.querySelector("#data-status-panel")?.clientWidth ?? 0,
+    }));
+    expect(overflow.page).toBeLessThanOrEqual(overflow.viewport);
+    expect(overflow.panel).toBeLessThanOrEqual(overflow.panelClient);
   });
 
   test("a failed quote refresh labels retained data as last known", async ({
@@ -215,7 +322,9 @@ test.describe("Omnigaze public experience", () => {
     );
     await page.getByRole("button", { name: "View data status" }).click();
     failRefresh = true;
-    await page.getByRole("button", { name: "Refresh now" }).click();
+    await page
+      .getByRole("button", { name: "Refresh displayed data and status" })
+      .click();
 
     await expect(page.locator(".demo-banner.stale")).toContainText(
       /last known quote.*refresh failed/i,

@@ -17,6 +17,48 @@ export interface IntelligenceSourceProvider {
   getHealth(): Promise<ProviderHealth>;
 }
 
+export type IntelligenceEventPageCursor = {
+  token: string;
+  queryFingerprint: string;
+};
+
+export type IntelligenceEventPageRequest = {
+  symbols: CanonicalSymbol[];
+  windowStart: string;
+  windowEnd: string;
+  pageSize: number;
+  cursor?: IntelligenceEventPageCursor | null;
+  signal?: AbortSignal;
+};
+
+export type IntelligenceEventPage = {
+  events: RawSourceEvent[];
+  nextCursor: IntelligenceEventPageCursor | null;
+  exhausted: boolean;
+  queryFingerprint: string;
+};
+
+export interface PaginatedIntelligenceSourceProvider
+  extends IntelligenceSourceProvider {
+  getEventPage(
+    options: IntelligenceEventPageRequest,
+  ): Promise<IntelligenceEventPage>;
+}
+
+export class ProviderCursorMismatchError extends Error {
+  constructor(provider: string) {
+    super(`${provider} cursor does not match the frozen query window`);
+    this.name = "ProviderCursorMismatchError";
+  }
+}
+
+export class ProviderCursorRejectedError extends Error {
+  constructor(provider: string) {
+    super(`${provider} rejected the stored page cursor`);
+    this.name = "ProviderCursorRejectedError";
+  }
+}
+
 export class ProviderConfigurationError extends Error {
   constructor(provider: string, missingKeys: string[]) {
     super(`${provider} is not configured. Missing: ${missingKeys.join(", ")}`);

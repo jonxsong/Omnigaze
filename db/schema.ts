@@ -407,3 +407,217 @@ export const alertDeliveries = sqliteTable(
     check("alert_deliveries_channel_check", sql.raw("channel = 'in_app'")),
   ],
 );
+
+/**
+ * Global provider ingestion is deliberately owner-agnostic. These checkpoints
+ * freeze one provider query window until every page in that window has been
+ * durably received. A short token lease lets any trigger (scheduled or
+ * request-driven) resume the same partition without making the cursor itself a
+ * lock.
+ */
+export const providerIngestionCheckpoints = sqliteTable(
+  "provider_ingestion_checkpoints",
+  {
+    provider: text("provider").notNull(),
+    partitionKey: text("partition_key").notNull(),
+    leaseToken: text("lease_token"),
+    leaseExpiresAt: text("lease_expires_at"),
+    windowStart: text("window_start"),
+    windowEnd: text("window_end"),
+    windowFingerprint: text("window_fingerprint"),
+    resumeCursor: text("resume_cursor"),
+    highWaterMark: text("high_water_mark"),
+    nextDueAt: text("next_due_at").notNull(),
+    lastAttemptAt: text("last_attempt_at"),
+    lastSuccessAt: text("last_success_at"),
+    lastFailureAt: text("last_failure_at"),
+    consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+    totalSuccesses: integer("total_successes").notNull().default(0),
+    totalFailures: integer("total_failures").notNull().default(0),
+    createdAt: text("created_at").notNull().default(sql.raw("CURRENT_TIMESTAMP")),
+    updatedAt: text("updated_at").notNull().default(sql.raw("CURRENT_TIMESTAMP")),
+  },
+  (table) => [
+    primaryKey({ columns: [table.provider, table.partitionKey] }),
+    index("provider_ingestion_checkpoints_due_idx").on(
+      table.provider,
+      table.nextDueAt,
+    ),
+    index("provider_ingestion_checkpoints_lease_idx").on(table.leaseExpiresAt),
+    check(
+      "provider_ingestion_checkpoints_lease_check",
+      sql.raw(
+        "(lease_token IS NULL AND lease_expires_at IS NULL) OR (lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)",
+      ),
+    ),
+    check(
+      "provider_ingestion_checkpoints_window_check",
+      sql.raw(
+        "(window_start IS NULL AND window_end IS NULL AND window_fingerprint IS NULL) OR (window_start IS NOT NULL AND window_end IS NOT NULL AND window_fingerprint IS NOT NULL)",
+      ),
+    ),
+    check(
+      "provider_ingestion_checkpoints_counter_check",
+      sql.raw(
+        "consecutive_failures >= 0 AND total_successes >= 0 AND total_failures >= 0",
+      ),
+    ),
+  ],
+);
+
+export const providerIngestionRuns = sqliteTable(
+  "provider_ingestion_runs",
+  {
+    id: text("id").primaryKey(),
+    provider: text("provider").notNull(),
+    partitionKey: text("partition_key").notNull(),
+    leaseToken: text("lease_token").notNull(),
+    windowStart: text("window_start").notNull(),
+    windowEnd: text("window_end").notNull(),
+    windowFingerprint: text("window_fingerprint").notNull(),
+    resumeCursorStart: text("resume_cursor_start"),
+    resumeCursorEnd: text("resume_cursor_end"),
+    highWaterMark: text("high_water_mark"),
+    pageFingerprint: text("page_fingerprint"),
+    pagePersistedAt: text("page_persisted_at"),
+    status: text("status").notNull().default("running"),
+    receiptCount: integer("receipt_count").notNull().default(0),
+    insertedReceiptCount: integer("inserted_receipt_count").notNull().default(0),
+    symbolLinkCount: integer("symbol_link_count").notNull().default(0),
+    errorCount: integer("error_count").notNull().default(0),
+    startedAt: text("started_at").notNull(),
+    completedAt: text("completed_at"),
+  },
+  (table) => [
+    uniqueIndex("provider_ingestion_runs_lease_idx").on(
+      table.provider,
+      table.partitionKey,
+      table.leaseToken,
+    ),
+    index("provider_ingestion_runs_partition_time_idx").on(
+      table.provider,
+      table.partitionKey,
+      table.startedAt,
+    ),
+    index("provider_ingestion_runs_status_time_idx").on(
+      table.status,
+      table.startedAt,
+    ),
+    check(
+      "provider_ingestion_runs_status_check",
+      sql.raw("status IN ('running', 'succeeded', 'failed')"),
+    ),
+    check(
+      "provider_ingestion_runs_counter_check",
+      sql.raw(
+        "receipt_count >= 0 AND inserted_receipt_count >= 0 AND symbol_link_count >= 0 AND error_count >= 0",
+      ),
+    ),
+    check(
+      "provider_ingestion_runs_completion_check",
+      sql.raw(
+        "(status = 'running' AND completed_at IS NULL) OR (status IN ('succeeded', 'failed') AND completed_at IS NOT NULL)",
+      ),
+    ),
+    check(
+      "provider_ingestion_runs_page_check",
+      sql.raw(
+        "(page_fingerprint IS NULL AND page_persisted_at IS NULL) OR (page_fingerprint IS NOT NULL AND page_persisted_at IS NOT NULL)",
+      ),
+    ),
+  ],
+);
+
+export const providerIngestionRunErrors = sqliteTable(
+  "provider_ingestion_run_errors",
+  {
+    id: text("id").primaryKey(),
+    runId: text("run_id")
+      .notNull()
+      .references(() => providerIngestionRuns.id, { onDelete: "cascade" }),
+    code: text("code").notNull(),
+    stage: text("stage").notNull(),
+    safeMessage: text("safe_message").notNull(),
+    retryable: integer("retryable", { mode: "boolean" }).notNull().default(false),
+    occurredAt: text("occurred_at").notNull(),
+  },
+  (table) => [
+    index("provider_ingestion_run_errors_run_idx").on(table.runId),
+    index("provider_ingestion_run_errors_time_idx").on(table.occurredAt),
+    check(
+      "provider_ingestion_run_errors_bounded_text_check",
+      sql.raw(
+        "length(code) BETWEEN 1 AND 64 AND length(stage) BETWEEN 1 AND 64 AND length(safe_message) BETWEEN 1 AND 300",
+      ),
+    ),
+  ],
+);
+
+/**
+ * `source_events.symbol_id` predates multi-symbol provider events. Keep that
+ * column untouched and add a monotonic many-to-many mapping for new ingestion.
+ */
+export const sourceEventSymbols = sqliteTable(
+  "source_event_symbols",
+  {
+    sourceEventId: text("source_event_id")
+      .notNull()
+      .references(() => sourceEvents.id, { onDelete: "cascade" }),
+    symbolId: text("symbol_id")
+      .notNull()
+      .references(() => instruments.id),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sourceEventId, table.symbolId] }),
+    index("source_event_symbols_symbol_idx").on(table.symbolId),
+  ],
+);
+
+/**
+ * Operational receipt metadata lives beside immutable raw source-event
+ * versions, avoiding an ALTER of the already-shipped source_events table.
+ */
+export const sourceEventIngestionMetadata = sqliteTable(
+  "source_event_ingestion_metadata",
+  {
+    sourceEventId: text("source_event_id")
+      .notNull()
+      .references(() => sourceEvents.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    partitionKey: text("partition_key").notNull(),
+    payloadPolicy: text("payload_policy").notNull(),
+    providerRevisionAt: text("provider_revision_at"),
+    firstIngestionRunId: text("first_ingestion_run_id").references(
+      () => providerIngestionRuns.id,
+      { onDelete: "set null" },
+    ),
+    lastIngestionRunId: text("last_ingestion_run_id").references(
+      () => providerIngestionRuns.id,
+      { onDelete: "set null" },
+    ),
+    firstSeenAt: text("first_seen_at").notNull(),
+    lastSeenAt: text("last_seen_at").notNull(),
+    seenCount: integer("seen_count").notNull().default(1),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.sourceEventId, table.provider, table.partitionKey],
+    }),
+    index("source_event_ingestion_metadata_partition_idx").on(
+      table.provider,
+      table.partitionKey,
+      table.lastSeenAt,
+    ),
+    index("source_event_ingestion_metadata_last_run_idx").on(
+      table.lastIngestionRunId,
+    ),
+    check(
+      "source_event_ingestion_metadata_seen_count_check",
+      sql.raw("seen_count >= 1"),
+    ),
+    check(
+      "source_event_ingestion_metadata_payload_policy_check",
+      sql.raw("payload_policy = 'minimal_redacted_v1'"),
+    ),
+  ],
+);

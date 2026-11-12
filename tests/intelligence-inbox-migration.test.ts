@@ -42,7 +42,7 @@ describe("intelligence inbox migration artifacts", () => {
     }>("drizzle/meta/_journal.json");
 
     expect(current.prevId).toBe(previous.id);
-    expect(journal.entries.at(-1)).toEqual({
+    expect(journal.entries.find((entry) => entry.idx === 3)).toEqual({
       idx: 3,
       tag: "0003_intelligence_inbox_v1",
       version: "6",

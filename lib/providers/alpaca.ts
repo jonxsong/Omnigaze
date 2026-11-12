@@ -7,8 +7,12 @@ import type {
 import type { ProviderHealth, RawSourceEvent } from "@/lib/pipeline/contracts";
 import {
   ProviderConfigurationError,
-  type IntelligenceSourceProvider,
+  ProviderCursorMismatchError,
+  ProviderCursorRejectedError,
+  type IntelligenceEventPage,
+  type IntelligenceEventPageRequest,
   type MarketDataProvider,
+  type PaginatedIntelligenceSourceProvider,
 } from "./contracts";
 
 type AlpacaConfig = {
@@ -31,6 +35,7 @@ const ALPACA_NEWS_PAGE_SIZE = 50;
 const ALPACA_NEWS_RESULT_LIMIT = 100;
 const ALPACA_NEWS_MAX_PAGES = 4;
 const ALPACA_REQUEST_TIMEOUT_MS = 8_000;
+const ALPACA_PAGE_TOKEN_MAX_LENGTH = 2_048;
 
 type AlpacaNewsItem = {
   id: number | string;
@@ -61,8 +66,50 @@ function tickerFromSymbol(symbol: CanonicalSymbol) {
   return symbol.split(":")[1];
 }
 
+function normalizedTimestamp(value: string, field: string) {
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Alpaca news ${field} must be a valid timestamp`);
+  }
+  return new Date(parsed).toISOString();
+}
+
+function bytesToHex(bytes: ArrayBuffer) {
+  return [...new Uint8Array(bytes)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export async function createAlpacaNewsQueryFingerprint(options: {
+  symbols: CanonicalSymbol[];
+  windowStart: string;
+  windowEnd: string;
+  pageSize: number;
+}) {
+  const symbols = [
+    ...new Set(
+      options.symbols.map((symbol) => tickerFromSymbol(symbol).toUpperCase()),
+    ),
+  ].sort();
+  const payload = JSON.stringify({
+    provider: "alpaca",
+    stream: "v1beta1/news",
+    version: 1,
+    symbols,
+    windowStart: normalizedTimestamp(options.windowStart, "window start"),
+    windowEnd: normalizedTimestamp(options.windowEnd, "window end"),
+    pageSize: options.pageSize,
+    sort: "asc",
+  });
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(payload),
+  );
+  return bytesToHex(digest);
+}
+
 export class AlpacaProvider
-  implements MarketDataProvider, IntelligenceSourceProvider
+  implements MarketDataProvider, PaginatedIntelligenceSourceProvider
 {
   readonly name = "alpaca";
 
@@ -312,6 +359,136 @@ export class AlpacaProvider
           : item.created_at,
       payload: item,
     }));
+  }
+
+  async getEventPage(
+    options: IntelligenceEventPageRequest,
+  ): Promise<IntelligenceEventPage> {
+    if (options.symbols.length === 0) {
+      throw new Error("Alpaca news page requires at least one symbol");
+    }
+    if (
+      !Number.isInteger(options.pageSize) ||
+      options.pageSize < 1 ||
+      options.pageSize > ALPACA_NEWS_PAGE_SIZE
+    ) {
+      throw new Error(
+        `Alpaca news page size must be between 1 and ${ALPACA_NEWS_PAGE_SIZE}`,
+      );
+    }
+
+    const windowStart = normalizedTimestamp(options.windowStart, "window start");
+    const windowEnd = normalizedTimestamp(options.windowEnd, "window end");
+    if (windowStart >= windowEnd) {
+      throw new Error("Alpaca news window start must precede window end");
+    }
+
+    const queryFingerprint = await createAlpacaNewsQueryFingerprint({
+      symbols: options.symbols,
+      windowStart,
+      windowEnd,
+      pageSize: options.pageSize,
+    });
+    const suppliedCursor = options.cursor ?? null;
+    if (
+      suppliedCursor &&
+      suppliedCursor.queryFingerprint !== queryFingerprint
+    ) {
+      throw new ProviderCursorMismatchError(this.name);
+    }
+    const pageToken = suppliedCursor?.token.trim() ?? "";
+    if (
+      suppliedCursor &&
+      (pageToken.length === 0 || pageToken.length > ALPACA_PAGE_TOKEN_MAX_LENGTH)
+    ) {
+      throw new Error("Alpaca news cursor token is invalid");
+    }
+
+    const requestedTickers = new Set(
+      options.symbols.map((symbol) => tickerFromSymbol(symbol).toUpperCase()),
+    );
+    const url = new URL("https://data.alpaca.markets/v1beta1/news");
+    url.searchParams.set("symbols", [...requestedTickers].sort().join(","));
+    url.searchParams.set("start", windowStart);
+    url.searchParams.set("end", windowEnd);
+    url.searchParams.set("limit", String(options.pageSize));
+    url.searchParams.set("sort", "asc");
+    if (pageToken) url.searchParams.set("page_token", pageToken);
+
+    const timeoutSignal = AbortSignal.timeout(ALPACA_REQUEST_TIMEOUT_MS);
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, timeoutSignal])
+      : timeoutSignal;
+    const response = await fetch(url, {
+      headers: this.headers(),
+      signal,
+    });
+    if (!response.ok) {
+      if (
+        suppliedCursor &&
+        (response.status === 400 ||
+          response.status === 404 ||
+          response.status === 410)
+      ) {
+        throw new ProviderCursorRejectedError(this.name);
+      }
+      throw new Error(`Alpaca news failed with ${response.status}`);
+    }
+
+    const data = (await response.json()) as {
+      news?: unknown;
+      next_page_token?: unknown;
+    };
+    if (!Array.isArray(data.news)) {
+      throw new Error("Alpaca returned an incomplete news response");
+    }
+
+    const itemsById = new Map<string, AlpacaNewsItem>();
+    for (const candidate of data.news) {
+      if (!isAlpacaNewsItem(candidate)) continue;
+      const itemSymbols = Array.isArray(candidate.symbols)
+        ? candidate.symbols.filter(
+            (symbol): symbol is string => typeof symbol === "string",
+          )
+        : [];
+      if (
+        !itemSymbols.some((symbol) => requestedTickers.has(symbol.toUpperCase()))
+      ) {
+        continue;
+      }
+      const id = String(candidate.id);
+      if (!itemsById.has(id)) itemsById.set(id, candidate);
+    }
+
+    const nextPageToken =
+      typeof data.next_page_token === "string"
+        ? data.next_page_token.trim()
+        : "";
+    if (nextPageToken.length > ALPACA_PAGE_TOKEN_MAX_LENGTH) {
+      throw new Error("Alpaca news returned an invalid page token");
+    }
+
+    const receivedAt = new Date().toISOString();
+    const events = [...itemsById.values()].map((item) => ({
+      source: this.name,
+      sourceKind: "licensed_news" as const,
+      sourceEventId: String(item.id),
+      receivedAt,
+      publishedAt: item.created_at,
+      providerUpdatedAt: Number.isFinite(Date.parse(item.updated_at))
+        ? item.updated_at
+        : item.created_at,
+      payload: item,
+    }));
+
+    return {
+      events,
+      nextCursor: nextPageToken
+        ? { token: nextPageToken, queryFingerprint }
+        : null,
+      exhausted: nextPageToken.length === 0,
+      queryFingerprint,
+    };
   }
 
   async getHealth(): Promise<ProviderHealth> {

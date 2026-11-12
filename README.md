@@ -127,15 +127,18 @@ The initial stateless tool surface includes:
 - `get_portfolio`
 - `get_decision_support`
 - `get_provider_status`
+- `run_intelligence_ingestion_tick` (closed operator tool; one provider page per call)
 
 Use `server/discover`, `tools/list`, and `tools/call` with MCP version `2026-07-28`.
 
 ## Current limitations
 
 - Alpaca currently uses resilient REST polling; long-lived streaming transport is a later infrastructure slice.
-- A request-time news reconciliation follows Alpaca page tokens but intentionally caps the batch at 100 events. Lossless history beyond that window requires scheduled cursor ingestion, which is not enabled in this alpha.
+- A request-time news reconciliation still caps interactive reads at 100 events. The separate durable cursor engine processes exactly one frozen-window page per operator tick; continuous collection requires linking the authenticated MCP tool to a hosted schedule after deployment.
 - SEC ingestion is available on demand but still needs a configured application/contact user agent and scheduled background ingestion.
 - Alert rules currently deliver only inside the Omnigaze inbox during request-time refreshes. Email, SMS, push, browser notifications, and a continuously running background delivery worker are not enabled.
 - Brokerage import and order execution are intentionally not part of this alpha.
 - AI analysis requires an authenticated user and returns `503 ai_unconfigured` when the server secret is absent.
 - Omnigaze provides research support, not investment advice or autonomous trading.
+
+See [Scheduled ingestion](docs/scheduled-ingestion.md) for the operator contract, safety invariants, status semantics, and local verification workflow.

@@ -55,6 +55,7 @@ import type {
   MarketSnapshot,
   Materiality,
 } from "@/lib/market-types";
+import type { IngestionReadiness } from "@/lib/services/ingestion-health";
 import type {
   IntelligenceFeedItem,
   OrchestrationMeta,
@@ -305,6 +306,9 @@ interface HealthResponse {
   checkedAt?: string;
   providers?: ProviderReport[];
   providerHealth?: ProviderReport[];
+  readiness?: {
+    ingestion?: IngestionReadiness;
+  };
 }
 
 interface HealthResource {
@@ -488,6 +492,72 @@ function formatProviderTiming(provider: ProviderReport, now: number) {
     ? `Health checked ${checkAge}`
     : "Health check time unavailable";
   return `${observationLabel} · ${checkLabel}`;
+}
+
+function formatIngestionMode(mode: IngestionReadiness["mode"]) {
+  if (mode === "scheduled") return "Scheduled";
+  if (mode === "request_time") return "Request-time";
+  return "Unavailable";
+}
+
+function formatIngestionStatus(status: IngestionReadiness["status"]) {
+  if (status === "catching_up") return "Catching up";
+  if (status === "idle") return "Idle";
+  if (status === "unavailable") return "Unavailable";
+  return `${status.charAt(0).toUpperCase()}${status.slice(1)}`;
+}
+
+function ingestionStatusDescription(status: IngestionReadiness["status"]) {
+  if (status === "healthy") return "Recent collection runs completed.";
+  if (status === "catching_up") {
+    return "Provider work is due, running, or resuming.";
+  }
+  if (status === "delayed") {
+    return "Collection is overdue beyond its declared cadence.";
+  }
+  if (status === "degraded") {
+    return "A recent run or provider partition is failing.";
+  }
+  if (status === "idle") return "No collection run has completed yet.";
+  return "Collection status could not be read.";
+}
+
+function ingestionStatusDot(status: IngestionReadiness["status"]) {
+  if (status === "healthy") return "healthy";
+  if (status === "catching_up") return "policy";
+  if (status === "delayed") return "stale";
+  if (status === "degraded" || status === "unavailable") return "degraded";
+  return "empty";
+}
+
+function formatCadence(
+  seconds: number | null,
+  mode: IngestionReadiness["mode"],
+) {
+  if (mode === "request_time") return "No background cadence";
+  if (mode === "unavailable") return "Unavailable";
+  if (!Number.isFinite(seconds) || seconds === null || seconds <= 0) {
+    return "Not reported";
+  }
+
+  if (seconds % 3_600 === 0) {
+    const hours = seconds / 3_600;
+    return `Every ${hours} ${hours === 1 ? "hour" : "hours"}`;
+  }
+  if (seconds % 60 === 0) {
+    const minutes = seconds / 60;
+    return `Every ${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  }
+  return `Every ${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+}
+
+function formatOperationalTimestamp(
+  value: string | null | undefined,
+  now: number,
+  unavailableLabel: string,
+) {
+  const age = formatTimestampAge(value, now);
+  return age ?? unavailableLabel;
 }
 
 function sessionLabel(session: MarketSnapshot["session"]) {
@@ -1206,6 +1276,14 @@ export function MarketDashboard({
   const healthProviders = Array.from(
     new Map(providerReports.map((provider) => [provider.provider, provider])).values(),
   );
+  const ingestionReadiness = healthResource.data?.readiness?.ingestion;
+  const ingestionUnavailable =
+    ingestionReadiness?.mode === "unavailable" ||
+    ingestionReadiness?.status === "unavailable";
+  const applicationHealthDot =
+    healthResource.phase === "ready" && healthResource.data?.status === "degraded"
+      ? "degraded"
+      : healthResource.phase;
   const positiveMovers = watchedStocks.filter(({ instrument, workspace }) => {
     return (
       (snapshotResources[instrument.id]?.data ?? workspace?.snapshot)?.change ?? 0
@@ -1695,9 +1773,10 @@ export function MarketDashboard({
             <button
               type="button"
               className="refresh-data-button"
+              aria-label="Refresh displayed data and status"
               onClick={() => setRefreshGeneration((current) => current + 1)}
             >
-              <RefreshCw size={14} /> Refresh now
+              <RefreshCw size={14} /> Refresh view
             </button>
           </div>
 
@@ -1720,7 +1799,7 @@ export function MarketDashboard({
             <div>
               <dt>Application API</dt>
               <dd>
-                <span className={`health-dot ${healthResource.phase}`} />
+                <span className={`health-dot ${applicationHealthDot}`} />
                 {healthResource.phase === "ready"
                   ? `${healthResource.data?.service ?? "Omnigaze web"} · ${healthResource.data?.status ?? "responding"}`
                   : healthResource.phase === "loading"
@@ -1767,6 +1846,78 @@ export function MarketDashboard({
                         now,
                       ))}
               </small>
+            </div>
+            <div data-testid="ingestion-status">
+              <dt>Evidence collection</dt>
+              <dd>
+                <span
+                  aria-hidden="true"
+                  className={`health-dot ${
+                    ingestionReadiness
+                      ? ingestionStatusDot(ingestionReadiness.status)
+                      : healthResource.phase === "loading"
+                        ? "loading"
+                        : "unavailable"
+                  }`}
+                />
+                {healthResource.phase === "loading"
+                  ? "Checking"
+                  : ingestionReadiness
+                    ? ingestionUnavailable
+                      ? "Status unavailable"
+                      : `${formatIngestionMode(ingestionReadiness.mode)} · ${formatIngestionStatus(ingestionReadiness.status)}`
+                    : "Status unavailable"}
+              </dd>
+              {ingestionReadiness ? (
+                <small className="collection-status-details">
+                  <span>
+                    {ingestionUnavailable
+                      ? "Collection status could not be read."
+                      : ingestionStatusDescription(ingestionReadiness.status)}
+                  </span>
+                  <span>
+                    <strong>Last success:</strong>{" "}
+                    {formatOperationalTimestamp(
+                      ingestionReadiness.lastSuccessAt,
+                      now,
+                      ingestionUnavailable
+                        ? "Unavailable"
+                        : "No successful collection recorded",
+                    )}
+                  </span>
+                  <span>
+                    <strong>Latest evidence:</strong>{" "}
+                    {formatOperationalTimestamp(
+                      ingestionReadiness.latestEvidenceAt,
+                      now,
+                      ingestionUnavailable
+                        ? "Unavailable"
+                        : "No collected evidence timestamp",
+                    )}
+                  </span>
+                  <span>
+                    <strong>Expected cadence:</strong>{" "}
+                    {formatCadence(
+                      ingestionReadiness.expectedCadenceSeconds,
+                      ingestionReadiness.mode,
+                    )}
+                  </span>
+                  <span>
+                    <strong>Status calculated:</strong>{" "}
+                    {formatOperationalTimestamp(
+                      ingestionReadiness.generatedAt,
+                      now,
+                      "Timestamp unavailable",
+                    )}
+                  </span>
+                </small>
+              ) : (
+                <small>
+                  {healthResource.phase === "loading"
+                    ? "Waiting for collection status."
+                    : "This environment did not return collection status."}
+                </small>
+              )}
             </div>
             <div>
               <dt>Refresh policy</dt>

@@ -3,30 +3,41 @@ import {
   checkDatabaseReadiness,
   type DatabaseReadiness,
 } from "@/lib/services/database-readiness";
+import {
+  getIngestionReadiness,
+  type IngestionReadiness,
+} from "@/lib/services/ingestion-health";
 
 export const dynamic = "force-dynamic";
 
 interface HealthDependencies {
   getProviderStatus: typeof liveMarketData.getProviderStatus;
   checkDatabaseReadiness: () => Promise<DatabaseReadiness>;
+  getIngestionReadiness: () => Promise<IngestionReadiness>;
 }
 
 export function createHealthHandler(
   dependencies: HealthDependencies = {
     getProviderStatus: () => liveMarketData.getProviderStatus(),
     checkDatabaseReadiness,
+    getIngestionReadiness,
   },
 ) {
   return async function healthHandler() {
-    const [providerStatus, databaseReadiness] = await Promise.all([
+    const [providerStatus, databaseReadiness, ingestionReadiness] = await Promise.all([
       dependencies.getProviderStatus(),
       dependencies.checkDatabaseReadiness(),
+      dependencies.getIngestionReadiness(),
     ]);
     const providerDegraded = providerStatus.providers.some(
       (provider) => provider.status === "degraded",
     );
     const status =
-      providerDegraded || databaseReadiness.status !== "ready"
+      providerDegraded ||
+      databaseReadiness.status !== "ready" ||
+      ["degraded", "delayed", "unavailable"].includes(
+        ingestionReadiness.status,
+      )
         ? "degraded"
         : "ok";
 
@@ -46,12 +57,17 @@ export function createHealthHandler(
           "portfolio-v1",
           "deterministic-decision-scenarios",
           "durable-intelligence-inbox",
+          "bounded-cursor-ingestion",
           "in-app-alert-rules",
+          ...(ingestionReadiness.mode === "scheduled"
+            ? ["scheduled-cursor-ingestion"]
+            : []),
           "mcp-2026-07-28",
         ],
         checkedAt: providerStatus.checkedAt,
         readiness: {
           database: databaseReadiness,
+          ingestion: ingestionReadiness,
         },
         providers: providerStatus.providers,
         liveCapabilities: providerStatus.liveCapabilities,

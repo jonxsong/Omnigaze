@@ -234,6 +234,162 @@ describe("intelligence inbox orchestration", () => {
     ]);
   });
 
+  it("projects previously collected events when the request-time provider is unavailable", async () => {
+    const repo = repository();
+    const deps = dependencies(repo, new Error("provider secret"));
+    deps.getCollectedFeed = vi.fn().mockResolvedValue({
+      data: [
+        item({
+          id: "alpaca:collected-1",
+          headline: "Collected correction",
+          publishedAt: "2026-10-01T07:55:00.000Z",
+          providerUpdatedAt: "2026-11-12T07:58:00.000Z",
+        }),
+      ],
+      hasMore: true,
+    });
+
+    const result = await getIntelligenceInbox(
+      "owner-a",
+      { filter: "all", limit: 50 },
+      deps,
+    );
+
+    expect(repo.syncLiveItems).toHaveBeenCalledWith(
+      "owner-a",
+      [
+        expect.objectContaining({
+          id: "alpaca:collected-1",
+          headline: "Collected correction",
+        }),
+      ],
+      generatedAt,
+    );
+    expect(result.meta.sync).toMatchObject({
+      status: "live",
+      dataMode: "live",
+      freshness: "fresh",
+      providerCoverage: "partial",
+      hasMoreCandidates: true,
+    });
+    expect(result.meta.sync.notice).toMatch(/previously collected/i);
+    expect(repo.completeReconciliation).toHaveBeenCalledWith(
+      "owner-a",
+      "claim-a",
+      generatedAt,
+      { providerSucceeded: true, hasMoreCandidates: true },
+    );
+    expect(JSON.stringify(result)).not.toContain("provider secret");
+  });
+
+  it("keeps the newest correction when collected and request-time batches overlap", async () => {
+    const repo = repository();
+    const deps = dependencies(
+      repo,
+      feed("live", "fresh", [
+        item({
+          headline: "Older request-time version",
+          providerUpdatedAt: "2026-11-12T07:50:00.000Z",
+        }),
+      ]),
+    );
+    deps.getCollectedFeed = vi.fn().mockResolvedValue({
+      data: [
+        item({
+          headline: "Newer collected correction",
+          publishedAt: "2026-11-01T07:55:00.000Z",
+          providerUpdatedAt: "2026-11-12T07:59:00.000Z",
+        }),
+      ],
+      hasMore: false,
+    });
+
+    await getIntelligenceInbox(
+      "owner-a",
+      { filter: "all", limit: 50 },
+      deps,
+    );
+
+    const synced = vi.mocked(repo.syncLiveItems).mock.calls[0][1];
+    expect(synced).toHaveLength(1);
+    expect(synced[0]).toMatchObject({
+      id: "alpaca:event-1",
+      headline: "Newer collected correction",
+      providerUpdatedAt: "2026-11-12T07:59:00.000Z",
+    });
+  });
+
+  it("keeps the durable collected version when equal provider revisions disagree", async () => {
+    const repo = repository();
+    const deps = dependencies(
+      repo,
+      feed("live", "fresh", [
+        item({
+          headline: "Late stale request-time H1",
+          receivedAt: "2026-11-12T07:59:00.000Z",
+          providerUpdatedAt: "2026-11-12T07:55:00.000Z",
+        }),
+      ]),
+    );
+    deps.getCollectedFeed = vi.fn().mockResolvedValue({
+      data: [
+        item({
+          headline: "Durable collected H2",
+          receivedAt: "2026-11-12T07:56:00.000Z",
+          providerUpdatedAt: "2026-11-12T07:55:00.000Z",
+        }),
+      ],
+      hasMore: false,
+    });
+
+    await getIntelligenceInbox(
+      "owner-a",
+      { filter: "all", limit: 50 },
+      deps,
+    );
+
+    const synced = vi.mocked(repo.syncLiveItems).mock.calls[0][1];
+    expect(synced).toHaveLength(1);
+    expect(synced[0].headline).toBe("Durable collected H2");
+  });
+
+  it("does not create an infinite owner catch-up loop for a capped global page", async () => {
+    const repo = repository();
+    vi.mocked(repo.syncLiveItems).mockResolvedValue({
+      baselineApplied: false,
+      hasMoreCandidates: false,
+      newItemCount: 0,
+      newDeliveryCount: 0,
+    });
+    const deps = dependencies(repo, new Error("provider unavailable"));
+    deps.getCollectedFeed = vi.fn().mockResolvedValue({
+      data: Array.from({ length: 100 }, (_, index) =>
+        item({
+          id: `alpaca:collected-${index}`,
+          publishedAt: new Date(
+            Date.parse("2026-11-12T07:00:00.000Z") + index * 1_000,
+          ).toISOString(),
+        }),
+      ),
+      hasMore: true,
+    });
+
+    const result = await getIntelligenceInbox(
+      "owner-a",
+      { filter: "all", limit: 50 },
+      deps,
+    );
+
+    expect(vi.mocked(repo.syncLiveItems).mock.calls[0][1]).toHaveLength(100);
+    expect(result.meta.sync.hasMoreCandidates).toBe(false);
+    expect(repo.completeReconciliation).toHaveBeenCalledWith(
+      "owner-a",
+      "claim-a",
+      generatedAt,
+      { providerSucceeded: true, hasMoreCandidates: false },
+    );
+  });
+
   it.each(["in_flight", "throttled"] as const)(
     "reuses persisted state while provider refresh is %s",
     async (reason) => {

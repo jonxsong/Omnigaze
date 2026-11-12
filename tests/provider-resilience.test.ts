@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AlpacaProvider } from "@/lib/providers/alpaca";
-import { ProviderConfigurationError } from "@/lib/providers/contracts";
+import {
+  AlpacaProvider,
+  createAlpacaNewsQueryFingerprint,
+} from "@/lib/providers/alpaca";
+import {
+  ProviderConfigurationError,
+  ProviderCursorMismatchError,
+  ProviderCursorRejectedError,
+} from "@/lib/providers/contracts";
 import { SecEdgarProvider } from "@/lib/providers/sec-edgar";
 
 afterEach(() => {
@@ -264,6 +271,159 @@ describe("market provider resilience", () => {
       }),
     ).rejects.toThrow("bounded page limit");
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("fetches exactly one ascending Alpaca page inside a frozen window", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        news: [
+          {
+            id: 42,
+            headline: "Provider correction",
+            created_at: "2026-11-11T18:40:00.000Z",
+            updated_at: "2026-11-11T18:44:00.000Z",
+            symbols: ["NVDA"],
+          },
+          {
+            id: 900,
+            headline: "Unrelated article",
+            created_at: "2026-11-11T18:41:00.000Z",
+            updated_at: "2026-11-11T18:41:00.000Z",
+            symbols: ["TSLA"],
+          },
+        ],
+        next_page_token: "page-2",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new AlpacaProvider({
+      keyId: "test-key-id",
+      secretKey: "test-secret-value",
+    });
+
+    const page = await provider.getEventPage({
+      symbols: ["NASDAQ:MSFT", "NASDAQ:NVDA", "NASDAQ:NVDA"],
+      windowStart: "2026-11-11T00:00:00Z",
+      windowEnd: "2026-11-12T00:00:00Z",
+      pageSize: 50,
+    });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const url = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(url.searchParams.get("symbols")).toBe("MSFT,NVDA");
+    expect(url.searchParams.get("start")).toBe("2026-11-11T00:00:00.000Z");
+    expect(url.searchParams.get("end")).toBe("2026-11-12T00:00:00.000Z");
+    expect(url.searchParams.get("limit")).toBe("50");
+    expect(url.searchParams.get("sort")).toBe("asc");
+    expect(url.searchParams.has("page_token")).toBe(false);
+    expect(page.events.map((event) => event.sourceEventId)).toEqual(["42"]);
+    expect(page.exhausted).toBe(false);
+    expect(page.nextCursor).toEqual({
+      token: "page-2",
+      queryFingerprint: page.queryFingerprint,
+    });
+    expect(page.queryFingerprint).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("keeps the page fingerprint stable and rejects a cross-query cursor before fetch", async () => {
+    const first = await createAlpacaNewsQueryFingerprint({
+      symbols: ["NASDAQ:NVDA", "NASDAQ:MSFT"],
+      windowStart: "2026-11-11T00:00:00.000Z",
+      windowEnd: "2026-11-12T00:00:00.000Z",
+      pageSize: 25,
+    });
+    const reordered = await createAlpacaNewsQueryFingerprint({
+      symbols: ["NASDAQ:MSFT", "NASDAQ:NVDA", "NASDAQ:MSFT"],
+      windowStart: "2026-11-11T00:00:00Z",
+      windowEnd: "2026-11-12T00:00:00Z",
+      pageSize: 25,
+    });
+    expect(reordered).toBe(first);
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new AlpacaProvider({
+      keyId: "test-key-id",
+      secretKey: "test-secret-value",
+    });
+    await expect(
+      provider.getEventPage({
+        symbols: ["NASDAQ:NVDA"],
+        windowStart: "2026-11-11T00:00:00Z",
+        windowEnd: "2026-11-12T00:00:00Z",
+        pageSize: 25,
+        cursor: { token: "opaque-token", queryFingerprint: first },
+      }),
+    ).rejects.toBeInstanceOf(ProviderCursorMismatchError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("continues a matching frozen query without traversing another page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ news: [], next_page_token: null })),
+    );
+    const fetchMock = vi.mocked(fetch);
+    const provider = new AlpacaProvider({
+      keyId: "test-key-id",
+      secretKey: "test-secret-value",
+    });
+    const queryFingerprint = await createAlpacaNewsQueryFingerprint({
+      symbols: ["NASDAQ:NVDA"],
+      windowStart: "2026-11-11T00:00:00Z",
+      windowEnd: "2026-11-12T00:00:00Z",
+      pageSize: 25,
+    });
+
+    await expect(
+      provider.getEventPage({
+        symbols: ["NASDAQ:NVDA"],
+        windowStart: "2026-11-11T00:00:00Z",
+        windowEnd: "2026-11-12T00:00:00Z",
+        pageSize: 25,
+        cursor: { token: "opaque-token", queryFingerprint },
+      }),
+    ).resolves.toMatchObject({ exhausted: true, nextCursor: null });
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const url = new URL(String(fetchMock.mock.calls[0][0]));
+    expect(url.searchParams.get("page_token")).toBe("opaque-token");
+  });
+
+  it("classifies a rejected stored Alpaca token without exposing it", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 400 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new AlpacaProvider({
+      keyId: "test-key-id",
+      secretKey: "test-secret-value",
+    });
+    const queryFingerprint = await createAlpacaNewsQueryFingerprint({
+      symbols: ["NASDAQ:NVDA"],
+      windowStart: "2026-11-11T00:00:00Z",
+      windowEnd: "2026-11-12T00:00:00Z",
+      pageSize: 25,
+    });
+
+    let error: unknown;
+    try {
+      await provider.getEventPage({
+        symbols: ["NASDAQ:NVDA"],
+        windowStart: "2026-11-11T00:00:00Z",
+        windowEnd: "2026-11-12T00:00:00Z",
+        pageSize: 25,
+        cursor: {
+          token: "sensitive-provider-token",
+          queryFingerprint,
+        },
+      });
+    } catch (failure) {
+      error = failure;
+    }
+    expect(error).toBeInstanceOf(ProviderCursorRejectedError);
+    expect(error instanceof Error ? error.message : String(error)).not.toContain(
+      "sensitive-provider-token",
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 });
 

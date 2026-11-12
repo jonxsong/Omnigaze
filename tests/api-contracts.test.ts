@@ -113,7 +113,17 @@ describe("browser API response contracts", () => {
       checkDatabaseReadiness: async () => ({
         status: "ready",
         checkedAt: "2026-11-12T08:00:00.000Z",
-        schema: "intelligence-inbox-v1",
+        schema: "ingestion-control-plane-v1",
+      }),
+      getIngestionReadiness: async () => ({
+        mode: "request_time",
+        status: "idle",
+        expectedCadenceSeconds: null,
+        lastSuccessAt: null,
+        latestEvidenceAt: null,
+        generatedAt: "2026-11-12T08:00:00.000Z",
+        since: "2026-11-11T08:00:00.000Z",
+        providers: [],
       }),
     });
     const response = await getHealth();
@@ -123,7 +133,10 @@ describe("browser API response contracts", () => {
       version: string;
       checkedAt: string;
       capabilities: string[];
-      readiness: { database: { status: string; schema: string } };
+      readiness: {
+        database: { status: string; schema: string };
+        ingestion: { mode: string; status: string };
+      };
     };
 
     expect(response.status).toBe(200);
@@ -138,8 +151,13 @@ describe("browser API response contracts", () => {
     expect(body.readiness.database).toEqual({
       status: "ready",
       checkedAt: "2026-11-12T08:00:00.000Z",
-      schema: "intelligence-inbox-v1",
+      schema: "ingestion-control-plane-v1",
     });
+    expect(body.readiness.ingestion).toMatchObject({
+      mode: "request_time",
+      status: "idle",
+    });
+    expect(body.capabilities).toContain("bounded-cursor-ingestion");
     expect(Number.isNaN(Date.parse(body.checkedAt))).toBe(false);
   });
 
@@ -153,7 +171,17 @@ describe("browser API response contracts", () => {
       checkDatabaseReadiness: async () => ({
         status: "unavailable",
         checkedAt: "2026-11-12T08:00:00.000Z",
-        schema: "intelligence-inbox-v1",
+        schema: "ingestion-control-plane-v1",
+      }),
+      getIngestionReadiness: async () => ({
+        mode: "unavailable",
+        status: "unavailable",
+        expectedCadenceSeconds: null,
+        lastSuccessAt: null,
+        latestEvidenceAt: null,
+        generatedAt: "2026-11-12T08:00:00.000Z",
+        since: "2026-11-11T08:00:00.000Z",
+        providers: [],
       }),
     });
 
@@ -166,7 +194,7 @@ describe("browser API response contracts", () => {
       readiness: {
         database: {
           status: "unavailable",
-          schema: "intelligence-inbox-v1",
+          schema: "ingestion-control-plane-v1",
         },
       },
     });

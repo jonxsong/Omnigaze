@@ -101,6 +101,16 @@ const tools = [
     },
   },
   {
+    name: "run_intelligence_ingestion_tick",
+    description:
+      "Run one bounded, operator-only provider ingestion page. This tool is intended for a trusted linked schedule and never places trades.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_intelligence_inbox",
     description:
       "Return the authenticated user's durable intelligence inbox. A fresh live read may materialize newly observed events; demo or stale provider output is never persisted.",
@@ -392,9 +402,58 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         );
       }
       case "get_provider_status": {
-        return toolContent(await liveMarketData.getProviderStatus(), {
+        const { getIngestionReadiness } = await import(
+          "@/lib/services/ingestion-health"
+        );
+        const [providerStatus, ingestion] = await Promise.all([
+          liveMarketData.getProviderStatus(),
+          getIngestionReadiness(),
+        ]);
+        return toolContent({ ...providerStatus, ingestion }, {
           generatedAt: new Date().toISOString(),
         });
+      }
+      case "run_intelligence_ingestion_tick": {
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const operatorId = process.env.INGESTION_OPERATOR_USER_ID?.trim();
+        if (!operatorId) {
+          return toolError("Ingestion operator is not configured.", {
+            code: "ingestion_operator_unconfigured",
+          });
+        }
+        if (userId !== operatorId) {
+          return toolError("Operator authorization required.", {
+            code: "operator_required",
+          });
+        }
+        const parsed = z.object({}).strict().safeParse(args);
+        if (!parsed.success) return validationError(parsed.error);
+        const {
+          IngestionTickError,
+          runIntelligenceIngestionTick,
+        } = await import("@/lib/services/intelligence-ingestion");
+        try {
+          const result = await runIntelligenceIngestionTick();
+          return toolContent(result, {
+            scope: "operator",
+            persistence: "server",
+            boundedPages: 1,
+            tradeExecutionAllowed: false,
+            generatedAt: new Date().toISOString(),
+          });
+        } catch (failure) {
+          if (failure instanceof IngestionTickError) {
+            return toolError("Ingestion tick failed.", {
+              code: failure.code,
+              stage: failure.stage,
+              retryable: failure.retryable,
+            });
+          }
+          throw failure;
+        }
       }
       case "get_intelligence_inbox": {
         const userId = request.headers.get("oai-authenticated-user-id");
@@ -484,7 +543,11 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         return toolError(`Unknown tool: ${name}`);
     }
   } catch (failure) {
-    if (name === "get_intelligence_inbox" || name === "get_alert_rules") {
+    if (
+      name === "get_intelligence_inbox" ||
+      name === "get_alert_rules" ||
+      name === "run_intelligence_ingestion_tick"
+    ) {
       const requestId = reportUnexpectedFailure(`mcp.${name}`, failure);
       return toolError("Tool execution failed.", {
         code: "tool_execution_failed",

@@ -18,6 +18,7 @@ import {
 } from "@/lib/intelligence-inbox/repository";
 import type { CanonicalSymbol } from "@/lib/market-types";
 import { listUserWatchlists } from "@/lib/repositories/watchlists";
+import type { CollectedIntelligenceFeed } from "@/lib/services/collected-intelligence";
 import {
   liveMarketData,
   type OrchestratedIntelligenceFeed,
@@ -34,6 +35,11 @@ export interface InboxServiceDependencies {
     limit: number;
     minimumMateriality: "low";
   }): Promise<OrchestratedIntelligenceFeed>;
+  getCollectedFeed?(options: {
+    symbols: CanonicalSymbol[];
+    since: string;
+    limit: number;
+  }): Promise<CollectedIntelligenceFeed>;
   now(): Date;
 }
 
@@ -41,6 +47,12 @@ const defaultDependencies: InboxServiceDependencies = {
   repository: intelligenceInboxRepository,
   listWatchlists: listUserWatchlists,
   getFeed: (options) => liveMarketData.getIntelligenceFeed(options),
+  getCollectedFeed: async (options) => {
+    const { getCollectedIntelligenceFeed } = await import(
+      "@/lib/services/collected-intelligence"
+    );
+    return getCollectedIntelligenceFeed(options);
+  },
   now: () => new Date(),
 };
 
@@ -74,6 +86,7 @@ function baseMeta(generatedAt: string) {
 
 const INBOX_ITEM_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 const INBOX_PROVIDER_CLOCK_SKEW_MS = 5 * 60 * 1_000;
+const MAX_RECONCILIATION_ITEMS = 100;
 
 function effectiveProviderTime(item: OrchestratedIntelligenceFeed["data"][number]) {
   const timestamps = [item.publishedAt, item.providerUpdatedAt]
@@ -92,6 +105,47 @@ function isIndividuallyFresh(
     effectiveAt >= now.getTime() - INBOX_ITEM_MAX_AGE_MS &&
     effectiveAt <= now.getTime() + INBOX_PROVIDER_CLOCK_SKEW_MS
   );
+}
+
+function mergeEligibleItems(
+  candidates: OrchestratedIntelligenceFeed["data"],
+  trackedSymbols: CanonicalSymbol[],
+  now: Date,
+) {
+  const tracked = new Set(trackedSymbols);
+  const byId = new Map<string, OrchestratedIntelligenceFeed["data"][number]>();
+  for (const candidate of candidates) {
+    if (
+      !candidate.isLive ||
+      candidate.sourceKind === "demo_fixture" ||
+      !isIndividuallyFresh(candidate, now)
+    ) {
+      continue;
+    }
+    const symbolIds = candidate.symbolIds.filter((symbol) => tracked.has(symbol));
+    if (symbolIds.length === 0) continue;
+    const item = { ...candidate, symbolIds };
+    const existing = byId.get(item.id);
+    const existingAt = existing ? effectiveProviderTime(existing) : null;
+    const candidateAt = effectiveProviderTime(item);
+    if (
+      !existing ||
+      (candidateAt !== null &&
+        (existingAt === null || candidateAt > existingAt))
+    ) {
+      byId.set(item.id, item);
+    }
+  }
+  const ordered = [...byId.values()].sort((left, right) => {
+    const leftAt = effectiveProviderTime(left) ?? Number.NEGATIVE_INFINITY;
+    const rightAt = effectiveProviderTime(right) ?? Number.NEGATIVE_INFINITY;
+    return (
+      rightAt - leftAt ||
+      right.publishedAt.localeCompare(left.publishedAt) ||
+      left.id.localeCompare(right.id)
+    );
+  });
+  return ordered.slice(0, MAX_RECONCILIATION_ITEMS);
 }
 
 export async function getIntelligenceInbox(
@@ -140,10 +194,22 @@ export async function getIntelligenceInbox(
       };
     } else {
       if (!claim.token) throw new Error("inbox_sync_claim_missing_token");
-      let providerSucceeded = false;
+      let reconciliationSucceeded = false;
       let hasMoreCandidates = false;
       try {
+        const collectedPromise = dependencies.getCollectedFeed
+          ? dependencies
+              .getCollectedFeed({
+                symbols,
+                since: new Date(
+                  now.getTime() - INBOX_ITEM_MAX_AGE_MS,
+                ).toISOString(),
+                limit: MAX_RECONCILIATION_ITEMS,
+              })
+              .catch(() => ({ data: [], hasMore: false }))
+          : Promise.resolve({ data: [], hasMore: false });
         let feed: OrchestratedIntelligenceFeed | null = null;
+        let providerSucceeded = false;
         try {
           feed = await dependencies.getFeed({
             symbols,
@@ -169,6 +235,14 @@ export async function getIntelligenceInbox(
               "Live providers are temporarily unavailable. Showing persisted inbox items without changing storage.",
           };
         }
+        const collected = await collectedPromise;
+        const collectedEligible = mergeEligibleItems(
+          collected.data,
+          symbols,
+          now,
+        );
+        reconciliationSucceeded =
+          providerSucceeded || collectedEligible.length > 0;
 
         if (feed) {
           const liveFresh =
@@ -201,44 +275,63 @@ export async function getIntelligenceInbox(
                 : "Provider output was not fresh live data, so stored inbox state was left unchanged.",
           };
 
-          if (syncAllowed) {
-            const tracked = new Set(symbols);
-            const eligibleItems = feed.data
-              .filter(
-                (item) =>
-                  item.isLive &&
-                  item.sourceKind !== "demo_fixture" &&
-                  item.symbolIds.some((symbol) => tracked.has(symbol)) &&
-                  isIndividuallyFresh(item, now),
-              )
-              .map((item) => ({
-                ...item,
-                symbolIds: item.symbolIds.filter((symbol) => tracked.has(symbol)),
-              }))
-              .sort(
-                (left, right) =>
-                  right.publishedAt.localeCompare(left.publishedAt) ||
-                  left.id.localeCompare(right.id),
-              );
-            const result = await dependencies.repository.syncLiveItems(
-              ownerId,
-              eligibleItems,
-              checkedAt,
-            );
-            sync = { ...sync, ...result };
-            hasMoreCandidates = result.hasMoreCandidates;
-            if (feed.data.length > 0 && eligibleItems.length === 0) {
-              sync.notice =
-                "The provider batch contained no individually fresh eligible events. Inbox activation was recorded without persisting stale items.";
-            }
-          } else if (feed.meta.dataMode === "live") {
-            const result = await dependencies.repository.syncLiveItems(
-              ownerId,
-              [],
-              checkedAt,
-            );
-            sync = { ...sync, ...result };
-            hasMoreCandidates = result.hasMoreCandidates;
+        }
+
+        const providerItems =
+          feed &&
+          feed.meta.dataMode === "live" &&
+          (feed.meta.freshness.state === "fresh" || feed.data.length === 0)
+            ? feed.data
+            : [];
+        const merged = mergeEligibleItems(
+          [...collectedEligible, ...providerItems],
+          symbols,
+          now,
+        );
+        const hasCollected = collectedEligible.length > 0;
+        if (hasCollected) {
+          sync = {
+            status: "live",
+            checkedAt,
+            dataMode: "live",
+            freshness: "fresh",
+            providerCoverage:
+              feed?.meta.dataMode === "live"
+                ? feed.meta.providerCoverage
+                : "partial",
+            baselineApplied: false,
+            hasMoreCandidates: false,
+            newItemCount: 0,
+            newDeliveryCount: 0,
+            notice:
+              providerItems.length > 0
+                ? "Collected and request-time provider events were reconciled into the durable inbox."
+                : "Previously collected fresh provider events were projected into the durable inbox.",
+          };
+        }
+
+        const shouldSync =
+          hasCollected ||
+          providerItems.length > 0 ||
+          (feed?.meta.dataMode === "live" && feed.data.length === 0) ||
+          (feed?.meta.dataMode === "live" &&
+            feed.meta.freshness.state !== "fresh");
+        if (shouldSync) {
+          const result = await dependencies.repository.syncLiveItems(
+            ownerId,
+            merged,
+            checkedAt,
+          );
+          hasMoreCandidates = result.hasMoreCandidates;
+          sync = { ...sync, ...result, hasMoreCandidates };
+          if (
+            !hasCollected &&
+            feed &&
+            feed.data.length > 0 &&
+            merged.length === 0
+          ) {
+            sync.notice =
+              "The provider batch contained no individually fresh eligible events. Inbox activation was recorded without persisting stale items.";
           }
         }
       } finally {
@@ -246,7 +339,10 @@ export async function getIntelligenceInbox(
           ownerId,
           claim.token,
           dependencies.now().toISOString(),
-          { providerSucceeded, hasMoreCandidates },
+          {
+            providerSucceeded: reconciliationSucceeded,
+            hasMoreCandidates,
+          },
         );
       }
     }

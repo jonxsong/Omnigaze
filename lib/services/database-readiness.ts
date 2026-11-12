@@ -5,7 +5,7 @@ export type DatabaseReadinessStatus = "ready" | "unavailable";
 export interface DatabaseReadiness {
   status: DatabaseReadinessStatus;
   checkedAt: string;
-  schema: "intelligence-inbox-v1";
+  schema: "ingestion-control-plane-v1";
 }
 
 export interface ReadinessDatabase {
@@ -15,7 +15,10 @@ export interface ReadinessDatabase {
 export type ReadinessDatabaseFactory =
   () => ReadinessDatabase | Promise<ReadinessDatabase>;
 
-const REQUIRED_COLUMN_COUNTS = [3, 2, 2, 2, 3, 3, 4] as const;
+const REQUIRED_COLUMN_COUNTS = [
+  3, 2, 2, 2, 3, 3, 4,
+  15, 12, 5, 2, 9,
+] as const;
 
 async function runtimeDatabaseFactory(): Promise<ReadinessDatabase> {
   const { getDb } = await import("@/db");
@@ -45,16 +48,31 @@ export async function checkDatabaseReadiness(
         (SELECT COUNT(*) FROM pragma_table_info('alert_deliveries')
           WHERE name IN ('owner_id', 'event_id', 'event_revision')),
         (SELECT COUNT(*) FROM pragma_table_info('inbox_sync_gates')
-          WHERE name IN ('owner_id', 'claim_until', 'next_allowed_at', 'catchup_pending'))
-    `)) as [
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-    ][];
+          WHERE name IN ('owner_id', 'claim_until', 'next_allowed_at', 'catchup_pending')),
+        (SELECT COUNT(*) FROM pragma_table_info('provider_ingestion_checkpoints')
+          WHERE name IN (
+            'provider', 'partition_key', 'lease_token', 'lease_expires_at',
+            'window_start', 'window_end', 'window_fingerprint', 'resume_cursor',
+            'high_water_mark', 'next_due_at', 'last_success_at', 'last_failure_at',
+            'consecutive_failures', 'total_successes', 'total_failures'
+          )),
+        (SELECT COUNT(*) FROM pragma_table_info('provider_ingestion_runs')
+          WHERE name IN (
+            'id', 'provider', 'partition_key', 'lease_token', 'window_fingerprint',
+            'resume_cursor_start', 'resume_cursor_end', 'page_fingerprint',
+            'page_persisted_at', 'status', 'started_at', 'completed_at'
+          )),
+        (SELECT COUNT(*) FROM pragma_table_info('provider_ingestion_run_errors')
+          WHERE name IN ('id', 'run_id', 'code', 'safe_message', 'occurred_at')),
+        (SELECT COUNT(*) FROM pragma_table_info('source_event_symbols')
+          WHERE name IN ('source_event_id', 'symbol_id')),
+        (SELECT COUNT(*) FROM pragma_table_info('source_event_ingestion_metadata')
+          WHERE name IN (
+            'source_event_id', 'provider', 'partition_key', 'payload_policy',
+            'provider_revision_at', 'first_ingestion_run_id',
+            'last_ingestion_run_id', 'last_seen_at', 'seen_count'
+          ))
+    `)) as number[][];
     const row = rows[0];
     const ready =
       row?.length === REQUIRED_COLUMN_COUNTS.length &&
@@ -63,13 +81,13 @@ export async function checkDatabaseReadiness(
     return {
       status: ready ? "ready" : "unavailable",
       checkedAt,
-      schema: "intelligence-inbox-v1",
+      schema: "ingestion-control-plane-v1",
     };
   } catch {
     return {
       status: "unavailable",
       checkedAt,
-      schema: "intelligence-inbox-v1",
+      schema: "ingestion-control-plane-v1",
     };
   }
 }
