@@ -1,11 +1,15 @@
 import { z } from "zod";
 import {
-  getDefaultWatchlistDashboard,
   getOmnigazeView,
   searchSymbols,
   serviceMeta,
 } from "@/lib/services/market-intelligence";
 import { liveMarketData } from "@/lib/services/live-market-data";
+import {
+  extractCanonicalSymbols,
+  filterFeedToSymbols,
+  summarizeWatchlists,
+} from "@/lib/api/personal-intelligence";
 import type { CanonicalSymbol } from "@/lib/market-types";
 
 export const dynamic = "force-dynamic";
@@ -204,10 +208,50 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         return view ? toolContent(view) : toolError("Symbol not found.");
       }
       case "get_watchlist_dashboard": {
-        const userId = request.headers.get("oai-authenticated-user-id") ?? "local-preview";
-        return toolContent(getDefaultWatchlistDashboard(), {
-          ownerScope: userId,
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+
+        const { listUserWatchlists } = await import(
+          "@/lib/repositories/watchlists"
+        );
+        const watchlists = await listUserWatchlists(userId);
+        const symbols = extractCanonicalSymbols(watchlists);
+        const publicWatchlists = summarizeWatchlists(watchlists);
+        if (symbols.length === 0) {
+          return toolContent(
+            { watchlists: publicWatchlists, symbols: [], events: [] },
+            {
+              scope: "personal",
+              identity: "authenticated",
+              persistence: "server",
+              status: "empty",
+              generatedAt: new Date().toISOString(),
+            },
+          );
+        }
+
+        const feed = await liveMarketData.getIntelligenceFeed({
+          symbols,
+          limit: 50,
+          minimumMateriality: "low",
+          since: new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(),
         });
+        return toolContent(
+          {
+            watchlists: publicWatchlists,
+            symbols,
+            events: filterFeedToSymbols(feed.data, symbols),
+          },
+          {
+            ...feed.meta,
+            scope: "personal",
+            identity: "authenticated",
+            persistence: "server",
+            status: "ready",
+          },
+        );
       }
       case "get_provider_status": {
         return toolContent(await liveMarketData.getProviderStatus(), {

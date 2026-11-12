@@ -15,14 +15,16 @@ import {
   ArrowRight,
   Bell,
   Bot,
-  ChevronDown,
   ChevronRight,
   CircleHelp,
+  Cloud,
   Clock3,
   FileText,
   Gauge,
   Globe2,
   Layers3,
+  LogIn,
+  LogOut,
   Menu,
   MessageSquareText,
   Plus,
@@ -66,6 +68,37 @@ interface DashboardPreferences {
   selectedSymbol: CanonicalSymbol;
   timeframe: Timeframe;
 }
+
+type DashboardSession =
+  | {
+      isAuthenticated: false;
+      signInPath: string;
+    }
+  | {
+      isAuthenticated: true;
+      displayName: string;
+      initials: string;
+      signOutPath: string;
+    };
+
+interface AccountWatchlist {
+  id: string;
+  name: string;
+  symbols: CanonicalSymbol[];
+}
+
+interface MarketDashboardProps {
+  session: DashboardSession;
+  accountWatchlist?: AccountWatchlist | null;
+  accountSyncUnavailable?: boolean;
+}
+
+type WatchlistSyncPhase =
+  | "local"
+  | "synced"
+  | "saving"
+  | "error"
+  | "unavailable";
 
 const supportedSymbols = new Set<CanonicalSymbol>(
   stockWorkspaces.map(({ instrument }) => instrument.id),
@@ -320,10 +353,19 @@ function BrandMark() {
   );
 }
 
-export function MarketDashboard() {
-  const [watchlist, setWatchlist] = useState<CanonicalSymbol[]>(defaultWatchlist);
+export function MarketDashboard({
+  session,
+  accountWatchlist = null,
+  accountSyncUnavailable = false,
+}: MarketDashboardProps) {
+  const authoritativeWatchlist = useMemo(
+    () => accountWatchlist?.symbols.filter(isSupportedSymbol) ?? null,
+    [accountWatchlist],
+  );
+  const initialWatchlist = authoritativeWatchlist ?? defaultWatchlist;
+  const [watchlist, setWatchlist] = useState<CanonicalSymbol[]>(initialWatchlist);
   const [selectedSymbol, setSelectedSymbol] = useState<CanonicalSymbol>(
-    defaultWatchlist[0],
+    initialWatchlist[0] ?? defaultWatchlist[0],
   );
   const [timeframe, setTimeframe] = useState<Timeframe>("1D");
   const [query, setQuery] = useState("");
@@ -341,8 +383,25 @@ export function MarketDashboard() {
   const [healthResource, setHealthResource] = useState<HealthResource>({
     phase: "loading",
   });
+  const [watchlistSyncPhase, setWatchlistSyncPhase] =
+    useState<WatchlistSyncPhase>(() => {
+      if (!session.isAuthenticated) return "local";
+      if (accountSyncUnavailable || !accountWatchlist) return "unavailable";
+      return "synced";
+    });
+  const [watchlistSyncMessage, setWatchlistSyncMessage] = useState<string | null>(
+    null,
+  );
   const searchInputRef = useRef<HTMLInputElement>(null);
   const preferencesTouchedRef = useRef(false);
+  const shellRef = useRef<HTMLElement>(null);
+  const accountPersistenceEnabled =
+    session.isAuthenticated && Boolean(accountWatchlist) && !accountSyncUnavailable;
+  const watchlistName = accountWatchlist?.name ?? "Core holdings";
+
+  useEffect(() => {
+    shellRef.current?.setAttribute("data-hydrated", "true");
+  }, []);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -354,13 +413,23 @@ export function MarketDashboard() {
       if (preferencesTouchedRef.current) return;
       const preferences = readDashboardPreferences();
       if (!preferences) return;
+      if (authoritativeWatchlist) {
+        const nextSelected =
+          authoritativeWatchlist.length === 0 ||
+          authoritativeWatchlist.includes(preferences.selectedSymbol)
+            ? preferences.selectedSymbol
+            : authoritativeWatchlist[0];
+        setSelectedSymbol(nextSelected);
+        setTimeframe(preferences.timeframe);
+        return;
+      }
       setWatchlist(preferences.watchlist);
       setSelectedSymbol(preferences.selectedSymbol);
       setTimeframe(preferences.timeframe);
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [authoritativeWatchlist]);
 
   useEffect(() => {
     let stopped = false;
@@ -607,6 +676,54 @@ export function MarketDashboard() {
   const positive = snapshot.change >= 0;
   const chartColor = positive ? "#22d3a7" : "#ff6b7d";
 
+  async function persistWatchlistMutation(
+    operation: "add" | "remove",
+    symbol: CanonicalSymbol,
+    rollback: () => void,
+  ) {
+    if (!accountPersistenceEnabled || !accountWatchlist) return;
+
+    setWatchlistSyncPhase("saving");
+    setWatchlistSyncMessage(null);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 10_000);
+
+    try {
+      const response = await fetch("/api/watchlists", {
+        method: "POST",
+        cache: "no-store",
+        credentials: "same-origin",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          operation,
+          watchlist_id: accountWatchlist.id,
+          symbol_id: symbol,
+        }),
+        signal: controller.signal,
+      });
+      const body = (await response.json().catch(() => null)) as
+        | { error?: string }
+        | null;
+      if (!response.ok) {
+        throw new Error(body?.error || `Watchlist save failed with ${response.status}.`);
+      }
+      setWatchlistSyncPhase("synced");
+    } catch (error) {
+      rollback();
+      setWatchlistSyncPhase("error");
+      setWatchlistSyncMessage(
+        error instanceof Error
+          ? `${error.message} Your last change was rolled back.`
+          : "Watchlist sync failed. Your last change was rolled back.",
+      );
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
   function selectStock(symbol: CanonicalSymbol) {
     preferencesTouchedRef.current = true;
     setSelectedSymbol(symbol);
@@ -621,7 +738,10 @@ export function MarketDashboard() {
   }
 
   function addStock(symbol: CanonicalSymbol) {
+    if (watchlistSyncPhase === "saving") return;
     preferencesTouchedRef.current = true;
+    const previousWatchlist = watchlist;
+    const previousSelected = selectedSymbol;
     const nextWatchlist = watchlist.includes(symbol)
       ? watchlist
       : [...watchlist, symbol];
@@ -630,10 +750,20 @@ export function MarketDashboard() {
     setShowSearch(false);
     setShowMobileWatchlist(false);
     writeDashboardPreferences(nextWatchlist, symbol, timeframe);
+    if (!watchlist.includes(symbol)) {
+      void persistWatchlistMutation("add", symbol, () => {
+        setWatchlist(previousWatchlist);
+        setSelectedSymbol(previousSelected);
+        writeDashboardPreferences(previousWatchlist, previousSelected, timeframe);
+      });
+    }
   }
 
   function removeStock(symbol: CanonicalSymbol) {
+    if (watchlistSyncPhase === "saving") return;
     preferencesTouchedRef.current = true;
+    const previousWatchlist = watchlist;
+    const previousSelected = selectedSymbol;
     const nextWatchlist = watchlist.filter((item) => item !== symbol);
     const nextSelected =
       symbol === selectedSymbol && nextWatchlist[0]
@@ -642,6 +772,11 @@ export function MarketDashboard() {
     setWatchlist(nextWatchlist);
     if (nextSelected !== selectedSymbol) setSelectedSymbol(nextSelected);
     writeDashboardPreferences(nextWatchlist, nextSelected, timeframe);
+    void persistWatchlistMutation("remove", symbol, () => {
+      setWatchlist(previousWatchlist);
+      setSelectedSymbol(previousSelected);
+      writeDashboardPreferences(previousWatchlist, previousSelected, timeframe);
+    });
   }
 
   function chooseTimeframe(nextTimeframe: Timeframe) {
@@ -651,7 +786,7 @@ export function MarketDashboard() {
   }
 
   return (
-    <main className="omnigaze-shell">
+    <main ref={shellRef} className="omnigaze-shell" data-hydrated="false">
       <header className="topbar">
         <Link className="brand-lockup" href="/" aria-label="Omnigaze home">
           <BrandMark />
@@ -708,6 +843,7 @@ export function MarketDashboard() {
                       role="option"
                       aria-selected={alreadyWatched}
                       className="search-result-row"
+                      disabled={watchlistSyncPhase === "saving"}
                       onClick={() => addStock(instrument.id)}
                     >
                       <span className="symbol-avatar">{instrument.ticker[0]}</span>
@@ -749,11 +885,26 @@ export function MarketDashboard() {
           </button>
           <button type="button" className="icon-button" aria-label="Notifications">
             <Bell size={18} />
-            <span className="notification-dot" />
           </button>
-          <button type="button" className="profile-button" aria-label="Open profile">
-            JZ
-          </button>
+          {session.isAuthenticated ? (
+            <a
+              className="profile-button"
+              href={session.signOutPath}
+              target="_top"
+              aria-label={`Sign out ${session.displayName}`}
+              title={`${session.displayName} · synced account`}
+            >
+              {session.initials}
+            </a>
+          ) : (
+            <a
+              className="topbar-sign-in"
+              href={session.signInPath}
+              target="_top"
+            >
+              <LogIn size={14} /> Sign in to sync
+            </a>
+          )}
         </div>
       </header>
 
@@ -890,10 +1041,8 @@ export function MarketDashboard() {
 
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">MY WATCHLISTS</span>
-              <button className="watchlist-title" type="button">
-                Core holdings <ChevronDown size={14} />
-              </button>
+              <span className="eyebrow">MY WATCHLIST</span>
+              <div className="watchlist-title">{watchlistName}</div>
             </div>
             <button
               type="button"
@@ -903,6 +1052,35 @@ export function MarketDashboard() {
             >
               <Plus size={17} />
             </button>
+          </div>
+
+          <div
+            className={`watchlist-sync-status ${watchlistSyncPhase}`}
+            role="status"
+            aria-live="polite"
+          >
+            {watchlistSyncPhase === "saving" ? (
+              <RefreshCw className="sync-spinner" size={13} />
+            ) : watchlistSyncPhase === "error" ||
+              watchlistSyncPhase === "unavailable" ? (
+              <WifiOff size={13} />
+            ) : (
+              <Cloud size={13} />
+            )}
+            <span>
+              {watchlistSyncPhase === "local"
+                ? "Saved on this device"
+                : watchlistSyncPhase === "saving"
+                  ? "Saving to your account…"
+                  : watchlistSyncPhase === "synced"
+                    ? "Synced across your devices"
+                    : watchlistSyncPhase === "error"
+                      ? watchlistSyncMessage ?? "Account sync failed; change rolled back."
+                      : "Account sync unavailable; using this device."}
+            </span>
+            {!session.isAuthenticated && (
+              <a href={session.signInPath} target="_top">Sync across devices</a>
+            )}
           </div>
 
           <div className="watchlist-columns" aria-hidden="true">
@@ -959,6 +1137,7 @@ export function MarketDashboard() {
                     type="button"
                     className="remove-stock"
                     aria-label={`Remove ${instrument.ticker} from watchlist`}
+                    disabled={watchlistSyncPhase === "saving"}
                     onClick={() => removeStock(instrument.id)}
                   >
                     <X size={13} />
@@ -989,6 +1168,11 @@ export function MarketDashboard() {
             <button type="button"><Layers3 size={16} /> Intelligence feed</button>
             <button type="button"><MessageSquareText size={16} /> Ask Omnigaze</button>
             <button type="button"><Settings2 size={16} /> Preferences</button>
+            {session.isAuthenticated && (
+              <a href={session.signOutPath} target="_top">
+                <LogOut size={16} /> Sign out
+              </a>
+            )}
           </nav>
         </aside>
 

@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { instruments, watchlistItems, watchlists } from "@/db/schema";
 import { workspaceBySymbol } from "@/lib/demo-market-data";
@@ -31,15 +31,26 @@ export async function ensureDefaultWatchlist(ownerId: string) {
     name: "Core holdings",
     isDefault: true,
   };
-  await db.insert(watchlists).values(created);
-  return { ...created, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  await db.insert(watchlists).values(created).onConflictDoNothing();
+
+  const winner = await db
+    .select()
+    .from(watchlists)
+    .where(and(eq(watchlists.ownerId, ownerId), eq(watchlists.isDefault, true)))
+    .limit(1);
+  if (!winner[0]) throw new Error("default_watchlist_creation_failed");
+  return winner[0];
 }
 
 export async function listUserWatchlists(ownerId: string) {
   const db = getDb();
   await ensureDefaultWatchlist(ownerId);
 
-  const lists = await db.select().from(watchlists).where(eq(watchlists.ownerId, ownerId));
+  const lists = await db
+    .select()
+    .from(watchlists)
+    .where(eq(watchlists.ownerId, ownerId))
+    .orderBy(desc(watchlists.isDefault), asc(watchlists.createdAt));
   const items = await db
     .select({
       watchlistId: watchlistItems.watchlistId,
@@ -104,6 +115,10 @@ export async function addSymbolToWatchlist(
     .insert(watchlistItems)
     .values({ watchlistId, symbolId })
     .onConflictDoNothing();
+  await db
+    .update(watchlists)
+    .set({ updatedAt: new Date().toISOString() })
+    .where(and(eq(watchlists.id, watchlistId), eq(watchlists.ownerId, ownerId)));
 
   return { watchlistId, symbolId };
 }
@@ -123,5 +138,9 @@ export async function removeSymbolFromWatchlist(
         eq(watchlistItems.symbolId, symbolId),
       ),
     );
+  await db
+    .update(watchlists)
+    .set({ updatedAt: new Date().toISOString() })
+    .where(and(eq(watchlists.id, watchlistId), eq(watchlists.ownerId, ownerId)));
   return { watchlistId, symbolId };
 }

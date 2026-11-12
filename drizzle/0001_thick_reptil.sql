@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `watchlists_owner_default_idx` ON `watchlists` (`owner_id`) WHERE "watchlists"."is_default" = 1;

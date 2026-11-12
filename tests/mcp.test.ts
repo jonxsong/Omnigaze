@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { POST } from "@/app/mcp/route";
 
-async function callMcp(method: string, params?: unknown) {
+async function callMcp(method: string, params?: unknown, authenticated = true) {
   const response = await POST(
     new Request("https://omnigaze.test/mcp", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "oai-authenticated-user-id": "test-user",
+        ...(authenticated ? { "oai-authenticated-user-id": "test-user" } : {}),
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
     }),
@@ -61,6 +61,24 @@ describe("MCP 2026-07-28 contract", () => {
       arguments: {},
     });
     expect(body.result).toMatchObject({ isError: true });
+  });
+
+  it("requires trusted identity for the personal watchlist tool", async () => {
+    const body = await callMcp(
+      "tools/call",
+      { name: "get_watchlist_dashboard", arguments: {} },
+      false,
+    );
+    const result = body.result as {
+      isError: boolean;
+      content: Array<{ text: string }>;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      error: "Authentication required.",
+      details: { code: "auth_required" },
+    });
   });
 
   it("returns a JSON-RPC method error for unsupported methods", async () => {

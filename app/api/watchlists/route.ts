@@ -31,6 +31,11 @@ export async function GET() {
           updatedAt: watchlist.updatedAt,
           items: watchlist.items,
         })),
+        meta: {
+          scope: "personal",
+          identity: "authenticated",
+          persistence: "server",
+        },
       },
       { headers: noStore },
     );
@@ -71,7 +76,17 @@ export async function POST(request: Request) {
             parsed.data.watchlist_id,
             parsed.data.symbol_id,
           );
-    return Response.json({ data }, { headers: noStore });
+    return Response.json(
+      {
+        data,
+        meta: {
+          scope: "personal",
+          identity: "authenticated",
+          persistence: "server",
+        },
+      },
+      { headers: noStore },
+    );
   } catch (error) {
     if (error instanceof WatchlistRepositoryError) {
       if (error.code === "watchlist_not_found") {

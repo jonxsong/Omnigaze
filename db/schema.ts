@@ -30,7 +30,12 @@ export const watchlists = sqliteTable(
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
     updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
-  (table) => [index("watchlists_owner_idx").on(table.ownerId)],
+  (table) => [
+    index("watchlists_owner_idx").on(table.ownerId),
+    uniqueIndex("watchlists_owner_default_idx")
+      .on(table.ownerId)
+      .where(sql`${table.isDefault} = 1`),
+  ],
 );
 
 export const watchlistItems = sqliteTable(
