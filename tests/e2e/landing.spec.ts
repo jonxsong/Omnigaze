@@ -117,6 +117,7 @@ test.describe("Omnigaze public experience", () => {
     }
 
     const generatedAt = "2026-11-12T18:00:02.000Z";
+    const rateLimitRetryAt = new Date(Date.now() + 120_000).toISOString();
     let analysisRequests = 0;
     let abortNextAnalysis = false;
     let rateLimitNextAnalysis = false;
@@ -146,7 +147,7 @@ test.describe("Omnigaze public experience", () => {
           contentType: "application/json",
           headers: {
             "Retry-After": "120",
-            "X-Omnigaze-AI-Budget-Retry-At": "2026-11-12T18:02:00.000Z",
+            "X-Omnigaze-AI-Budget-Retry-At": rateLimitRetryAt,
           },
           body: JSON.stringify({
             error: "The AI analysis budget is temporarily exhausted.",

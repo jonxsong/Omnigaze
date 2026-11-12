@@ -258,6 +258,21 @@ test.describe("Portfolio Pulse", () => {
       expect(dimensions.body, JSON.stringify(dimensions)).toBeLessThanOrEqual(
         dimensions.viewport + 1,
       );
+
+      await page.setViewportSize({ width: 304, height: 844 });
+      const narrowDimensions = await page.evaluate(() => ({
+        viewport: document.documentElement.clientWidth,
+        document: document.documentElement.scrollWidth,
+        body: document.body.scrollWidth,
+      }));
+      expect(
+        narrowDimensions.document,
+        JSON.stringify(narrowDimensions),
+      ).toBeLessThanOrEqual(narrowDimensions.viewport + 1);
+      expect(
+        narrowDimensions.body,
+        JSON.stringify(narrowDimensions),
+      ).toBeLessThanOrEqual(narrowDimensions.viewport + 1);
       expect(ownerPulseRequests).toBe(0);
     } finally {
       if (original) {

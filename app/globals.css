@@ -29,7 +29,7 @@
 * { box-sizing: border-box; }
 html { background: var(--background); }
 body {
-  min-width: 320px;
+  min-width: 0;
   margin: 0;
   background: radial-gradient(circle at 72% -18%, rgb(23 191 245 / 9%), transparent 34rem), linear-gradient(180deg, #071019, #060b11 76%);
   color: var(--foreground);
