@@ -1,15 +1,23 @@
 # Omnigaze
 
-Omnigaze is a personalized market-intelligence workspace. Users search the active U.S. equity universe, track the companies they care about, record holdings, inspect a live fixed-point **Portfolio Pulse**, follow a provider-backed **Market Pulse** made from honestly labeled ETF proxies, scan an automatic evidence-only **Today Across Your Watchlist** view, keep a durable intelligence inbox, generate a cited cross-watchlist **Daily Brief**, and open an evidence-backed **Omnigaze View** that separates facts, derived observations, and AI inference.
+[Open the public alpha](https://omnigaze.perkyaisle4.chatgpt.site) · [Explore the architecture](docs/architecture.md) · [Review shipped capabilities](docs/product-status.md)
+
+Omnigaze is a personalized market-intelligence workspace. Users search the active U.S. equity universe, track the companies they care about, record holdings, inspect a live fixed-point **Portfolio Pulse**, follow a provider-backed **Market Pulse** made from honestly labeled ETF proxies, compare a selected security with SPY and QQQ through the deterministic **Move Lens**, scan an automatic evidence-only **Today Across Your Watchlist** view, keep a durable intelligence inbox, generate a cited cross-watchlist **Daily Brief**, and open an evidence-backed **Omnigaze View** that separates facts, derived observations, and AI inference.
 
 The public alpha uses provider-backed quotes, chart history, and licensed news whenever those capabilities are configured. The SEC adapter now has a distributed D1 Fair Access coordinator plus durable recent-filing cursor ingestion, but production egress remains fail-closed until an operator supplies a truthful monitored contact identity and explicitly enables both requested SEC capabilities. Every surface carries source, freshness, delay, and fallback metadata; illustrative fixtures are never labeled as live.
+
+## Architecture at a glance
+
+[![Omnigaze end-to-end architecture: clients, application services, provider ingestion, deterministic analytics, guarded AI, D1 persistence, and operations](docs/architecture-overview.svg)](docs/architecture.md)
+
+The diagram links to the detailed trust boundaries, degradation model, data contracts, and delivery gates in [`docs/architecture.md`](docs/architecture.md).
 
 ## Product loop
 
 1. A user completes a local-first onboarding flow, searches the current asset catalog, and creates a personalized watchlist.
 2. Provider adapters ingest market data and licensed news; the guarded SEC adapter and its separate durable collector remain dormant unless their explicit activation and contact-identity requirements are satisfied.
 3. The pipeline normalizes, timestamps, hashes, and deduplicates every source event. One unified read plane then merges fresh request-time responses with retained D1 receipts; the newest provider revision wins and an exact tie prefers the durable receipt.
-4. Deterministic fixed-point code calculates market changes, freshness, portfolio value, daily contribution, unrealized P&L, and concentration. Missing, stale, or demo quotes remain explicit exclusions rather than zero-valued positions.
+4. Deterministic fixed-point code calculates market changes, freshness, portfolio value, daily contribution, unrealized P&L, and concentration. Move Lens compares the selected security's daily return with SPY and QQQ ETF proxies only when their live observations are comparable, then surfaces the newest symbol-linked event without claiming it caused the move. Missing, stale, or demo quotes remain explicit exclusions rather than zero-valued positions.
 5. A fail-closed D1 guard checks owner-safe, model-aware evidence caches and atomically reserves the authenticated owner’s shared generation budget.
 6. On a cache miss, the OpenAI Agents SDK produces a typed interpretation constrained to known evidence IDs. A single-stock view is cached for at most five minutes; a Daily Brief is keyed by the exact watchlist, evidence revisions, prompt, model, and UTC date and is cached for at most six hours. Neither cache stores a raw prompt.
 7. Deterministic code—not the model—calculates any review zones and hypothetical share scenarios, and suppresses them when data is stale, demo, or has fewer than two attributable evidence items. A single provider stream remains explicitly capped at limited evidence confidence; Omnigaze never infers source agreement.
@@ -17,6 +25,8 @@ The public alpha uses provider-backed quotes, chart history, and licensed news w
 9. The dashboard, HTTP API, and MCP tools expose the same owner-scoped domain objects. Authenticated MCP clients can also update watchlist membership, upsert holdings, change inbox state, and configure in-app alert rules through the same strict parsers as the browser. Holdings, inbox state, and alert rules retain optimistic versions; watchlist set mutations remain idempotent.
 
 The authenticated dashboard also loads one bounded Today response on entry and after an explicit refresh. It shows at most four current, non-demo provider events across the saved watchlist, preserves original source language, and labels retained-only, current-only, stale, unknown, truncated, or unavailable evidence without invoking a model. A transient refresh failure keeps the last verified in-memory response visible for that session; it is never persisted in the browser.
+
+Move Lens is a read-only, non-AI view. In the browser it reuses the selected quote, Market Pulse, and intelligence resources that are already loaded, so it adds no polling lane. It persists no comparison or user state, and its latest related event is context—not causal attribution, investment advice, or a trading instruction. Stronger event-level causal classifications remain confined to the main intelligence feed and are not exposed as Move Lens conclusions.
 
 ## Stack
 
@@ -126,6 +136,8 @@ Copy `.env.example` for local development. Never commit `.env` files or API keys
 - AI output schemas do not include target-price or share-quantity fields. Scenario math is deterministic, versioned, and never places orders.
 - Portfolio quantities and cost basis cross APIs as decimal strings and persist as scaled integers.
 - Portfolio Pulse uses BigInt micro-units, returns decimal strings, bounds each calculation to 50 positions, reports omitted and excluded coverage, and never treats a missing quote as zero.
+- Move Lens recomputes signed basis-point moves from verified price and previous-close values. It classifies only relative arithmetic against SPY and QQQ ETF proxies; incompatible session, delay, exchange-coverage, identity, or observation-time metadata suppresses the affected comparison.
+- Move Lens uses no model, stores no result, and never turns a symbol-linked event into a claimed price driver, recommendation, target, or order instruction.
 - Facts, derived values, inferences, and user views remain visibly distinct.
 - A price movement is not treated as proof of causation.
 
@@ -136,6 +148,7 @@ The initial stateless tool surface includes:
 - `search_symbols`
 - `get_market_snapshot`
 - `get_market_context`
+- `get_move_lens`
 - `get_intelligence_feed`
 - `get_omnigaze_view`
 - `get_daily_brief`
@@ -160,6 +173,7 @@ Use `server/discover`, `tools/list`, and `tools/call` with MCP version `2026-07-
 
 - Alpaca currently uses resilient REST polling; long-lived streaming transport is a later infrastructure slice.
 - Market Pulse uses six provider-backed ETF prices (SPY, QQQ, IWM, TLT, USO, and GLD). They are deliberately labeled as proxies and are not underlying index levels, Treasury yields, volatility measures, or spot commodity prices. It loads once on entry and on explicit refresh rather than opening another polling lane.
+- Move Lens is a point-in-time relative comparison, not a prediction or causal model. SPY and QQQ remain ETF prices rather than S&P 500 or Nasdaq-100 index levels; a symbol-linked event may be temporally related but is never presented as proof of the move. The browser reuses existing dashboard refreshes rather than adding another timer.
 - A request-time news reconciliation still caps interactive reads at 100 events. The separate durable cursor engine processes exactly one frozen-window page per operator tick; continuous collection requires a linked hosted schedule, a current authenticated Omnigaze app connection, and at least one verified successful tick before the UI may claim scheduled collection.
 - The unified read plane makes fresh durable receipts available to the timeline, Today, AI, portfolio research, and MCP during a request-time provider outage. A monotonic logical-event ledger and leased per-owner cursor now make bounded offline inbox/alert materialization schedulable. Consecutive identical observations coalesce, revisions and reversions remain ordered by durable observation time, and baseline closes only after the owner cursor drains. The projection tick still needs a separate verified hosted schedule (or an explicitly updated existing schedule prompt) before that behavior is operational.
 - The SEC adapter, distributed Fair Access coordinator, and durable recent-filing cursor engine are covered by tests, but production egress remains disabled until a truthful monitored application/contact identity is configured and `SEC_EDGAR_ENABLED` is set to exact `true`. Any durable tick additionally requires `SEC_DURABLE_INGESTION_ENABLED=true`; continuous collection requires a verified operator schedule. Historical shard backfill and authoritative correction/removal reconciliation remain separate milestones.

@@ -1,15 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useAppLocale } from "@/components/app-locale";
 import { marketContextCopy } from "@/components/market-context-copy";
-import { parseMarketContextEnvelope } from "@/lib/api/market-context-client";
 import {
   marketContextProxies,
   type MarketContextResult,
 } from "@/lib/market-context";
 
-type Resource = {
+export type MarketContextResource = {
   data?: MarketContextResult;
   phase: "loading" | "ready" | "error";
 };
@@ -48,37 +47,13 @@ function formatTimestamp(
   }).format(date);
 }
 
-export function MarketContextTicker({ refreshToken }: { refreshToken: number }) {
+export function MarketContextTicker({
+  resource,
+}: {
+  resource: MarketContextResource;
+}) {
   const { locale } = useAppLocale();
   const copy = marketContextCopy[locale];
-  const [resource, setResource] = useState<Resource>({ phase: "loading" });
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let stopped = false;
-
-    void fetch("/api/market/context", {
-      cache: "no-store",
-      headers: { Accept: "application/json" },
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("market_context_unavailable");
-        return parseMarketContextEnvelope(await response.json());
-      })
-      .then((data) => {
-        if (!stopped) setResource({ data, phase: "ready" });
-      })
-      .catch(() => {
-        if (stopped || controller.signal.aborted) return;
-        setResource((current) => ({ ...current, phase: "error" }));
-      });
-
-    return () => {
-      stopped = true;
-      controller.abort();
-    };
-  }, [refreshToken]);
 
   const items = useMemo(
     () =>

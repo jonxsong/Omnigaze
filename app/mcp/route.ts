@@ -63,6 +63,22 @@ const tools = [
     },
   },
   {
+    name: "get_move_lens",
+    description:
+      "Compare one verified security's fresh price move since previous close with SPY and QQQ ETF proxies, plus its latest symbol-linked development. This deterministic tool does not establish causation, invoke AI, give advice, or place trades.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        symbol_id: {
+          type: "string",
+          pattern: canonicalSymbolInputPattern,
+        },
+      },
+      required: ["symbol_id"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_intelligence_feed",
     description:
       "Return evidence-backed market events, optionally filtered to one symbol.",
@@ -520,6 +536,37 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         );
         const result = await getMarketContext();
         return toolContent(result.data, result.meta);
+      }
+      case "get_move_lens": {
+        const parsed = z
+          .object({
+            symbol_id: z
+              .string()
+              .trim()
+              .min(1)
+              .max(64)
+              .transform((value) => value.toUpperCase())
+              .pipe(symbolSchema),
+          })
+          .strict()
+          .safeParse(args);
+        if (!parsed.success) return validationError(parsed.error);
+        const { getMoveLens } = await import("@/lib/services/move-lens");
+        try {
+          const result = await getMoveLens(parsed.data.symbol_id);
+          return toolContent(result.data, result.meta);
+        } catch (error) {
+          if (error instanceof InstrumentResolutionError) {
+            return error.code === "symbol_not_supported"
+              ? toolError("Symbol is not supported.", {
+                  code: "symbol_not_supported",
+                })
+              : toolError("The asset catalog is temporarily unavailable.", {
+                  code: "asset_catalog_unavailable",
+                });
+          }
+          throw error;
+        }
       }
       case "get_intelligence_feed": {
         const parsed = z

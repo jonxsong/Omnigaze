@@ -288,6 +288,8 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 .event-section { margin-top: 22px; }
 .section-heading-row { margin-bottom: 10px; }
 .section-heading-row button { gap: 4px; border: 0; background: transparent; color: #6a7d90; font-size: 9px; cursor: pointer; }
+.event-workspace-grid { display: grid; min-width: 0; grid-template-columns: minmax(280px, .72fr) minmax(0, 1fr); gap: 10px; align-items: start; }
+.event-workspace-grid > * { min-width: 0; }
 .intelligence-provenance-note { display: flex; gap: 9px; align-items: flex-start; margin-bottom: 9px; padding: 10px 12px; border: 1px solid rgb(247 199 104 / 18%); border-radius: 9px; background: rgb(247 199 104 / 5%); color: #9e875c; }
 .intelligence-provenance-note.live-only { border-color: rgb(98 217 255 / 18%); background: rgb(98 217 255 / 5%); color: #75aec0; }
 .intelligence-provenance-note.unavailable { border-color: rgb(255 107 125 / 18%); background: rgb(255 107 125 / 5%); color: #b77a84; }
@@ -308,6 +310,10 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 .source-chip { padding: 2px 5px; border-radius: 3px; font-weight: 650; }
 .source-chip.live { background: rgb(34 211 167 / 8%); color: #70d6bd; }
 .source-chip.fixture { background: rgb(247 199 104 / 8%); color: var(--warning); }
+.event-truth-chip { padding: 2px 5px; border-radius: 3px; background: rgb(98 217 255 / 6%); color: #6d9cad; }
+.event-truth-chip.claim { background: rgb(176 141 255 / 7%); color: #a996cf; }
+.event-truth-chip.causal { background: rgb(247 199 104 / 7%); color: #b99a5c; }
+.event-truth-chip.controversy { background: rgb(255 107 125 / 8%); color: #d48691; }
 .event-body h3 { margin: 6px 0 4px; color: #d8e2ea; font-size: 11px; font-weight: 630; }
 .event-body p { max-width: 760px; margin: 0; color: #708194; font-size: 9px; line-height: 1.55; }
 .event-actions { gap: 8px; margin-top: 9px; }
@@ -423,6 +429,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
   .data-status-grid > div:last-child { grid-column: 1 / -1; border-right: 0; border-bottom: 0; }
   .dashboard-overview { grid-template-columns: 1fr; }
   .overview-actions { grid-row: 2; }
+  .event-workspace-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (max-width: 640px) {
@@ -472,7 +479,8 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
   .ticker-status { display: none; }
   .ticker-item { flex: 1; justify-content: center; padding: 0 5px; }
   .ticker-item:nth-of-type(n + 4) { display: none; }
-  .ticker-item strong { display: none; }
+  .ticker-item strong { display: inline; color: #8799a8; font-size: 7px; }
+  .ticker-item > span { display: none; }
   .dashboard-empty-state { margin-top: 4vh; padding: 36px 20px; }
 }
 

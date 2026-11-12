@@ -68,6 +68,7 @@ export function createHealthHandler(
           "active-us-equity-search",
           "market-snapshots",
           "live-market-context-etf-proxies-v1",
+          "deterministic-move-lens-v1",
           "historical-bars",
           "market-news-intelligence",
           "unified-intelligence-read-plane-v1",

@@ -87,8 +87,14 @@ import { OmnigazeViewDialog } from "@/components/omnigaze-view-dialog";
 import { DailyBriefCard } from "@/components/daily-brief-card";
 import { PortfolioPulseCard } from "@/components/portfolio-pulse-card";
 import { PersonalTodayCard } from "@/components/personal-today-card";
-import { MarketContextTicker } from "@/components/market-context-ticker";
+import { MoveLensCard } from "@/components/move-lens-card";
+import { moveLensCopy } from "@/components/move-lens-copy";
+import {
+  MarketContextTicker,
+  type MarketContextResource,
+} from "@/components/market-context-ticker";
 import { useAppLocale } from "@/components/app-locale";
+import { parseMarketContextEnvelope } from "@/lib/api/market-context-client";
 import {
   formatMarketDashboardCopy,
   formatWatchlistSyncMessage,
@@ -103,6 +109,11 @@ import {
   type PortfolioPulseSnapshotInput,
 } from "@/lib/portfolio/portfolio-pulse";
 import { buildPortfolioPulseSnapshotBatches } from "@/lib/portfolio/portfolio-pulse-refresh";
+import {
+  buildMoveLens,
+  moveLensBenchmarkSnapshotsFromMarketContext,
+  type MoveLensSnapshotInput,
+} from "@/lib/move-lens";
 
 const MarketPriceChart = lazy(() => import("@/components/market-price-chart"));
 
@@ -117,6 +128,10 @@ type DashboardTranslator = (
   key: DashboardCopyKey,
   values?: Record<string, string | number>,
 ) => string;
+
+type DashboardIntelligenceEvent = IntelligenceEvent & {
+  isControversial?: boolean;
+};
 
 export interface DashboardInstrument {
   id: CanonicalSymbol;
@@ -448,7 +463,7 @@ function normalizeFeedItem(
   item: IntelligenceFeedItem,
   selectedSymbol: CanonicalSymbol,
   t: DashboardTranslator,
-): IntelligenceEvent {
+): DashboardIntelligenceEvent {
   const category: IntelligenceEvent["category"] =
     item.sourceKind === "sec_filing"
       ? "filing"
@@ -468,7 +483,13 @@ function normalizeFeedItem(
     possibleDirection: "unclear",
     status: item.isLive ? "verified" : "preliminary",
     evidenceIds: [],
-    category,
+    category: item.category ?? category,
+    ...(item.claimStatus ? { claimStatus: item.claimStatus } : {}),
+    ...(item.causalLink ? { causalLink: item.causalLink } : {}),
+    ...(item.topicTags ? { topicTags: [...item.topicTags] } : {}),
+    ...(item.isControversial !== undefined
+      ? { isControversial: item.isControversial }
+      : {}),
   };
 }
 
@@ -782,6 +803,7 @@ export function MarketDashboard({
   accountPortfolioUnavailable = false,
 }: MarketDashboardProps) {
   const { hydrated, locale, setLocale } = useAppLocale();
+  const moveCopy = moveLensCopy[locale];
   const t = useCallback<DashboardTranslator>(
     (key, values) => formatMarketDashboardCopy(locale, key, values),
     [locale],
@@ -842,6 +864,8 @@ export function MarketDashboard({
   const [healthResource, setHealthResource] = useState<HealthResource>({
     phase: "loading",
   });
+  const [marketContextResource, setMarketContextResource] =
+    useState<MarketContextResource>({ phase: "loading" });
   const [chartResources, setChartResources] = useState<Record<string, ChartResource>>(
     {},
   );
@@ -1087,6 +1111,43 @@ export function MarketDashboard({
       controller.abort();
     };
   }, [query, searchGeneration, showSearch]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let stopped = false;
+    let timedOut = false;
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 10_000);
+
+    void fetch("/api/market/context", {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("market_context_unavailable");
+        return parseMarketContextEnvelope(await response.json());
+      })
+      .then((data) => {
+        if (!stopped) setMarketContextResource({ data, phase: "ready" });
+      })
+      .catch(() => {
+        if (stopped || (controller.signal.aborted && !timedOut)) return;
+        setMarketContextResource((current) => ({
+          ...current,
+          phase: "error",
+        }));
+      })
+      .finally(() => window.clearTimeout(timeout));
+
+    return () => {
+      stopped = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [refreshGeneration]);
 
   useEffect(() => {
     if (visibleInstruments.length === 0 && holdings.length === 0) return;
@@ -1570,6 +1631,62 @@ export function MarketDashboard({
       : sourceState === "loading"
         ? t("modeChecking")
         : t("modeDemo");
+  const moveLensResult = useMemo(() => {
+    const evaluatedAt = new Date(now).toISOString();
+    const selectedMoveLensSnapshot: MoveLensSnapshotInput | undefined =
+      selectedSnapshotResource?.meta
+        ? {
+            data: selectedSnapshotResource.data ?? null,
+            meta: {
+              dataMode: selectedSnapshotResource.meta.dataMode,
+              mode: selectedSnapshotResource.meta.mode,
+              providerCoverage:
+                selectedSnapshotResource.meta.providerCoverage,
+              coverage: selectedSnapshotResource.meta.coverage,
+              freshness: {
+                ...selectedSnapshotResource.meta.freshness,
+                state:
+                  selectedSnapshotResource.phase === "error"
+                    ? "stale"
+                    : selectedSnapshotResource.meta.freshness.state,
+              },
+            },
+          }
+        : undefined;
+    const benchmarkSnapshots = marketContextResource.data
+      ? moveLensBenchmarkSnapshotsFromMarketContext(
+          marketContextResource.data,
+          evaluatedAt,
+        )
+      : new Map<CanonicalSymbol, MoveLensSnapshotInput>();
+
+    try {
+      return buildMoveLens({
+        selectedSymbolId: selectedSymbol,
+        selectedSnapshot: selectedMoveLensSnapshot,
+        benchmarkSnapshots,
+        evidence:
+          intelligenceMatchesSelection && intelligenceResource.phase === "ready"
+            ? intelligenceResource.data
+            : [],
+        evidenceReadStatus:
+          intelligenceMatchesSelection && intelligenceResource.phase === "ready"
+            ? "verified"
+            : "unavailable",
+        evaluatedAt,
+      });
+    } catch {
+      return null;
+    }
+  }, [
+    intelligenceMatchesSelection,
+    intelligenceResource.data,
+    intelligenceResource.phase,
+    marketContextResource.data,
+    now,
+    selectedSnapshotResource,
+    selectedSymbol,
+  ]);
 
   const normalizedSearchQuery = query.trim();
   const catalogMatchesQuery = catalogSearch.query === normalizedSearchQuery;
@@ -2806,11 +2923,25 @@ export function MarketDashboard({
               </div>
             )}
 
-            <div className="event-list">
+            <div className="event-workspace-grid">
+              <MoveLensCard
+                result={moveLensResult}
+                contextResource={marketContextResource}
+                evidencePhase={intelligencePhase}
+              />
+              <div className="event-list">
               {events.length > 0 ? (
                 events.map((event) => {
                   const feedItem = feedItemById.get(event.id);
                   const eventIsLive = feedItem?.isLive === true;
+                  const eventClaimStatus =
+                    feedItem?.claimStatus ?? event.claimStatus;
+                  const eventCausalLink =
+                    feedItem?.causalLink ?? event.causalLink;
+                  const eventIsControversial =
+                    feedItem?.isControversial === true ||
+                    ("isControversial" in event &&
+                      event.isControversial === true);
 
                   return (
                     <article className="event-card" key={event.id}>
@@ -2826,6 +2957,24 @@ export function MarketDashboard({
                           <span className={`source-chip ${eventIsLive ? "live" : "fixture"}`}>
                             {eventIsLive ? feedItem?.source ?? t("provider") : t("demoFixtureSource")}
                           </span>
+                          <span className="event-truth-chip">
+                            {moveCopy.category[feedItem?.category ?? event.category]}
+                          </span>
+                          {eventClaimStatus && (
+                            <span className="event-truth-chip claim">
+                              {moveCopy.claimStatus[eventClaimStatus]}
+                            </span>
+                          )}
+                          {eventCausalLink && (
+                            <span className="event-truth-chip causal">
+                              {moveCopy.causalLink[eventCausalLink]}
+                            </span>
+                          )}
+                          {eventIsControversial && (
+                            <span className="event-truth-chip controversy">
+                              {moveCopy.controversy}
+                            </span>
+                          )}
                         </div>
                         <h3>{event.headline}</h3>
                         <p>{event.summary}</p>
@@ -2872,6 +3021,7 @@ export function MarketDashboard({
                   </div>
                 </div>
               )}
+              </div>
             </div>
           </section>
           </>
@@ -3042,7 +3192,7 @@ export function MarketDashboard({
         </section>
       )}
 
-      <MarketContextTicker refreshToken={refreshGeneration} />
+      <MarketContextTicker resource={marketContextResource} />
 
       {hasMarketSelection && (
         <OmnigazeViewDialog

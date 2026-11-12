@@ -22,6 +22,7 @@ flowchart LR
     ReadPlane[Unified intelligence read plane]
     InboxService[Inbox reconciliation service]
     Scenarios[Deterministic scenario engine]
+    MoveLens[Deterministic Move Lens]
     AIGuard[(D1 view/brief caches + shared budget leases)]
     Agent[Evidence-constrained OpenAI agents]
     API[Browser API]
@@ -45,6 +46,10 @@ flowchart LR
   ReadPlane --> Domain
   Portfolio --> Domain
   Domain --> Scenarios
+  Ingest --> MoveLens
+  ReadPlane --> MoveLens
+  MoveLens --> API
+  MoveLens --> MCP
   Domain --> AIGuard
   AIGuard --> Agent
   Agent --> AIGuard
@@ -65,6 +70,7 @@ flowchart LR
 - Model work requires an atomic owner-scoped reservation. The default policy permits 20 generation attempts per UTC day, 5 per rolling minute, and 2 concurrent leases. Active cross-isolate retries cannot invoke the model twice; an expired lease may be reclaimed with a new reservation identity, so stale completion cannot finalize it.
 - Price zones and share quantities come from deterministic, versioned scenario math. The model can explain supplied evidence, but its schema has no target-price, quantity, or confidence fields.
 - Numeric scenarios are suppressed when quotes are demo, stale, invalid, or lack corroborating evidence. Confidence means evidence coverage—not the probability of a return.
+- Move Lens is a read-only deterministic comparison. It recomputes each signed daily move from price and previous close, accepts only exact selected/SPY/QQQ identities with compatible live freshness, session, delay, coverage, and observation time, and makes no causal, predictive, recommendation, target-price, sizing, or execution claim.
 - User identity is derived at the server boundary; callers cannot choose an `ownerId`.
 - Anonymous onboarding is versioned and device-local. Authenticated holdings use owner-scoped D1 rows with optimistic version checks; a sign-in merge must never silently overwrite positions.
 - Authenticated inbox and alert-rule writes are owner-scoped and compare both user-state versions and event revisions. Exact retries return the current state; conflicting stale writes do not overwrite newer data.
@@ -79,6 +85,8 @@ The application degrades by capability. A quote-provider outage can leave the ev
 Intelligence reads start the request-time provider and durable D1 receipt read concurrently. They merge only live evidence by stable provider-event identity, select the newest effective provider revision, prefer the durable projection on an exact tie, and apply materiality plus the caller limit only after the global merge. A request-time outage may therefore serve retained evidence as partial live coverage, but freshness is always recomputed from provider evidence time—not the D1 read time. Stale retained evidence remains live-but-stale and cannot unlock AI or numeric decision scenarios. Demo fixtures never enter a live merged result.
 
 Historical charts fail independently from current snapshots. If provider history is unavailable, the dashboard labels any bundled series as illustrative instead of blending it with live bars. Asset-catalog refresh can serve a bounded stale catalog, but an upstream outage never creates fake search results.
+
+Move Lens also fails per leg. Missing, stale, demo, invalid, identity-mismatched, or metadata-incompatible observations remain explicit unavailable comparisons; they are never replaced with fixtures. An aggregate relationship is emitted only when both SPY and QQQ comparisons are eligible. The latest symbol-linked event is selected independently and may remain available when price comparisons are unavailable, but it is context rather than evidence of causation.
 
 The intelligence inbox also degrades independently. If a provider fails or returns demo data, Omnigaze skips persistence and alert evaluation. A successful live check that cannot prove event freshness may record activation/check metadata, but it persists no stale event or alert delivery. Every degraded path returns the existing durable inbox with explicit sync metadata and never replaces saved research with fixtures.
 
@@ -99,6 +107,8 @@ Explicit Daily Brief and Omnigaze View requests carry a strict locale through th
 `GET /api/health` remains a liveness response but reports `status: degraded` unless both provider checks and the required D1 inbox, ingestion, owner-projection cursor, single-stock AI, Daily Brief guardrail, and SEC Fair Access schema markers are ready. The schema probe reads metadata only, exposes no rows or binding details, and catches a missing migration before authenticated traffic reaches a stateful workflow.
 
 Market Pulse is a separate public domain read across a fixed six-symbol ETF registry: SPY, QQQ, IWM, TLT, USO, and GLD. One provider batch preserves that order, verifies exact symbol identity, suppresses fixtures, and reports availability separately from exchange coverage. The browser performs one strict-validated load on entry and another only after explicit refresh; MCP `get_market_context` returns the same result. Product copy always says ETF proxy and never relabels a proxy price as an index level, yield, volatility measure, or spot commodity.
+
+Move Lens is a separate deterministic read for one verified selected security and the fixed, ordered SPY/QQQ ETF proxies. The service starts one bounded quote batch and one unified selected-symbol evidence read concurrently. Its strict browser contract independently recomputes basis-point arithmetic and relationship direction, rejects unknown or inconsistent fields, and preserves provider/session/delay/coverage metadata. The dashboard reuses its already loaded selected quote, Market Pulse observations, and intelligence evidence, so it creates no new browser polling lane. API and MCP reads are on demand, invoke no model, persist no Move Lens result or user state, and expose ETF prices rather than index levels. A newest symbol-linked event is temporal context only—not proof that it drove the move. Stronger causal classifications, when present in the main intelligence feed, are sanitized from the Move Lens contract rather than being promoted into a Move Lens conclusion.
 
 ### Production telemetry boundary
 
@@ -140,6 +150,8 @@ The owner cursor is global rather than per symbol. It preserves all post-migrati
 | `PUT /api/alerts/rules/{symbol}` | Create or replace one explicit in-app rule with optimistic versioning. |
 | MCP `get_intelligence_inbox` | Read the same authenticated inbox contract from an AI client. |
 | MCP `get_alert_rules` | Read the same authenticated alert-rule contract from an AI client. |
+| `GET /api/market/move-lens?symbol={canonicalId}` | Return one no-store deterministic selected-security comparison with fixed SPY/QQQ ETF proxies and optional symbol-linked context. |
+| MCP `get_move_lens` | Return the same deterministic Move Lens data/meta contract without model invocation, persistence, advice, or trade execution. |
 
 ## Personalization flow
 
@@ -149,7 +161,8 @@ The owner cursor is global rather than per symbol. It preserves all post-migrati
 4. Portfolio Pulse loads at most 50 owner-scoped holdings, makes one bounded quote batch, and calculates value, daily contribution, covered cost basis, unrealized P&L, deterministic weights, and contributors in BigInt micro-units. Fresh live quotes are included; missing, stale, demo, fixture, mismatched, or invalid quotes remain visible as exclusions and never become zero-valued positions.
 5. The authenticated HTTP route and closed MCP tool derive owner identity from the session/header and return the same decimal-string contract. The browser applies that same pure calculator to its existing bounded 30-second quote batch for both account and device-local holdings, avoiding a second provider polling lane; no Pulse path invokes a model, gives trade instructions, or places an order.
 6. The personalized dashboard joins watchlists, holdings, fresh market observations, and evidence events without requiring an order or brokerage connection.
-7. “Ask Omnigaze” receives only the user-approved scenario, normalized evidence, and deterministic math. Its narrative is validated for citations and non-prescriptive language before display.
+7. Move Lens can classify the selected security only as ahead of, behind, or equal to each comparable ETF proxy; the two-proxy aggregate may additionally be mixed. It never converts those labels into a transaction suggestion.
+8. “Ask Omnigaze” receives only the user-approved scenario, normalized evidence, and deterministic math. Its narrative is validated for citations and non-prescriptive language before display.
 
 On authenticated dashboard entry, Today Across Your Watchlist reads the existing owner-scoped `GET /api/intelligence/today` contract once with a bound of 12 events. A strict client parser rejects unknown contract fields, collapses repeated stable event identities to the newest provider revision, removes events with no tracked-symbol intersection, and converts malformed or credential-bearing source URLs to `null`. The card renders at most four live, non-fixture events, keeps provider headlines and excerpts untranslated, and distinguishes retained-only, current-only, stale, unknown, truncated, demo, and unavailable states. It never invokes AI, polls, or persists its response. Explicit dashboard/card refreshes and successfully committed watchlist changes are the only reload triggers; a transient same-session failure may retain the last verified in-memory view, while authentication failure clears it.
 

@@ -35,6 +35,7 @@ describe("MCP 2026-07-28 contract", () => {
         "search_symbols",
         "get_market_snapshot",
         "get_market_context",
+        "get_move_lens",
         "get_intelligence_feed",
         "get_omnigaze_view",
         "get_daily_brief",

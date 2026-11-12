@@ -11,6 +11,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Personalized watchlist and holdings dashboard with optimistic persistence and conflict recovery.
 - [x] Bilingual Portfolio Pulse with fixed-point market value, daily contribution, unrealized P&L, concentration, top contributors, explicit quote exclusions, and HTTP/MCP parity.
 - [x] Bilingual provider-backed Market Pulse with one bounded six-ETF batch, strict client validation, live/partial/stale/unavailable states, honest proxy labeling, explicit refresh, and HTTP/MCP parity.
+- [x] Bilingual deterministic Move Lens with strict client validation, exact selected/SPY/QQQ identities, recomputed daily-return arithmetic, compatibility-gated relative labels, optional newest symbol-linked context, and HTTP/MCP parity.
 - [x] Intelligence timeline with neutral handling of controversial executive, governance, legal, and reputational events.
 - [x] Durable intelligence inbox with read, saved, dismissed, and corrected-since-read state.
 - [x] Explicit in-app alert rules with idempotent delivery records.
@@ -25,6 +26,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Alpaca-backed active-equity catalog, quotes, historical bars, and licensed news adapters.
 - [x] One bounded multi-symbol quote request for up to 12 dashboard symbols, with ordered partial results and per-symbol fallback metadata.
 - [x] Explicit source, coverage, delay, observation time, response time, and fallback labels throughout the UI.
+- [x] Move Lens uses one bounded selected/SPY/QQQ quote batch plus one concurrent selected-symbol evidence read; missing, stale, demo, invalid, mismatched, or incomparable legs remain explicit and never become fixture comparisons.
 - [x] Normalized source-event and evidence contracts with content hashing and correction-aware identity.
 - [x] Cloudflare D1 persistence with append-only Drizzle migrations.
 - [x] Lease-protected, cursor-based news ingestion with frozen windows, idempotent page replay, bounded retention, and safe aggregate health.
@@ -56,12 +58,14 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Generated cross-watchlist Daily Brief with deterministic live-evidence selection, strict grounding, owner-scoped caching, HTTP/MCP parity, and a manual dashboard workflow.
 - [x] Locale-aware Daily Brief and Omnigaze View generation with English/Chinese cache isolation, source-language preservation, and bilingual non-prescriptive output checks.
 - [x] Deterministic price/position research scenarios remain available with one fresh attributable provider stream when at least two evidence items exist; single-stream confidence is capped at limited and never presented as measured source agreement.
+- [x] Deterministic Move Lens classifies only relative daily movement against SPY and QQQ ETF prices. It invokes no model, persists no comparison, sanitizes stronger event-level causal classifications, makes no causal attribution or transaction recommendation, and cannot place a trade.
 
 ## Engineering and operations
 
 - [x] TypeScript strict checks, ESLint, Vitest, production Worker build, migration reconciliation, and Playwright journeys.
 - [x] Browser tests run serially because they intentionally share one local D1 and one Sites test identity.
 - [x] Provider deadlines, bounded pagination, partial failure handling, optimistic concurrency, and no-store owner responses.
+- [x] Strict Move Lens client parsing rejects unknown fields, unsafe URLs, identity/order drift, arithmetic or relationship drift, incompatible comparison metadata, and inconsistent status/count/evidence metadata.
 - [x] Health/readiness contracts for database schema, providers, ingestion mode, cadence, latest success, and evidence time.
 - [x] Public secrets remain server-side; repository credential-pattern scans are part of release review.
 - [x] GitHub Actions runs the locked end-to-end release gates.
@@ -70,3 +74,10 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Privacy-bounded production error and latency telemetry across every HTTP API method and MCP, including correlated response headers and uncaught Vinext runtime errors.
 - [x] Deterministic server-only HTTP success sampling with unsampled error/slow paths, fully emitted MCP completions, and a no-application-retention policy for materially higher traffic.
 - [x] Localize product controls, accessibility labels, validation, and safe error states while preserving tickers, company names, and cited source material in their original language.
+
+## Move Lens limitations
+
+- SPY and QQQ are tradable ETF proxies; their prices are not S&P 500 or Nasdaq-100 index levels and do not isolate sector, factor, or company-specific effects.
+- Relative daily movement is a point-in-time arithmetic classification, not a forecast, valuation, confidence score, target price, or buy/sell/hold signal.
+- A symbol-linked development may be the newest relevant context while still having no demonstrated causal relationship to the price move.
+- The browser reuses existing dashboard refreshes instead of adding a Move Lens timer; API and MCP reads occur only on explicit demand.
