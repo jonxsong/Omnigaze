@@ -54,6 +54,7 @@ export function createHealthHandler(
           "market-snapshots",
           "historical-bars",
           "market-news-intelligence",
+          "unified-intelligence-read-plane-v1",
           ...(providerStatus.liveCapabilities.includes("sec-filings")
             ? ["sec-filing-intelligence"]
             : []),
@@ -68,6 +69,7 @@ export function createHealthHandler(
             ? ["scheduled-cursor-ingestion"]
             : []),
           "mcp-2026-07-28",
+          "mcp-personal-state-writes-v1",
         ],
         checkedAt: providerStatus.checkedAt,
         readiness: {

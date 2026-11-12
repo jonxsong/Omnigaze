@@ -1,6 +1,6 @@
 import type { CanonicalSymbol, Materiality } from "@/lib/market-types";
 import { instrumentApiRoute } from "@/lib/api-telemetry";
-import { liveMarketData } from "@/lib/services/live-market-data";
+import { intelligenceReadPlane } from "@/lib/services/intelligence-read-plane";
 import {
   InstrumentResolutionError,
   resolveCanonicalInstrument,
@@ -54,7 +54,7 @@ async function getIntelligence(request: Request) {
     }
   }
 
-  const result = await liveMarketData.getIntelligenceFeed({
+  const result = await intelligenceReadPlane.getIntelligenceFeed({
     symbols: symbol ? [symbol] : undefined,
     since,
     minimumMateriality,

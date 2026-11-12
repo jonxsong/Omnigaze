@@ -19,6 +19,7 @@ flowchart LR
     Inbox[(D1 inbox projection + user state)]
     Alerts[(D1 alert rules + delivery ledger)]
     Domain[Market-intelligence service]
+    ReadPlane[Unified intelligence read plane]
     InboxService[Inbox reconciliation service]
     Scenarios[Deterministic scenario engine]
     AIGuard[(D1 view/brief caches + shared budget leases)]
@@ -39,7 +40,9 @@ flowchart LR
   Portfolio --> InboxService
   Inbox --> InboxService
   Alerts --> InboxService
-  D1 --> Domain
+  D1 --> ReadPlane
+  Ingest --> ReadPlane
+  ReadPlane --> Domain
   Portfolio --> Domain
   Domain --> Scenarios
   Domain --> AIGuard
@@ -72,6 +75,8 @@ flowchart LR
 ## Failure model
 
 The application degrades by capability. A quote-provider outage can leave the evidence feed available; an AI outage can leave deterministic market data available. Fixture fallback is always labeled `demo` and must never be presented as live data.
+
+Intelligence reads start the request-time provider and durable D1 receipt read concurrently. They merge only live evidence by stable provider-event identity, select the newest effective provider revision, prefer the durable projection on an exact tie, and apply materiality plus the caller limit only after the global merge. A request-time outage may therefore serve retained evidence as partial live coverage, but freshness is always recomputed from provider evidence time—not the D1 read time. Stale retained evidence remains live-but-stale and cannot unlock AI or numeric decision scenarios. Demo fixtures never enter a live merged result.
 
 Historical charts fail independently from current snapshots. If provider history is unavailable, the dashboard labels any bundled series as illustrative instead of blending it with live bars. Asset-catalog refresh can serve a bounded stale catalog, but an upstream outage never creates fake search results.
 

@@ -7,7 +7,7 @@ import {
   summarizeWatchlists,
 } from "@/lib/api/personal-intelligence";
 import { listUserWatchlists } from "@/lib/repositories/watchlists";
-import { liveMarketData } from "@/lib/services/live-market-data";
+import { intelligenceReadPlane } from "@/lib/services/intelligence-read-plane";
 
 export const dynamic = "force-dynamic";
 
@@ -57,7 +57,7 @@ async function getTodayIntelligence(request: Request) {
   }
 
   try {
-    const feed = await liveMarketData.getIntelligenceFeed({
+    const feed = await intelligenceReadPlane.getIntelligenceFeed({
       symbols,
       since: query.data.since,
       limit: query.data.limit,

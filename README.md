@@ -8,13 +8,13 @@ The public alpha uses provider-backed quotes, chart history, and licensed news w
 
 1. A user completes a local-first onboarding flow, searches the current asset catalog, and creates a personalized watchlist.
 2. Provider adapters ingest market data and licensed news; the guarded SEC adapter and its separate durable collector remain dormant unless their explicit activation and contact-identity requirements are satisfied.
-3. The pipeline normalizes, timestamps, hashes, and deduplicates every source event.
+3. The pipeline normalizes, timestamps, hashes, and deduplicates every source event. One unified read plane then merges fresh request-time responses with retained D1 receipts; the newest provider revision wins and an exact tie prefers the durable receipt.
 4. Deterministic fixed-point code calculates market changes, freshness, portfolio value, daily contribution, unrealized P&L, and concentration. Missing, stale, or demo quotes remain explicit exclusions rather than zero-valued positions.
 5. A fail-closed D1 guard checks owner-safe, model-aware evidence caches and atomically reserves the authenticated owner’s shared generation budget.
 6. On a cache miss, the OpenAI Agents SDK produces a typed interpretation constrained to known evidence IDs. A single-stock view is cached for at most five minutes; a Daily Brief is keyed by the exact watchlist, evidence revisions, prompt, model, and UTC date and is cached for at most six hours. Neither cache stores a raw prompt.
 7. Deterministic code—not the model—calculates any review zones and hypothetical share scenarios, and suppresses them when data is stale, demo, or insufficiently corroborated.
 8. A fresh live inbox read reconciles normalized events into D1, evaluates explicit in-app alert rules, and preserves per-user read, saved, and dismissed state across sessions.
-9. The dashboard, HTTP API, and MCP tools expose the same owner-scoped domain objects.
+9. The dashboard, HTTP API, and MCP tools expose the same owner-scoped domain objects. Authenticated MCP clients can also update watchlist membership, upsert holdings, change inbox state, and configure in-app alert rules through the same strict parsers as the browser. Holdings, inbox state, and alert rules retain optimistic versions; watchlist set mutations remain idempotent.
 
 ## Stack
 
@@ -135,9 +135,13 @@ The initial stateless tool surface includes:
 - `get_omnigaze_view`
 - `get_daily_brief`
 - `get_watchlist_dashboard`
+- `update_watchlist`
 - `get_intelligence_inbox`
+- `update_intelligence_inbox_item`
 - `get_alert_rules`
+- `put_alert_rule`
 - `get_portfolio`
+- `put_portfolio_holding`
 - `get_portfolio_pulse`
 - `get_decision_support`
 - `get_provider_status`
@@ -150,6 +154,7 @@ Use `server/discover`, `tools/list`, and `tools/call` with MCP version `2026-07-
 
 - Alpaca currently uses resilient REST polling; long-lived streaming transport is a later infrastructure slice.
 - A request-time news reconciliation still caps interactive reads at 100 events. The separate durable cursor engine processes exactly one frozen-window page per operator tick; continuous collection requires a linked hosted schedule, a current authenticated Omnigaze app connection, and at least one verified successful tick before the UI may claim scheduled collection.
+- The unified read plane makes fresh durable receipts available to the timeline, Today, AI, portfolio research, and MCP during a request-time provider outage. Owner inbox projection still has a 100-event global-page cap and requires a future per-owner projection cursor for complete offline catch-up.
 - The SEC adapter, distributed Fair Access coordinator, and durable recent-filing cursor engine are covered by tests, but production egress remains disabled until a truthful monitored application/contact identity is configured and `SEC_EDGAR_ENABLED` is set to exact `true`. Any durable tick additionally requires `SEC_DURABLE_INGESTION_ENABLED=true`; continuous collection requires a verified operator schedule. Historical shard backfill and authoritative correction/removal reconciliation remain separate milestones.
 - Alert rules currently deliver only inside the Omnigaze inbox during request-time refreshes. Email, SMS, push, browser notifications, and a continuously running background delivery worker are not enabled.
 - Brokerage import and order execution are intentionally not part of this alpha.

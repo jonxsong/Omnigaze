@@ -16,6 +16,7 @@ import {
   type OrchestratedIntelligenceFeed,
   type OrchestratedSnapshot,
 } from "@/lib/services/live-market-data";
+import { intelligenceReadPlane } from "@/lib/services/intelligence-read-plane";
 import {
   resolveCanonicalInstrument,
   type ResolvedInstrument,
@@ -45,7 +46,8 @@ const defaultDependencies: PortfolioDecisionSupportDependencies = {
   resolveInstrument: resolveCanonicalInstrument,
   getPortfolio: getUserPortfolio,
   getSnapshot: (symbolId) => liveMarketData.getSnapshot(symbolId),
-  getIntelligence: (options) => liveMarketData.getIntelligenceFeed(options),
+  getIntelligence: (options) =>
+    intelligenceReadPlane.getIntelligenceFeed(options),
   now: () => new Date(),
 };
 

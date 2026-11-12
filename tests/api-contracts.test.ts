@@ -159,10 +159,12 @@ describe("browser API response contracts", () => {
     });
     expect(body.capabilities).toContain("mcp-2026-07-28");
     expect(body.capabilities).toContain("market-news-intelligence");
+    expect(body.capabilities).toContain("unified-intelligence-read-plane-v1");
     expect(body.capabilities).not.toContain("sec-filing-intelligence");
     expect(body.capabilities).toContain("durable-intelligence-inbox");
     expect(body.capabilities).toContain("in-app-alert-rules");
     expect(body.capabilities).toContain("portfolio-pulse-v1");
+    expect(body.capabilities).toContain("mcp-personal-state-writes-v1");
     expect(body.readiness.database).toEqual({
       status: "ready",
       checkedAt: "2026-11-12T08:00:00.000Z",

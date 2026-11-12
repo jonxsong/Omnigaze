@@ -24,10 +24,8 @@ import { resolveOmnigazeModelConfig } from "@/lib/ai/omnigaze-view-guard";
 import { extractCanonicalSymbols } from "@/lib/api/personal-intelligence";
 import type { CanonicalSymbol } from "@/lib/market-types";
 import { listUserWatchlists } from "@/lib/repositories/watchlists";
-import {
-  type OrchestratedIntelligenceFeed,
-  liveMarketData,
-} from "@/lib/services/live-market-data";
+import { intelligenceReadPlane } from "@/lib/services/intelligence-read-plane";
+import type { OrchestratedIntelligenceFeed } from "@/lib/services/live-market-data";
 import {
   DAILY_BRIEF_WINDOW_HOURS,
   DailyBriefEvidenceError,
@@ -145,7 +143,8 @@ const defaultGuard: DailyBriefGuard = {
 
 const defaultDependencies: DailyBriefDependencies = {
   listWatchlists: listUserWatchlists,
-  getIntelligenceFeed: (options) => liveMarketData.getIntelligenceFeed(options),
+  getIntelligenceFeed: (options) =>
+    intelligenceReadPlane.getIntelligenceFeed(options),
   analyze: async (input) => {
     const { generateDailyBriefAnalysis } = await import(
       "@/lib/ai/generate-daily-brief"

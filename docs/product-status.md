@@ -27,6 +27,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Cloudflare D1 persistence with append-only Drizzle migrations.
 - [x] Lease-protected, cursor-based news ingestion with frozen windows, idempotent page replay, bounded retention, and safe aggregate health.
 - [x] Request-time inbox reconciliation that projects collected global receipts into owner-scoped state.
+- [x] Unified intelligence reads across the public timeline, personalized Today feed, Daily Brief, Omnigaze View, portfolio decision support, and MCP, with deterministic correction merging and durable-evidence outage fallback.
 - [ ] Verify the hosted hourly operator tick after refreshing the Omnigaze app connection; keep collection labeled `request_time` until the first successful checkpoint.
 - [x] Dormant SEC adapter with official ticker-catalog resolution, collision-safe class-share aliases, per-CIK request deduplication, bounded short-lived caching, global accession ordering, explicit partial-coverage reporting, and a production fail-closed activation gate.
 - [x] Add a D1-backed distributed SEC Fair Access coordinator with bounded admission, fail-closed deadlines, and application-wide cooldown handling.
@@ -44,6 +45,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Manual model invocation only; selecting a stock or opening the dialog never spends an AI request automatically.
 - [x] Deterministic review zones and hypothetical share scenarios that withhold numbers when evidence or quotes are inadequate.
 - [x] Browser/API/MCP parity for market data, watchlists, portfolio, inbox, alert rules, provider status, live Omnigaze Views, and personalized Daily Briefs.
+- [x] Authenticated MCP write support for watchlist membership, holding upserts, inbox item state, and in-app alert rules. Identity is owner-derived; holdings, inbox state, and alert rules retain optimistic conflict protection, while watchlist set mutations remain idempotent.
 - [x] Separate closed operator-only MCP ingestion tools for licensed news and SEC filings, both with authenticated identity enforcement and one-page bounds.
 - [x] Durable, model-aware AI-result caching with stable evidence fingerprints, freshness-bounded TTLs, atomic shared per-owner budgets, rolling limits, and cross-isolate leases.
 - [x] Generated cross-watchlist Daily Brief with deterministic live-evidence selection, strict grounding, owner-scoped caching, HTTP/MCP parity, and a manual dashboard workflow.

@@ -2,13 +2,19 @@ import { z } from "zod";
 import { instrumentApiRoute } from "@/lib/api-telemetry";
 import { serviceMeta } from "@/lib/services/market-intelligence";
 import { liveMarketData } from "@/lib/services/live-market-data";
+import { intelligenceReadPlane } from "@/lib/services/intelligence-read-plane";
 import {
   extractCanonicalSymbols,
   filterFeedToSymbols,
+  parseWatchlistMutation,
   summarizeWatchlists,
 } from "@/lib/api/personal-intelligence";
 import type { CanonicalSymbol } from "@/lib/market-types";
-import { parsePortfolioDecisionSupportRequest } from "@/lib/portfolio/contracts";
+import {
+  parsePortfolioDecisionSupportRequest,
+  parsePortfolioHoldingMutation,
+  portfolioCanonicalSymbolSchema,
+} from "@/lib/portfolio/contracts";
 import {
   InstrumentResolutionError,
   resolveCanonicalInstrument,
@@ -128,6 +134,21 @@ const tools = [
     },
   },
   {
+    name: "update_watchlist",
+    description:
+      "Add or remove one verified symbol in an authenticated user's watchlist. The owner is derived from trusted identity; this tool never accepts an owner ID, gives trade advice, or places an order.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operation: { type: "string", enum: ["add", "remove"] },
+        watchlist_id: { type: "string", minLength: 1, maxLength: 128 },
+        symbol_id: { type: "string", pattern: canonicalSymbolInputPattern },
+      },
+      required: ["operation", "watchlist_id", "symbol_id"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_provider_status",
     description:
       "Report which market, news, and filing providers are configured and healthy.",
@@ -185,12 +206,111 @@ const tools = [
     },
   },
   {
+    name: "update_intelligence_inbox_item",
+    description:
+      "Persist the authenticated user's complete read, saved, and dismissed state for one durable inbox item using optimistic versions. The owner is derived from trusted identity.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        event_id: {
+          type: "string",
+          minLength: 1,
+          maxLength: 512,
+          pattern: "^[!-~]+$",
+        },
+        read: { type: "boolean" },
+        saved: { type: "boolean" },
+        dismissed: { type: "boolean" },
+        expected_version: { type: "integer", minimum: 1 },
+        expected_event_revision: { type: "integer", minimum: 1 },
+      },
+      required: [
+        "event_id",
+        "read",
+        "saved",
+        "dismissed",
+        "expected_version",
+        "expected_event_revision",
+      ],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "put_alert_rule",
+    description:
+      "Create or update one authenticated user's in-app intelligence alert rule with optimistic versioning. The owner is derived from trusted identity; no external notification channel is enabled.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        symbol_id: { type: "string", pattern: canonicalSymbolInputPattern },
+        enabled: { type: "boolean" },
+        minimum_materiality: {
+          type: "string",
+          enum: ["medium", "high", "critical"],
+        },
+        include_controversy: { type: "boolean" },
+        expected_version: { type: "integer", minimum: 0 },
+      },
+      required: [
+        "symbol_id",
+        "enabled",
+        "minimum_materiality",
+        "include_controversy",
+        "expected_version",
+      ],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_portfolio",
     description:
       "Return the authenticated user's saved portfolio profile and holdings. Quantities and cost basis are decimal strings.",
     inputSchema: {
       type: "object",
       properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "put_portfolio_holding",
+    description:
+      "Create or update one authenticated user's saved holding using exact decimal strings and optimistic versioning. The owner is derived from trusted identity; this records portfolio context only and never places an order.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        symbol_id: { type: "string", pattern: canonicalSymbolInputPattern },
+        quantity: {
+          type: "string",
+          maxLength: 32,
+          pattern:
+            "^(?=.*[1-9])(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,6})?$",
+        },
+        average_cost: {
+          anyOf: [
+            {
+              type: "string",
+              maxLength: 32,
+              pattern: "^(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,6})?$",
+            },
+            { type: "null" },
+          ],
+        },
+        cost_currency: { type: "string", enum: ["USD"] },
+        quantity_as_of: { type: "string", format: "date-time" },
+        expected_version: {
+          type: "integer",
+          minimum: 0,
+          maximum: 2_147_483_647,
+        },
+      },
+      required: [
+        "symbol_id",
+        "quantity",
+        "average_cost",
+        "cost_currency",
+        "quantity_as_of",
+        "expected_version",
+      ],
       additionalProperties: false,
     },
   },
@@ -391,7 +511,7 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
           : null;
         if (verified && !verified.success) return verified.error;
         const verifiedSymbol = verified?.success ? verified.symbolId : undefined;
-        const result = await liveMarketData.getIntelligenceFeed({
+        const result = await intelligenceReadPlane.getIntelligenceFeed({
           symbols: verifiedSymbol ? [verifiedSymbol] : undefined,
           minimumMateriality: parsed.data.minimum_materiality,
           limit: parsed.data.limit,
@@ -544,7 +664,7 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
           );
         }
 
-        const feed = await liveMarketData.getIntelligenceFeed({
+        const feed = await intelligenceReadPlane.getIntelligenceFeed({
           symbols,
           limit: 50,
           minimumMateriality: "low",
@@ -564,6 +684,63 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
             status: "ready",
           },
         );
+      }
+      case "update_watchlist": {
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const parsed = parseWatchlistMutation(args);
+        if (!parsed.success) return validationError(parsed.error);
+
+        const {
+          addSymbolToWatchlist,
+          removeSymbolFromWatchlist,
+          WatchlistRepositoryError,
+        } = await import("@/lib/repositories/watchlists");
+        try {
+          const data =
+            parsed.data.operation === "add"
+              ? await addSymbolToWatchlist(
+                  userId,
+                  parsed.data.watchlist_id,
+                  parsed.data.symbol_id,
+                  await resolveCanonicalInstrument(parsed.data.symbol_id),
+                )
+              : await removeSymbolFromWatchlist(
+                  userId,
+                  parsed.data.watchlist_id,
+                  parsed.data.symbol_id,
+                );
+          return toolContent(data, {
+            scope: "personal",
+            identity: "authenticated",
+            persistence: "server",
+            operation: parsed.data.operation,
+            tradeExecutionAllowed: false,
+            generatedAt: new Date().toISOString(),
+          });
+        } catch (error) {
+          if (error instanceof InstrumentResolutionError) {
+            return error.code === "symbol_not_supported"
+              ? toolError("Symbol is not supported.", {
+                  code: "symbol_not_supported",
+                })
+              : toolError("The asset catalog is temporarily unavailable.", {
+                  code: "asset_catalog_unavailable",
+                });
+          }
+          if (error instanceof WatchlistRepositoryError) {
+            return error.code === "watchlist_not_found"
+              ? toolError("Watchlist not found.", {
+                  code: "watchlist_not_found",
+                })
+              : toolError("Symbol is not supported.", {
+                  code: "symbol_not_supported",
+                });
+          }
+          throw error;
+        }
       }
       case "get_provider_status": {
         const { getIngestionReadiness } = await import(
@@ -698,6 +875,88 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         const result = await getAlertRules(userId);
         return toolContent(result.data, result.meta);
       }
+      case "update_intelligence_inbox_item": {
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const { event_id: eventIdInput, ...mutationInput } = args;
+        const {
+          inboxEventIdSchema,
+          parseInboxStateMutation,
+        } = await import("@/lib/intelligence-inbox/contracts");
+        const eventId = inboxEventIdSchema.safeParse(eventIdInput);
+        if (!eventId.success) return validationError(eventId.error);
+        const mutation = parseInboxStateMutation(mutationInput);
+        if (!mutation.success) return validationError(mutation.error);
+
+        const { updateIntelligenceInboxState } = await import(
+          "@/lib/intelligence-inbox/service"
+        );
+        const { InboxRepositoryError } = await import(
+          "@/lib/intelligence-inbox/repository"
+        );
+        try {
+          const result = await updateIntelligenceInboxState(
+            userId,
+            eventId.data,
+            mutation.data,
+          );
+          return toolContent(result.data, result.meta);
+        } catch (error) {
+          if (error instanceof InboxRepositoryError) {
+            return error.code === "not_found"
+              ? toolError("Inbox item not found.", {
+                  code: "inbox_item_not_found",
+                })
+              : toolError("Inbox item changed. Refresh before saving again.", {
+                  code: "version_conflict",
+                });
+          }
+          throw error;
+        }
+      }
+      case "put_alert_rule": {
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const { symbol_id: symbolInput, ...mutationInput } = args;
+        const {
+          canonicalInboxSymbolSchema,
+          parseAlertRuleMutation,
+        } = await import("@/lib/intelligence-inbox/contracts");
+        const symbol = canonicalInboxSymbolSchema.safeParse(symbolInput);
+        if (!symbol.success) return validationError(symbol.error);
+        const mutation = parseAlertRuleMutation(mutationInput);
+        if (!mutation.success) return validationError(mutation.error);
+
+        const { putAlertRule } = await import(
+          "@/lib/intelligence-inbox/service"
+        );
+        const { InboxRepositoryError } = await import(
+          "@/lib/intelligence-inbox/repository"
+        );
+        try {
+          const result = await putAlertRule(
+            userId,
+            symbol.data,
+            mutation.data,
+          );
+          return toolContent(result.data, result.meta);
+        } catch (error) {
+          if (error instanceof InboxRepositoryError) {
+            return error.code === "not_found"
+              ? toolError("Tracked symbol not found.", {
+                  code: "alert_rule_not_found",
+                })
+              : toolError("Alert rule changed. Refresh before saving again.", {
+                  code: "version_conflict",
+                });
+          }
+          throw error;
+        }
+      }
       case "get_portfolio": {
         const parsed = z.object({}).strict().safeParse(args);
         if (!parsed.success) return validationError(parsed.error);
@@ -712,6 +971,62 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
           persistence: "server",
           generatedAt: new Date().toISOString(),
         });
+      }
+      case "put_portfolio_holding": {
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const { symbol_id: symbolInput, ...mutationInput } = args;
+        const symbol = portfolioCanonicalSymbolSchema.safeParse(symbolInput);
+        if (!symbol.success) return validationError(symbol.error);
+        const mutation = parsePortfolioHoldingMutation(mutationInput);
+        if (!mutation.success) return validationError(mutation.error);
+
+        const {
+          PortfolioRepositoryError,
+          putPortfolioHolding,
+        } = await import("@/lib/repositories/portfolio");
+        try {
+          const holding = await putPortfolioHolding(
+            userId,
+            symbol.data,
+            mutation.data,
+          );
+          return toolContent(holding, {
+            scope: "personal",
+            identity: "authenticated",
+            persistence: "server",
+            purpose: "portfolio_context",
+            tradeExecutionAllowed: false,
+            generatedAt: new Date().toISOString(),
+          });
+        } catch (error) {
+          if (error instanceof PortfolioRepositoryError) {
+            switch (error.code) {
+              case "asset_catalog_unavailable":
+                return toolError("The asset catalog is temporarily unavailable.", {
+                  code: "asset_catalog_unavailable",
+                });
+              case "holding_not_found":
+                return toolError("Holding not found.", {
+                  code: "holding_not_found",
+                });
+              case "symbol_not_supported":
+                return toolError("Symbol is not supported.", {
+                  code: "symbol_not_supported",
+                });
+              case "holding_version_conflict":
+                return toolError(
+                  "Holding changed. Refresh before saving again.",
+                  { code: "version_conflict" },
+                );
+              default:
+                throw error;
+            }
+          }
+          throw error;
+        }
       }
       case "get_portfolio_pulse": {
         const parsed = z.object({}).strict().safeParse(args);

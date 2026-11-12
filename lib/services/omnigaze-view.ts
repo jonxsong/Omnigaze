@@ -18,7 +18,7 @@ import type {
   IntelligenceFeedItem,
   OrchestratedIntelligenceFeed,
 } from "@/lib/services/live-market-data";
-import { liveMarketData } from "@/lib/services/live-market-data";
+import { intelligenceReadPlane } from "@/lib/services/intelligence-read-plane";
 import {
   InstrumentResolutionError,
   resolveCanonicalInstrument,
@@ -230,7 +230,8 @@ const defaultGuard: OmnigazeViewGuard = {
 
 const defaultDependencies: OmnigazeViewDependencies = {
   resolveInstrument: resolveCanonicalInstrument,
-  getIntelligenceFeed: (options) => liveMarketData.getIntelligenceFeed(options),
+  getIntelligenceFeed: (options) =>
+    intelligenceReadPlane.getIntelligenceFeed(options),
   analyze: async (input) => {
     const { analyzeEvidence } = await import("@/lib/ai/analyze-evidence");
     return analyzeEvidence(input);

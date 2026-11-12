@@ -33,8 +33,8 @@ vi.mock("@/lib/services/instrument-resolution", () => ({
   InstrumentResolutionError: mocks.InstrumentResolutionError,
 }));
 
-vi.mock("@/lib/services/live-market-data", () => ({
-  liveMarketData: { getIntelligenceFeed: mocks.getIntelligenceFeed },
+vi.mock("@/lib/services/intelligence-read-plane", () => ({
+  intelligenceReadPlane: { getIntelligenceFeed: mocks.getIntelligenceFeed },
 }));
 
 vi.mock("@/lib/ai/guardrails-repository", () => ({
