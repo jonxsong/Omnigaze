@@ -102,7 +102,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--positive); box-shadow: 0 0 8px rgb(34 211 167 / 70%); }
 .status-dot.fixture, .health-dot.fixture { background: var(--warning); box-shadow: 0 0 7px rgb(247 199 104 / 45%); }
 .status-dot.fallback, .status-dot.unavailable, .health-dot.fallback, .health-dot.error, .health-dot.degraded { background: var(--negative); box-shadow: 0 0 7px rgb(255 107 125 / 45%); }
-.status-dot.loading, .health-dot.loading, .health-dot.unconfigured { background: #7e8fa1; box-shadow: none; }
+.status-dot.loading, .status-dot.empty, .health-dot.loading, .health-dot.empty, .health-dot.unconfigured { background: #7e8fa1; box-shadow: none; }
 .status-dot.provider, .health-dot.ready, .health-dot.healthy { background: var(--positive); box-shadow: 0 0 7px rgb(34 211 167 / 45%); }
 .status-dot.stale, .health-dot.stale { background: var(--warning); box-shadow: 0 0 7px rgb(247 199 104 / 45%); }
 .icon-button, .profile-button, .mobile-menu-button { position: relative; display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid var(--border); border-radius: 10px; background: #0b151f; color: #a9b6c4; cursor: pointer; }
@@ -118,6 +118,8 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 .demo-banner button { border: 0; background: transparent; color: var(--brand); font-size: 10px; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .demo-banner.provider { border-bottom-color: rgb(34 211 167 / 16%); background: rgb(17 71 58 / 28%); color: #a6d8c9; }
 .demo-banner.provider svg, .demo-banner.provider button { color: var(--positive); }
+.demo-banner.empty { border-bottom-color: rgb(126 143 161 / 14%); background: rgb(22 33 44 / 40%); color: #93a4b4; }
+.demo-banner.empty svg, .demo-banner.empty button { color: #8ea4b6; }
 .demo-banner.stale { border-bottom-color: rgb(247 199 104 / 20%); background: rgb(84 62 18 / 27%); color: #dbc793; }
 .demo-banner.stale svg, .demo-banner.stale button { color: var(--warning); }
 .demo-banner.fallback { border-bottom-color: rgb(255 107 125 / 18%); background: rgb(90 27 39 / 26%); color: #e4a9b1; }

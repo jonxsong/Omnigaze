@@ -617,6 +617,9 @@ export function MarketDashboard({
     }
     return [...visible.values()];
   }, [holdings, watchlist]);
+  const hasMarketSelection = visibleInstruments.some(
+    ({ id }) => id === selectedSymbol,
+  );
 
   useEffect(() => {
     shellRef.current?.setAttribute("data-hydrated", "true");
@@ -751,6 +754,7 @@ export function MarketDashboard({
   }, [query, searchGeneration, showSearch]);
 
   useEffect(() => {
+    if (visibleInstruments.length === 0) return;
     let stopped = false;
     let timer: number | undefined;
     let activeController: AbortController | undefined;
@@ -821,6 +825,7 @@ export function MarketDashboard({
   }, [refreshGeneration, selectedSymbol, visibleInstruments]);
 
   useEffect(() => {
+    if (!hasMarketSelection) return;
     let stopped = false;
     let timer: number | undefined;
     let activeController: AbortController | undefined;
@@ -873,7 +878,7 @@ export function MarketDashboard({
       activeController?.abort();
       if (timer) window.clearTimeout(timer);
     };
-  }, [refreshGeneration, selectedSymbol]);
+  }, [hasMarketSelection, refreshGeneration, selectedSymbol]);
 
   useEffect(() => {
     let stopped = false;
@@ -919,6 +924,7 @@ export function MarketDashboard({
   }, [refreshGeneration]);
 
   useEffect(() => {
+    if (!hasMarketSelection) return;
     const key = `${selectedSymbol}:${timeframe}`;
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 10_000);
@@ -963,9 +969,11 @@ export function MarketDashboard({
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [refreshGeneration, selectedSymbol, timeframe]);
+  }, [hasMarketSelection, refreshGeneration, selectedSymbol, timeframe]);
 
-  const selectedWorkspace = workspaceBySymbol.get(selectedSymbol);
+  const selectedWorkspace = hasMarketSelection
+    ? workspaceBySymbol.get(selectedSymbol)
+    : undefined;
   const selectedInstrument =
     visibleInstruments.find(({ id }) => id === selectedSymbol) ??
     (selectedWorkspace
@@ -999,13 +1007,17 @@ export function MarketDashboard({
     ? intelligenceResource.phase
     : "loading";
   const feedItems =
-    intelligenceMatchesSelection && intelligenceResource.phase === "ready"
+    hasMarketSelection &&
+    intelligenceMatchesSelection &&
+    intelligenceResource.phase === "ready"
       ? intelligenceResource.data.filter((item) =>
           item.symbolIds.includes(selectedSymbol),
         )
       : [];
   const events =
-    intelligenceMatchesSelection && intelligenceResource.phase === "ready"
+    hasMarketSelection &&
+    intelligenceMatchesSelection &&
+    intelligenceResource.phase === "ready"
       ? feedItems.map((item) => normalizeFeedItem(item, selectedSymbol))
       : selectedWorkspace?.events ?? [];
   const feedItemById = new Map(feedItems.map((item) => [item.id, item]));
@@ -1022,7 +1034,9 @@ export function MarketDashboard({
     (selectedSnapshotResource?.phase === "error" ||
       selectedSnapshotResource?.meta?.freshness.state !== "fresh");
   const sourceState =
-    providerSnapshotIsStale
+    !hasMarketSelection
+      ? "empty"
+      : providerSnapshotIsStale
       ? "stale"
       : hasProviderSnapshot
       ? "provider"
@@ -1038,7 +1052,9 @@ export function MarketDashboard({
             ? "fixture"
             : "loading";
   const sourceLabel =
-    sourceState === "provider"
+    sourceState === "empty"
+      ? "No symbol selected"
+      : sourceState === "provider"
       ? snapshot?.provider ?? "Provider quote"
       : sourceState === "stale"
         ? "Last known provider quote"
@@ -1070,7 +1086,9 @@ export function MarketDashboard({
     ["high", "critical"].includes(event.materiality),
   ).length;
   const dataModeLabel =
-    sourceState === "provider"
+    sourceState === "empty"
+      ? "No symbols selected"
+      : sourceState === "provider"
       ? "Provider data"
       : sourceState === "stale"
         ? "Provider quote · stale"
@@ -1374,7 +1392,9 @@ export function MarketDashboard({
           <div className="market-status">
             <span className={`status-dot ${sourceState}`} />
             <span>
-              {sourceState === "provider" && snapshot
+              {sourceState === "empty"
+                ? "No symbols selected"
+                : sourceState === "provider" && snapshot
                 ? sessionLabel(snapshot.session)
                 : sourceState === "stale"
                   ? "Last known provider quote"
@@ -1385,7 +1405,9 @@ export function MarketDashboard({
                     : "Demo market context"}
             </span>
             <small>
-              {sourceState === "provider" || sourceState === "stale"
+              {sourceState === "empty"
+                ? "add a stock"
+                : sourceState === "provider" || sourceState === "stale"
                 ? freshness
                 : "not live"}
             </small>
@@ -1424,7 +1446,9 @@ export function MarketDashboard({
       </header>
 
       <div className={`demo-banner ${sourceState}`} role="status" aria-live="polite">
-        {sourceState === "fallback" ||
+        {sourceState === "empty" ? (
+          <Plus size={14} />
+        ) : sourceState === "fallback" ||
         sourceState === "unavailable" ||
         sourceState === "stale" ? (
           <WifiOff size={14} />
@@ -1436,7 +1460,9 @@ export function MarketDashboard({
           <Sparkles size={14} />
         )}
         <span>
-          {sourceState === "provider"
+          {sourceState === "empty"
+            ? "Add a stock to start provider-backed market and intelligence monitoring."
+            : sourceState === "provider"
             ? `${snapshot?.provider} · ${snapshot?.isDelayed ? `delayed ${Math.max(1, Math.ceil(snapshot.delaySeconds / 60))}m` : "provider-reported quote"} · ${freshness}`
             : sourceState === "stale"
               ? `${snapshot?.provider ?? "Provider"} · last known quote · ${selectedSnapshotResource?.phase === "error" ? "refresh failed" : "provider marked stale or freshness is unknown"} · ${freshness}`
@@ -1481,7 +1507,9 @@ export function MarketDashboard({
               <dt>Displayed quote</dt>
               <dd><span className={`health-dot ${sourceState}`} />{sourceLabel}</dd>
               <small>
-                {sourceState === "provider"
+                {sourceState === "empty"
+                  ? "No quote is displayed until a stock is selected."
+                  : sourceState === "provider"
                   ? `${freshness} · ${snapshot?.marketCoverage.replaceAll("-", " ")} coverage`
                   : sourceState === "stale"
                     ? `${freshness} · retained for context after freshness degraded; this is not a current quote.`
@@ -1724,7 +1752,7 @@ export function MarketDashboard({
             <div className="summary-stat-grid">
               <div><strong>{materialEventCount}</strong><span>material events</span></div>
               <div><strong>{positiveMovers}</strong><span>positive movers</span></div>
-              <div><strong>{sourceState === "provider" ? "API" : sourceState === "stale" ? "STALE" : sourceState === "unavailable" ? "—" : "DEMO"}</strong><span>quote source</span></div>
+              <div><strong>{sourceState === "provider" ? "API" : sourceState === "stale" ? "STALE" : sourceState === "unavailable" || sourceState === "empty" ? "—" : "DEMO"}</strong><span>quote source</span></div>
               <div><strong>{watchlist.length}</strong><span>tracked symbols</span></div>
             </div>
           </div>

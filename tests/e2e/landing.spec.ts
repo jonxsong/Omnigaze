@@ -289,6 +289,15 @@ test.describe("Omnigaze public experience", () => {
     }
     await page.reload();
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+    await expect(page.locator(".demo-banner.empty")).toContainText(
+      "Add a stock to start provider-backed market and intelligence monitoring.",
+    );
+    await expect(page.locator(".overview-metrics")).toContainText(
+      "0 material events",
+    );
+    await expect(page.locator(".watchlist-summary")).toContainText(
+      /0\s*material events/,
+    );
 
     await page.getByTestId("overview-add-stock").click();
     const addResponse = page.waitForResponse(
@@ -333,6 +342,9 @@ test.describe("Omnigaze public experience", () => {
     await verifyPage.goto(`${origin}/dashboard`);
     await expect(verifyPage.locator("main")).toHaveAttribute("data-hydrated", "true");
     await expect(verifyPage.getByRole("heading", { name: "Start your watchlist" })).toBeVisible();
+    await expect(verifyPage.locator(".overview-metrics")).toContainText(
+      "0 material events",
+    );
     await expect(
       verifyPage.getByRole("button", { name: "Remove NVDA from watchlist" }),
     ).toHaveCount(0);
