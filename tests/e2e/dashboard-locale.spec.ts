@@ -1,6 +1,12 @@
-import { expect, test } from "@playwright/test";
+import {
+  expect,
+  test,
+  type APIRequestContext,
+  type Page,
+} from "@playwright/test";
 
 const localeKey = "omnigaze:app-locale:v1";
+const nvdaSymbolId = "NASDAQ:NVDA";
 
 async function startInChinese(page: import("@playwright/test").Page) {
   await page.addInitScript(
@@ -9,6 +15,44 @@ async function startInChinese(page: import("@playwright/test").Page) {
   );
   await page.goto("/dashboard");
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+}
+
+async function ensureNvdaTracked(request: APIRequestContext) {
+  const response = await request.get("/api/watchlists");
+  expect(response.status()).toBe(200);
+  const body = (await response.json()) as {
+    data: Array<{
+      id: string;
+      isDefault: boolean;
+      items: Array<{ symbolId: string }>;
+    }>;
+  };
+  if (
+    body.data.some((watchlist) =>
+      watchlist.items.some((item) => item.symbolId === nvdaSymbolId),
+    )
+  ) {
+    return;
+  }
+
+  const primary = body.data.find((watchlist) => watchlist.isDefault) ?? body.data[0];
+  expect(primary).toBeTruthy();
+  const add = await request.post("/api/watchlists", {
+    data: {
+      operation: "add",
+      watchlist_id: primary.id,
+      symbol_id: nvdaSymbolId,
+    },
+  });
+  expect(add.status()).toBe(200);
+}
+
+async function signInWithNvda(page: Page, request: APIRequestContext) {
+  await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+  await expect(page).toHaveURL(/\/dashboard$/);
+  await ensureNvdaTracked(request);
+  await page.reload();
+  await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
 }
 
 test.describe("Omnigaze dashboard locale", () => {
@@ -103,10 +147,10 @@ test.describe("Omnigaze dashboard locale", () => {
   });
 
   test("re-renders portfolio validation state in the active language", async ({
+    context,
     page,
   }) => {
-    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
-    await expect(page).toHaveURL(/\/dashboard$/);
+    await signInWithNvda(page, context.request);
     await page.locator(".position-context-button").click();
     const portfolio = page.getByTestId("portfolio-workspace");
     await portfolio.getByLabel("Shares owned").fill("0");
@@ -130,6 +174,7 @@ test.describe("Omnigaze dashboard locale", () => {
   });
 
   test("requests a Chinese Omnigaze View and clears it after switching to English", async ({
+    context,
     page,
   }) => {
     await page.addInitScript(
@@ -219,8 +264,7 @@ test.describe("Omnigaze dashboard locale", () => {
       });
     });
 
-    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
-    await expect(page).toHaveURL(/\/dashboard$/);
+    await signInWithNvda(page, context.request);
     await page.getByRole("button", { name: "询问 Omnigaze" }).click();
     const dialog = page.getByTestId("omnigaze-view-dialog");
     await dialog.getByRole("button", { name: "分析实时证据" }).click();
