@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GET as getHealth } from "@/app/api/health/route";
+import { createHealthHandler } from "@/app/api/health/route";
 import { GET as getIntelligence } from "@/app/api/intelligence/route";
 import { GET as getSnapshot } from "@/app/api/market/snapshot/route";
 
@@ -104,6 +104,18 @@ describe("browser API response contracts", () => {
   });
 
   it("returns a machine-readable health contract", async () => {
+    const getHealth = createHealthHandler({
+      getProviderStatus: async () => ({
+        checkedAt: "2026-11-12T08:00:00.000Z",
+        providers: [],
+        liveCapabilities: [],
+      }),
+      checkDatabaseReadiness: async () => ({
+        status: "ready",
+        checkedAt: "2026-11-12T08:00:00.000Z",
+        schema: "intelligence-inbox-v1",
+      }),
+    });
     const response = await getHealth();
     const body = (await response.json()) as {
       service: string;
@@ -111,6 +123,7 @@ describe("browser API response contracts", () => {
       version: string;
       checkedAt: string;
       capabilities: string[];
+      readiness: { database: { status: string; schema: string } };
     };
 
     expect(response.status).toBe(200);
@@ -120,7 +133,45 @@ describe("browser API response contracts", () => {
       version: "0.1.0",
     });
     expect(body.capabilities).toContain("mcp-2026-07-28");
+    expect(body.capabilities).toContain("durable-intelligence-inbox");
+    expect(body.capabilities).toContain("in-app-alert-rules");
+    expect(body.readiness.database).toEqual({
+      status: "ready",
+      checkedAt: "2026-11-12T08:00:00.000Z",
+      schema: "intelligence-inbox-v1",
+    });
     expect(Number.isNaN(Date.parse(body.checkedAt))).toBe(false);
+  });
+
+  it("keeps liveness monitorable while reporting a missing database schema", async () => {
+    const getHealth = createHealthHandler({
+      getProviderStatus: async () => ({
+        checkedAt: "2026-11-12T08:00:00.000Z",
+        providers: [],
+        liveCapabilities: [],
+      }),
+      checkDatabaseReadiness: async () => ({
+        status: "unavailable",
+        checkedAt: "2026-11-12T08:00:00.000Z",
+        schema: "intelligence-inbox-v1",
+      }),
+    });
+
+    const response = await getHealth();
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      status: "degraded",
+      readiness: {
+        database: {
+          status: "unavailable",
+          schema: "intelligence-inbox-v1",
+        },
+      },
+    });
+    expect(body).not.toHaveProperty("error");
+    expect(JSON.stringify(body)).not.toMatch(/binding|sqlite|query|exception/i);
   });
 
 });

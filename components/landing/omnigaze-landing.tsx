@@ -132,7 +132,7 @@ const landingCopy = {
       {
         label: "Personal command center",
         title: "Your market, not the whole market.",
-        body: "Build watchlists around the companies you care about. Omnigaze ranks every event by its relevance to you.",
+        body: "Build watchlists around the companies you care about. Omnigaze keeps each surfaced event tied to the stocks you follow.",
       },
       {
         label: "Evidence graph",
@@ -140,9 +140,9 @@ const landingCopy = {
         body: "Filings, market data, and licensed news stay connected to every Omnigaze interpretation.",
       },
       {
-        label: "Roadmap · semantic alerts",
-        title: "Know when the thesis changes.",
-        body: "Planned alerts will move beyond price thresholds to guidance changes, new risks, and contradictory evidence.",
+        label: "Intelligence inbox",
+        title: "Keep important evidence close.",
+        body: "Save source-linked events and opt into in-app rules for selected impact levels or controversy on the stocks you follow.",
       },
       {
         label: "Signal calibration",
@@ -278,7 +278,7 @@ const landingCopy = {
       {
         label: "个人指挥中心",
         title: "只看你的市场，而非整个市场。",
-        body: "围绕你关心的公司创建关注列表。Omnigaze 会按与你的相关程度对每个事件排序。",
+        body: "围绕你关心的公司创建关注列表。Omnigaze 会让呈现的每个事件都与所关注的股票保持关联。",
       },
       {
         label: "证据图谱",
@@ -286,9 +286,9 @@ const landingCopy = {
         body: "监管文件、市场数据与授权新闻始终与每项 Omnigaze 解读相连。",
       },
       {
-        label: "路线图 · 语义提醒",
-        title: "及时发现投资逻辑的变化。",
-        body: "计划中的提醒将超越价格阈值，覆盖指引变化、新风险与相互矛盾的证据。",
+        label: "智能收件箱",
+        title: "把重要证据留在手边。",
+        body: "保存可追溯来源的事件，并为关注的股票自主开启按影响级别或争议条件触发的应用内规则。",
       },
       {
         label: "信号校准",

@@ -96,6 +96,175 @@ describe("market provider resilience", () => {
       "incomplete snapshot",
     );
   });
+
+  it("preserves Alpaca's provider update timestamp for correction ordering", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          news: [
+            {
+              id: 42,
+              headline: "Provider correction",
+              created_at: "2026-11-11T18:40:00.000Z",
+              updated_at: "2026-11-11T18:44:00.000Z",
+              symbols: ["NVDA"],
+            },
+          ],
+        }),
+      ),
+    );
+    const provider = new AlpacaProvider({
+      keyId: "test-key-id",
+      secretKey: "test-secret-value",
+    });
+
+    await expect(
+      provider.getLatestEvents({
+        symbols: ["NASDAQ:NVDA"],
+        since: "2026-11-11T00:00:00.000Z",
+        limit: 10,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        sourceEventId: "42",
+        publishedAt: "2026-11-11T18:40:00.000Z",
+        providerUpdatedAt: "2026-11-11T18:44:00.000Z",
+      }),
+    ]);
+  });
+
+  it("paginates Alpaca news, filters defensively by symbol, and deduplicates article ids", async () => {
+    const firstPageItem = {
+      id: 41,
+      headline: "First NVIDIA update",
+      created_at: "2026-11-11T18:40:00.000Z",
+      updated_at: "2026-11-11T18:41:00.000Z",
+      symbols: ["NVDA"],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          news: [
+            firstPageItem,
+            {
+              id: 900,
+              headline: "Unrelated article",
+              created_at: "2026-11-11T18:39:00.000Z",
+              updated_at: "2026-11-11T18:39:00.000Z",
+              symbols: ["AAPL"],
+            },
+          ],
+          next_page_token: "page-2",
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          news: [
+            firstPageItem,
+            {
+              id: 42,
+              headline: "Second NVIDIA update",
+              created_at: "2026-11-11T18:38:00.000Z",
+              updated_at: "2026-11-11T18:38:30.000Z",
+              symbols: ["nvda", "MSFT"],
+            },
+          ],
+          next_page_token: null,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new AlpacaProvider({
+      keyId: "test-key-id",
+      secretKey: "test-secret-value",
+    });
+
+    const events = await provider.getLatestEvents({
+      symbols: ["NASDAQ:NVDA"],
+      since: "2026-11-11T00:00:00.000Z",
+      limit: 2,
+    });
+
+    expect(events.map((event) => event.sourceEventId)).toEqual(["41", "42"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const firstUrl = new URL(String(fetchMock.mock.calls[0][0]));
+    const secondUrl = new URL(String(fetchMock.mock.calls[1][0]));
+    expect(firstUrl.searchParams.get("symbols")).toBe("NVDA");
+    expect(firstUrl.searchParams.get("limit")).toBe("2");
+    expect(firstUrl.searchParams.has("page_token")).toBe(false);
+    expect(secondUrl.searchParams.get("page_token")).toBe("page-2");
+    expect(secondUrl.searchParams.get("limit")).toBe("1");
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(
+      fetchMock.mock.calls[1][1]?.signal,
+    );
+  });
+
+  it("fails closed when Alpaca repeats a pagination token", async () => {
+    const article = {
+      id: 41,
+      headline: "NVIDIA update",
+      created_at: "2026-11-11T18:40:00.000Z",
+      updated_at: "2026-11-11T18:41:00.000Z",
+      symbols: ["NVDA"],
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({ news: [article], next_page_token: "same-token" }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ news: [article], next_page_token: "same-token" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new AlpacaProvider({
+      keyId: "test-key-id",
+      secretKey: "test-secret-value",
+    });
+
+    await expect(
+      provider.getLatestEvents({
+        symbols: ["NASDAQ:NVDA"],
+        since: "2026-11-11T00:00:00.000Z",
+        limit: 2,
+      }),
+    ).rejects.toThrow("repeated page token");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds pagination instead of silently reporting a truncated news window", async () => {
+    const fetchMock = vi.fn();
+    for (let page = 1; page <= 4; page += 1) {
+      fetchMock.mockResolvedValueOnce(
+        Response.json({
+          news: [
+            {
+              id: page,
+              headline: `Unrelated article ${page}`,
+              created_at: "2026-11-11T18:40:00.000Z",
+              updated_at: "2026-11-11T18:41:00.000Z",
+              symbols: ["AAPL"],
+            },
+          ],
+          next_page_token: `page-${page + 1}`,
+        }),
+      );
+    }
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new AlpacaProvider({
+      keyId: "test-key-id",
+      secretKey: "test-secret-value",
+    });
+
+    await expect(
+      provider.getLatestEvents({
+        symbols: ["NASDAQ:NVDA"],
+        since: "2026-11-11T00:00:00.000Z",
+        limit: 2,
+      }),
+    ).rejects.toThrow("bounded page limit");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
 });
 
 describe("SEC EDGAR provider degradation", () => {
@@ -157,6 +326,7 @@ describe("SEC EDGAR provider degradation", () => {
         sourceKind: "sec_filing",
         sourceEventId: "0000051143-26-000001",
         publishedAt: "2026-11-11T18:30:00.000Z",
+        providerUpdatedAt: "2026-11-11T18:30:00.000Z",
       }),
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);

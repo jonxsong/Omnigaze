@@ -48,3 +48,12 @@ jobs:
 
       - name: Build production worker
         run: pnpm build
+
+      - name: Prepare local D1 schema
+        run: pnpm db:migrate:local
+
+      - name: Install Playwright Chrome
+        run: pnpm exec playwright install --with-deps chrome
+
+      - name: Run browser journeys
+        run: pnpm test:e2e

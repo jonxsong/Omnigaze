@@ -106,6 +106,8 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 .status-dot.provider, .health-dot.ready, .health-dot.healthy { background: var(--positive); box-shadow: 0 0 7px rgb(34 211 167 / 45%); }
 .status-dot.stale, .health-dot.stale { background: var(--warning); box-shadow: 0 0 7px rgb(247 199 104 / 45%); }
 .icon-button, .profile-button, .mobile-menu-button { position: relative; display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid var(--border); border-radius: 10px; background: #0b151f; color: #a9b6c4; cursor: pointer; }
+.inbox-bell[aria-expanded="true"], .inbox-bell:hover { border-color: rgb(98 217 255 / 38%); color: #c4effa; }
+.inbox-badge { position: absolute; top: -6px; right: -6px; display: grid; min-width: 18px; height: 18px; padding: 0 4px; place-items: center; border: 2px solid #071019; border-radius: 999px; background: #ff6b7d; color: #fff; font-size: 7px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; box-shadow: 0 4px 13px rgb(255 107 125 / 28%); }
 .top-add-stock { display: flex; gap: 6px; align-items: center; min-height: 36px; padding: 0 11px; border: 1px solid rgb(98 217 255 / 30%); border-radius: 9px; background: linear-gradient(180deg, rgb(32 126 158 / 24%), rgb(19 75 96 / 20%)); color: #a3e6f8; font-size: 10px; font-weight: 650; cursor: pointer; }
 .top-add-stock:hover { border-color: rgb(98 217 255 / 52%); background: rgb(31 112 140 / 28%); }
 .profile-button { border-color: rgb(98 217 255 / 30%); background: linear-gradient(145deg, #183044, #101d29); color: #b9eefe; font-size: 10px; font-weight: 750; }
@@ -379,7 +381,8 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
   .topbar { grid-template-columns: auto 1fr auto; gap: 10px; }
   .brand-lockup { display: none; }
   .mobile-menu-button { display: grid; }
-  .market-status, .topbar-actions .icon-button { display: none; }
+  .market-status, .topbar-actions .icon-button:not(.inbox-bell) { display: none; }
+  .topbar-actions .inbox-bell { display: grid; }
   .dashboard-grid { display: block; }
   .watchlist-panel { position: fixed; z-index: 70; top: 0; bottom: 0; left: 0; width: min(320px, 88vw); height: 100vh; border-right-color: var(--border-strong); background: #091017; box-shadow: 18px 0 70px rgb(0 0 0 / 55%); transform: translateX(-105%); transition: transform 180ms ease; }
   .watchlist-panel.mobile-open { transform: translateX(0); }
@@ -398,6 +401,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 
 @media (max-width: 640px) {
   .topbar { height: 54px; padding: 0 10px; }
+  .topbar-actions { gap: 6px; }
   .global-search-wrap kbd, .demo-banner svg { display: none; }
   .demo-banner { display: grid; grid-template-columns: minmax(0, 1fr) auto; justify-content: stretch; overflow: visible; padding: 6px 10px; white-space: normal; }
   .demo-banner > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -435,7 +439,6 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
   .chart-wrap { height: 250px; }
   .event-card { grid-template-columns: 31px 1fr; padding: 11px; }
   .event-chevron { display: none; }
-  .event-actions button:last-child { display: none; }
   .view-content { display: block; }
   .view-summary { padding: 14px 0; }
   .driver-list, .unknowns, .ask-button { margin-top: 15px; }

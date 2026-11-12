@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "db:migrate:local": "node scripts/migrate-local-d1.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

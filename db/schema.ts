@@ -236,3 +236,174 @@ export const omnigazeViews = sqliteTable(
     index("views_symbol_generated_idx").on(table.symbolId, table.generatedAt),
   ],
 );
+
+export const inboxEvents = sqliteTable(
+  "inbox_events",
+  {
+    id: text("id").primaryKey(),
+    source: text("source").notNull(),
+    providerEventKey: text("provider_event_key").notNull(),
+    sourceKind: text("source_kind").notNull(),
+    headline: text("headline").notNull(),
+    summary: text("summary"),
+    publishedAt: text("published_at").notNull(),
+    receivedAt: text("received_at").notNull(),
+    providerRevisionAt: text("provider_revision_at").notNull(),
+    sourceUrl: text("source_url"),
+    materiality: text("materiality").notNull(),
+    category: text("category"),
+    claimStatus: text("claim_status"),
+    causalLink: text("causal_link"),
+    topicTagsJson: text("topic_tags_json").notNull().default("[]"),
+    isControversial: integer("is_controversial", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    contentHash: text("content_hash").notNull(),
+    revision: integer("revision").notNull().default(1),
+    createdAt: text("created_at").notNull().default(sql.raw("CURRENT_TIMESTAMP")),
+    updatedAt: text("updated_at").notNull().default(sql.raw("CURRENT_TIMESTAMP")),
+  },
+  (table) => [
+    uniqueIndex("inbox_events_provider_key_idx").on(
+      table.source,
+      table.providerEventKey,
+    ),
+    index("inbox_events_published_idx").on(table.publishedAt),
+    check(
+      "inbox_events_materiality_check",
+      sql.raw("materiality IN ('low', 'medium', 'high', 'critical')"),
+    ),
+    check("inbox_events_revision_check", sql.raw("revision >= 1")),
+  ],
+);
+
+export const inboxEventSymbols = sqliteTable(
+  "inbox_event_symbols",
+  {
+    eventId: text("event_id")
+      .notNull()
+      .references(() => inboxEvents.id, { onDelete: "cascade" }),
+    symbolId: text("symbol_id")
+      .notNull()
+      .references(() => instruments.id),
+  },
+  (table) => [
+    primaryKey({ columns: [table.eventId, table.symbolId] }),
+    index("inbox_event_symbols_symbol_idx").on(table.symbolId),
+  ],
+);
+
+export const inboxProfiles = sqliteTable("inbox_profiles", {
+  ownerId: text("owner_id").primaryKey(),
+  activatedAt: text("activated_at").notNull(),
+  baselineCompletedAt: text("baseline_completed_at"),
+  lastCheckedAt: text("last_checked_at").notNull(),
+  lastSuccessfulSyncAt: text("last_successful_sync_at").notNull(),
+});
+
+export const inboxSyncGates = sqliteTable("inbox_sync_gates", {
+  ownerId: text("owner_id").primaryKey(),
+  claimToken: text("claim_token"),
+  claimUntil: text("claim_until"),
+  nextAllowedAt: text("next_allowed_at").notNull(),
+  catchupPending: integer("catchup_pending", { mode: "boolean" })
+    .notNull()
+    .default(false),
+  lastAttemptAt: text("last_attempt_at").notNull(),
+  lastCompletedAt: text("last_completed_at"),
+});
+
+export const inboxEventStates = sqliteTable(
+  "inbox_event_states",
+  {
+    ownerId: text("owner_id").notNull(),
+    eventId: text("event_id")
+      .notNull()
+      .references(() => inboxEvents.id, { onDelete: "cascade" }),
+    readAt: text("read_at"),
+    readRevision: integer("read_revision").notNull().default(0),
+    savedAt: text("saved_at"),
+    dismissedAt: text("dismissed_at"),
+    firstSeenAt: text("first_seen_at").notNull(),
+    lastSeenAt: text("last_seen_at").notNull(),
+    version: integer("version").notNull().default(1),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.eventId] }),
+    index("inbox_event_states_owner_seen_idx").on(
+      table.ownerId,
+      table.lastSeenAt,
+    ),
+    index("inbox_event_states_event_idx").on(table.eventId),
+    check(
+      "inbox_event_states_read_revision_check",
+      sql.raw("read_revision >= 0"),
+    ),
+    check("inbox_event_states_version_check", sql.raw("version >= 1")),
+  ],
+);
+
+export const alertRules = sqliteTable(
+  "alert_rules",
+  {
+    ownerId: text("owner_id").notNull(),
+    symbolId: text("symbol_id")
+      .notNull()
+      .references(() => instruments.id),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+    minimumMateriality: text("minimum_materiality").notNull().default("high"),
+    includeControversy: integer("include_controversy", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    channel: text("channel").notNull().default("in_app"),
+    version: integer("version").notNull().default(1),
+    createdAt: text("created_at").notNull().default(sql.raw("CURRENT_TIMESTAMP")),
+    updatedAt: text("updated_at").notNull().default(sql.raw("CURRENT_TIMESTAMP")),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.symbolId] }),
+    index("alert_rules_symbol_idx").on(table.symbolId),
+    check(
+      "alert_rules_materiality_check",
+      sql.raw("minimum_materiality IN ('medium', 'high', 'critical')"),
+    ),
+    check("alert_rules_channel_check", sql.raw("channel = 'in_app'")),
+    check("alert_rules_version_check", sql.raw("version >= 1")),
+  ],
+);
+
+export const alertDeliveries = sqliteTable(
+  "alert_deliveries",
+  {
+    ownerId: text("owner_id").notNull(),
+    ruleSymbolId: text("rule_symbol_id")
+      .notNull()
+      .references(() => instruments.id),
+    eventId: text("event_id")
+      .notNull()
+      .references(() => inboxEvents.id, { onDelete: "cascade" }),
+    eventRevision: integer("event_revision").notNull(),
+    channel: text("channel").notNull().default("in_app"),
+    deliveredAt: text("delivered_at").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [
+        table.ownerId,
+        table.ruleSymbolId,
+        table.eventId,
+        table.eventRevision,
+      ],
+    }),
+    index("alert_deliveries_owner_time_idx").on(
+      table.ownerId,
+      table.deliveredAt,
+    ),
+    index("alert_deliveries_event_idx").on(table.eventId),
+    check(
+      "alert_deliveries_revision_check",
+      sql.raw("event_revision >= 1"),
+    ),
+    check("alert_deliveries_channel_check", sql.raw("channel = 'in_app'")),
+  ],
+);

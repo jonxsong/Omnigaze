@@ -5,7 +5,7 @@ import { OmnigazeLanding } from "@/components/landing/omnigaze-landing";
 export const metadata: Metadata = {
   title: "Omnigaze — See what moves your stocks",
   description:
-    "AI-native market intelligence that connects price action, filings, news, and macro signals into one evidence-backed view.",
+    "AI-native market intelligence that connects price action, configured filings, licensed news, and company events into one evidence-backed view.",
 };
 
 export default function LandingPage() {

@@ -143,14 +143,19 @@ export class SecEdgarProvider implements IntelligenceSourceProvider {
           }))
           .filter((filing) => (filing.acceptedAt ?? filing.filingDate ?? "") >= options.since)
           .slice(0, options.limit)
-          .map<RawSourceEvent>((filing) => ({
-            source: this.name,
-            sourceKind: "sec_filing",
-            sourceEventId: filing.accessionNumber,
-            receivedAt: new Date().toISOString(),
-            publishedAt: filing.acceptedAt ?? `${filing.filingDate}T00:00:00.000Z`,
-            payload: filing,
-          }));
+          .map<RawSourceEvent>((filing) => {
+            const publishedAt =
+              filing.acceptedAt ?? `${filing.filingDate}T00:00:00.000Z`;
+            return {
+              source: this.name,
+              sourceKind: "sec_filing",
+              sourceEventId: filing.accessionNumber,
+              receivedAt: new Date().toISOString(),
+              publishedAt,
+              providerUpdatedAt: publishedAt,
+              payload: filing,
+            };
+          });
       };
 
     const results: RawSourceEvent[][] = [];

@@ -62,6 +62,7 @@ export interface IntelligenceFeedItem {
   summary: string | null;
   publishedAt: string;
   receivedAt: string;
+  providerUpdatedAt?: string;
   sourceUrl: string | null;
   materiality: Materiality;
   isLive: boolean;
@@ -108,6 +109,12 @@ const LIVE_NOTICE =
 const DEMO_NOTICE =
   "Demo fixture data is being shown because live providers are unavailable. It is not current market data.";
 const MAX_PROVIDER_CLOCK_SKEW_MS = 5 * 60 * 1_000;
+const materialityRank: Record<Materiality, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+  critical: 3,
+};
 
 function errorMessage(provider: string) {
   return `${provider} could not be reached. Omnigaze did not treat fixture data as live.`;
@@ -123,6 +130,46 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asString(value: unknown) {
   return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function asHttpUrl(value: unknown) {
+  const candidate = asString(value);
+  if (!candidate) return null;
+  try {
+    const url = new URL(candidate);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function eventObservationAt(
+  event: { publishedAt: string; providerUpdatedAt?: string },
+  now: Date,
+) {
+  const publishedTimestamp = Date.parse(event.publishedAt);
+  const providerTimestamp = event.providerUpdatedAt
+    ? Date.parse(event.providerUpdatedAt)
+    : Number.NaN;
+  const providerTimestampIsUsable =
+    Number.isFinite(providerTimestamp) &&
+    providerTimestamp <= now.getTime() + MAX_PROVIDER_CLOCK_SKEW_MS;
+  return providerTimestampIsUsable &&
+    (!Number.isFinite(publishedTimestamp) || providerTimestamp > publishedTimestamp)
+    ? event.providerUpdatedAt!
+    : event.publishedAt;
+}
+
+function laterObservation(latest: string | null, candidate: string) {
+  if (!latest) return candidate;
+  const latestTimestamp = Date.parse(latest);
+  const candidateTimestamp = Date.parse(candidate);
+  return Number.isFinite(candidateTimestamp) &&
+    (!Number.isFinite(latestTimestamp) || candidateTimestamp > latestTimestamp)
+    ? candidate
+    : latest;
 }
 
 function freshnessFor(
@@ -198,6 +245,7 @@ function normalizeRawEvent(
       summary: "A new regulatory filing is available for evidence review.",
       publishedAt: event.publishedAt,
       receivedAt: event.receivedAt,
+      providerUpdatedAt: event.providerUpdatedAt ?? event.publishedAt,
       sourceUrl,
       materiality: ["10-K", "10-Q", "8-K"].includes(form) ? "high" : "medium",
       isLive: true,
@@ -233,7 +281,8 @@ function normalizeRawEvent(
     summary,
     publishedAt: event.publishedAt,
     receivedAt: event.receivedAt,
-    sourceUrl: asString(payload.url),
+    providerUpdatedAt: event.providerUpdatedAt ?? event.publishedAt,
+    sourceUrl: asHttpUrl(payload.url),
     materiality: classification.materiality,
     isLive: true,
     category: classification.category,
@@ -254,6 +303,7 @@ function demoFeedItem(event: IntelligenceEvent): IntelligenceFeedItem {
     summary: event.summary,
     publishedAt: event.occurredAt,
     receivedAt: event.occurredAt,
+    providerUpdatedAt: event.occurredAt,
     sourceUrl: null,
     materiality: event.materiality,
     isLive: false,
@@ -419,10 +469,10 @@ export class LiveMarketDataOrchestrator {
             since: options.since,
             limit: options.limit,
           });
-          const latestObservedAt = events.reduce<string | null>(
-            (latest, event) => (!latest || event.publishedAt > latest ? event.publishedAt : latest),
-            null,
-          );
+          const latestObservedAt = events.reduce<string | null>((latest, event) => {
+            const observedAt = eventObservationAt(event, now);
+            return laterObservation(latest, observedAt);
+          }, null);
           return {
             report: { ...report, attempted: true, latestObservedAt },
             events,
@@ -449,9 +499,28 @@ export class LiveMarketDataOrchestrator {
     if (successfulOutcomes.length > 0) {
       const items = successfulOutcomes
         .flatMap(({ events }) => events.map((event) => normalizeRawEvent(event, symbols)))
-        .sort((left, right) => right.publishedAt.localeCompare(left.publishedAt))
+        .filter(
+          (item) =>
+            materialityRank[item.materiality] >=
+            materialityRank[options.minimumMateriality ?? "low"],
+        )
+        .sort((left, right) => {
+          const leftObservedAt = Date.parse(eventObservationAt(left, now));
+          const rightObservedAt = Date.parse(eventObservationAt(right, now));
+          const byObservation =
+            (Number.isFinite(rightObservedAt) ? rightObservedAt : Number.NEGATIVE_INFINITY) -
+            (Number.isFinite(leftObservedAt) ? leftObservedAt : Number.NEGATIVE_INFINITY);
+          return (
+            byObservation ||
+            right.publishedAt.localeCompare(left.publishedAt) ||
+            left.id.localeCompare(right.id)
+          );
+        })
         .slice(0, Math.max(1, Math.min(options.limit, 100)));
-      const newest = items[0]?.publishedAt ?? null;
+      const newest = items.reduce<string | null>((latest, item) => {
+        const observedAt = eventObservationAt(item, now);
+        return laterObservation(latest, observedAt);
+      }, null);
 
       return {
         data: items,

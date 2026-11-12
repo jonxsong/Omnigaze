@@ -75,6 +75,12 @@ import {
   type PortfolioWorkspaceHolding,
   type WorkspaceQuoteState,
 } from "@/components/portfolio-workspace-dialog";
+import {
+  IntelligenceInboxDrawer,
+  type IntelligenceInboxSaveRequest,
+  type IntelligenceInboxTab,
+} from "@/components/intelligence-inbox-drawer";
+import type { IntelligenceInboxCounts } from "@/lib/intelligence-inbox/contracts";
 
 const timeframes = ["1D", "1W", "1M", "3M", "1Y"] as const;
 type Timeframe = (typeof timeframes)[number];
@@ -343,6 +349,14 @@ interface CatalogSearchResource {
 const SNAPSHOT_POLL_MS = 30_000;
 const INTELLIGENCE_POLL_MS = 60_000;
 const HEALTH_POLL_MS = 60_000;
+const INBOX_COUNT_POLL_MS = 60_000;
+
+const emptyInboxCounts: IntelligenceInboxCounts = {
+  all: 0,
+  unread: 0,
+  saved: 0,
+  alerts: 0,
+};
 
 async function fetchApi<T>(url: string, signal: AbortSignal): Promise<T> {
   const response = await fetch(url, {
@@ -550,6 +564,15 @@ export function MarketDashboard({
   const [portfolioWorkspaceOpen, setPortfolioWorkspaceOpen] = useState(false);
   const [portfolioWorkspaceInitialView, setPortfolioWorkspaceInitialView] =
     useState<"position" | "research">("position");
+  const [intelligenceInboxOpen, setIntelligenceInboxOpen] = useState(false);
+  const [intelligenceInboxInitialTab, setIntelligenceInboxInitialTab] =
+    useState<IntelligenceInboxTab>("inbox");
+  const [intelligenceInboxFocusEventId, setIntelligenceInboxFocusEventId] =
+    useState<string | null>(null);
+  const [intelligenceInboxSaveRequest, setIntelligenceInboxSaveRequest] =
+    useState<IntelligenceInboxSaveRequest | null>(null);
+  const [intelligenceInboxCounts, setIntelligenceInboxCounts] =
+    useState<IntelligenceInboxCounts>(emptyInboxCounts);
   const [portfolioAvailability, setPortfolioAvailability] =
     useState<PortfolioAvailability>(
       accountPortfolioUnavailable ? "unavailable" : "ready",
@@ -585,6 +608,7 @@ export function MarketDashboard({
   );
   const searchInputRef = useRef<HTMLInputElement>(null);
   const preferencesTouchedRef = useRef(false);
+  const intelligenceInboxSaveNonceRef = useRef(0);
   const shellRef = useRef<HTMLElement>(null);
   const accountPersistenceEnabled =
     session.isAuthenticated && Boolean(accountWatchlist) && !accountSyncUnavailable;
@@ -926,6 +950,49 @@ export function MarketDashboard({
       if (timer) window.clearTimeout(timer);
     };
   }, [refreshGeneration]);
+
+  useEffect(() => {
+    if (!session.isAuthenticated || intelligenceInboxOpen) return;
+    let stopped = false;
+    let timer: number | undefined;
+    let activeController: AbortController | undefined;
+
+    async function poll() {
+      if (document.visibilityState === "hidden") {
+        timer = window.setTimeout(poll, INBOX_COUNT_POLL_MS);
+        return;
+      }
+
+      activeController = new AbortController();
+      const timeout = window.setTimeout(() => activeController?.abort(), 10_000);
+      let nextPollMs = INBOX_COUNT_POLL_MS;
+      try {
+        const envelope = await fetchApi<{
+          data: { counts: IntelligenceInboxCounts };
+          meta?: { sync?: { hasMoreCandidates?: boolean } };
+        }>(
+          "/api/intelligence/inbox?filter=all&limit=1",
+          activeController.signal,
+        );
+        if (!stopped) {
+          setIntelligenceInboxCounts(envelope.data.counts);
+          if (envelope.meta?.sync?.hasMoreCandidates) nextPollMs = 2_000;
+        }
+      } catch {
+        // Keep the last verified count. The drawer exposes detailed sync status.
+      } finally {
+        window.clearTimeout(timeout);
+        if (!stopped) timer = window.setTimeout(poll, nextPollMs);
+      }
+    }
+
+    void poll();
+    return () => {
+      stopped = true;
+      activeController?.abort();
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [intelligenceInboxOpen, refreshGeneration, session.isAuthenticated]);
 
   useEffect(() => {
     if (!hasMarketSelection) return;
@@ -1275,6 +1342,27 @@ export function MarketDashboard({
     setPortfolioWorkspaceOpen(true);
   }
 
+  function openIntelligenceInbox(
+    tab: IntelligenceInboxTab = "inbox",
+    focusEventId: string | null = null,
+  ) {
+    setIntelligenceInboxInitialTab(tab);
+    setIntelligenceInboxFocusEventId(focusEventId);
+    setIntelligenceInboxSaveRequest(null);
+    setIntelligenceInboxOpen(true);
+  }
+
+  function saveTimelineEvent(eventId: string) {
+    intelligenceInboxSaveNonceRef.current += 1;
+    setIntelligenceInboxInitialTab("inbox");
+    setIntelligenceInboxFocusEventId(eventId);
+    setIntelligenceInboxSaveRequest({
+      eventId,
+      nonce: intelligenceInboxSaveNonceRef.current,
+    });
+    setIntelligenceInboxOpen(true);
+  }
+
   function upsertHolding(nextHolding: PortfolioWorkspaceHolding) {
     setHoldings((current) => {
       const remaining = current.filter(
@@ -1454,8 +1542,27 @@ export function MarketDashboard({
           >
             <Plus size={15} /><span>Add stock</span>
           </button>
-          <button type="button" className="icon-button" aria-label="Notifications">
+          <button
+            type="button"
+            className="icon-button inbox-bell"
+            aria-label={
+              intelligenceInboxCounts.unread > 0
+                ? `Open intelligence inbox, ${intelligenceInboxCounts.unread} unread`
+                : "Open intelligence inbox"
+            }
+            aria-haspopup="dialog"
+            aria-expanded={intelligenceInboxOpen}
+            data-testid="intelligence-inbox-trigger"
+            onClick={() => openIntelligenceInbox("inbox")}
+          >
             <Bell size={18} />
+            {intelligenceInboxCounts.unread > 0 && (
+              <span className="inbox-badge" aria-hidden="true">
+                {intelligenceInboxCounts.unread > 99
+                  ? "99+"
+                  : intelligenceInboxCounts.unread}
+              </span>
+            )}
           </button>
           {session.isAuthenticated ? (
             <a
@@ -2041,7 +2148,12 @@ export function MarketDashboard({
                 <span className="eyebrow">INTELLIGENCE TIMELINE</span>
                 <h2 id="event-heading">What changed</h2>
               </div>
-              <button type="button">View all events <ChevronRight size={15} /></button>
+              <button
+                type="button"
+                onClick={() => openIntelligenceInbox("inbox")}
+              >
+                View all events <ChevronRight size={15} />
+              </button>
             </div>
 
             <div className="event-list">
@@ -2075,7 +2187,12 @@ export function MarketDashboard({
                           ) : (
                             <button type="button">Inspect demo evidence</button>
                           )}
-                          <button type="button">Add to thesis</button>
+                          <button
+                            type="button"
+                            onClick={() => saveTimelineEvent(event.id)}
+                          >
+                            Save for thesis
+                          </button>
                         </div>
                       </div>
                       <ChevronRight className="event-chevron" size={18} />
@@ -2304,6 +2421,33 @@ export function MarketDashboard({
           onPortfolioReloaded={reloadPortfolio}
         />
       )}
+
+      <IntelligenceInboxDrawer
+        open={intelligenceInboxOpen}
+        onOpenChange={(open) => {
+          setIntelligenceInboxOpen(open);
+          if (!open) {
+            setIntelligenceInboxFocusEventId(null);
+            setIntelligenceInboxSaveRequest(null);
+          }
+        }}
+        isAuthenticated={session.isAuthenticated}
+        signInPath={session.isAuthenticated ? "/dashboard" : session.signInPath}
+        instruments={watchlist.map((instrument) => ({
+          id: instrument.id,
+          ticker: instrument.ticker,
+          name: instrument.name,
+        }))}
+        initialTab={intelligenceInboxInitialTab}
+        focusEventId={intelligenceInboxFocusEventId}
+        saveRequest={intelligenceInboxSaveRequest}
+        onSaveRequestHandled={(request) => {
+          setIntelligenceInboxSaveRequest((current) =>
+            current?.nonce === request.nonce ? null : current,
+          );
+        }}
+        onCountsChange={setIntelligenceInboxCounts}
+      />
 
       {showMobileWatchlist && (
         <button

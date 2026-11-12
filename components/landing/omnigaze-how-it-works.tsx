@@ -42,9 +42,9 @@ const howCopy = {
         detail: "Personal watchlists",
       },
       {
-        title: "Evidence arrives continuously",
-        description: "Market data, SEC filings, and licensed news enter one ingestion boundary, where they are timestamped, normalized, and labeled by source.",
-        detail: "Live provider pipeline",
+        title: "Evidence refreshes with you",
+        description: "As you open and refresh Omnigaze, market data, configured SEC filings, and licensed news enter one boundary to be timestamped, normalized, and source-labeled.",
+        detail: "Request-time provider pipeline",
       },
       {
         title: "AI builds a grounded view",
@@ -53,8 +53,8 @@ const howCopy = {
       },
       {
         title: "Verify, then act with context",
-        description: "Inspect the underlying sources and challenge the interpretation before making a decision. Thesis saving and semantic alerts are next on the roadmap.",
-        detail: "Source-first decisions · roadmap workflows labeled",
+        description: "Inspect the underlying sources, save durable thesis evidence, and explicitly opt into in-app rules before making your own decision.",
+        detail: "Source-first decisions · saved research · in-app rules",
       },
     ],
     watchlist: {
@@ -114,8 +114,8 @@ const howCopy = {
       release: "Earnings release",
       releaseMeta: "Company IR · verified",
       open: "Open filing",
-      thesis: "Thesis · soon",
-      alerts: "Alerts · soon",
+      thesis: "Thesis · saved",
+      alerts: "Alerts · in app",
     },
   },
   "zh-CN": {
@@ -134,9 +134,9 @@ const howCopy = {
         detail: "个人关注列表",
       },
       {
-        title: "证据持续进入",
-        description: "市场数据、SEC 监管文件与授权新闻进入统一采集边界，并在其中添加时间戳、完成标准化并标注来源。",
-        detail: "实时数据提供方管线",
+        title: "证据随使用刷新",
+        description: "当你打开或刷新 Omnigaze 时，市场数据、已配置的 SEC 监管文件与授权新闻会进入统一边界，添加时间戳、完成标准化并标注来源。",
+        detail: "按请求运行的数据提供方管线",
       },
       {
         title: "AI 构建有依据的观点",
@@ -145,8 +145,8 @@ const howCopy = {
       },
       {
         title: "核验后，带着上下文行动",
-        description: "决策前检查底层来源并质疑解读。保存投资逻辑与语义提醒仍在后续路线图中。",
-        detail: "来源优先的决策 · 路线图功能已标注",
+        description: "决策前检查底层来源、长期保存投资逻辑证据，并自主开启应用内规则。",
+        detail: "来源优先的决策 · 已保存研究 · 应用内规则",
       },
     ],
     watchlist: {
@@ -206,8 +206,8 @@ const howCopy = {
       release: "财报新闻稿",
       releaseMeta: "公司投资者关系 · 已核验",
       open: "打开监管文件",
-      thesis: "投资逻辑 · 即将推出",
-      alerts: "提醒 · 即将推出",
+      thesis: "投资逻辑 · 已保存",
+      alerts: "提醒 · 应用内",
     },
   },
 } satisfies Record<LandingLocale, object>;

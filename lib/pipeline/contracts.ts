@@ -18,6 +18,7 @@ export interface RawSourceEvent {
   sourceEventId: string;
   receivedAt: string;
   publishedAt: string;
+  providerUpdatedAt?: string;
   payload: unknown;
 }
 
@@ -29,6 +30,7 @@ export interface NormalizedSourceEvent {
   sourceEventId: string;
   receivedAt: string;
   publishedAt: string;
+  providerUpdatedAt?: string;
   classification: EvidenceClassification;
   materiality: Materiality | null;
   title: string;

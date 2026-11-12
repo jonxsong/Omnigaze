@@ -27,6 +27,36 @@ type HistoricalBarsOptions = {
   limit?: number;
 };
 
+const ALPACA_NEWS_PAGE_SIZE = 50;
+const ALPACA_NEWS_RESULT_LIMIT = 100;
+const ALPACA_NEWS_MAX_PAGES = 4;
+const ALPACA_REQUEST_TIMEOUT_MS = 8_000;
+
+type AlpacaNewsItem = {
+  id: number | string;
+  headline: string;
+  summary?: string;
+  created_at: string;
+  updated_at: string;
+  url?: string | null;
+  symbols?: string[];
+};
+
+function isAlpacaNewsItem(value: unknown): value is AlpacaNewsItem {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  const idIsValid =
+    (typeof item.id === "number" && Number.isFinite(item.id)) ||
+    (typeof item.id === "string" && item.id.trim().length > 0);
+  return (
+    idIsValid &&
+    typeof item.headline === "string" &&
+    item.headline.trim().length > 0 &&
+    typeof item.created_at === "string" &&
+    Number.isFinite(Date.parse(item.created_at))
+  );
+}
+
 function tickerFromSymbol(symbol: CanonicalSymbol) {
   return symbol.split(":")[1];
 }
@@ -182,37 +212,104 @@ export class AlpacaProvider
     since: string;
     limit: number;
   }): Promise<RawSourceEvent[]> {
-    const symbols = options.symbols.map(tickerFromSymbol).join(",");
-    const url = new URL("https://data.alpaca.markets/v1beta1/news");
-    url.searchParams.set("symbols", symbols);
-    url.searchParams.set("start", options.since);
-    url.searchParams.set("limit", String(Math.min(options.limit, 50)));
-    url.searchParams.set("sort", "desc");
+    if (options.symbols.length === 0) return [];
+    if (!Number.isFinite(options.limit) || options.limit < 1) return [];
 
-    const response = await fetch(url, {
-      headers: this.headers(),
-      signal: AbortSignal.timeout(8_000),
-    });
-    if (!response.ok) throw new Error(`Alpaca news failed with ${response.status}`);
+    const requestedLimit = Math.min(
+      Math.trunc(options.limit),
+      ALPACA_NEWS_RESULT_LIMIT,
+    );
+    const requestedTickers = new Set(
+      options.symbols.map((symbol) => tickerFromSymbol(symbol).toUpperCase()),
+    );
+    const symbols = [...requestedTickers].join(",");
+    const signal = AbortSignal.timeout(ALPACA_REQUEST_TIMEOUT_MS);
+    const itemsById = new Map<string, AlpacaNewsItem>();
+    const seenPageTokens = new Set<string>();
+    let pageToken: string | null = null;
+    let pageCount = 0;
 
-    const data = (await response.json()) as {
-      news?: Array<{
-        id: number;
-        headline: string;
-        summary?: string;
-        created_at: string;
-        updated_at: string;
-        url?: string;
-        symbols?: string[];
-      }>;
-    };
+    while (itemsById.size < requestedLimit && pageCount < ALPACA_NEWS_MAX_PAGES) {
+      const url = new URL("https://data.alpaca.markets/v1beta1/news");
+      url.searchParams.set("symbols", symbols);
+      url.searchParams.set("start", options.since);
+      url.searchParams.set(
+        "limit",
+        String(
+          Math.min(
+            Math.max(requestedLimit - itemsById.size, 1),
+            ALPACA_NEWS_PAGE_SIZE,
+          ),
+        ),
+      );
+      url.searchParams.set("sort", "desc");
+      if (pageToken) url.searchParams.set("page_token", pageToken);
 
-    return (data.news ?? []).map((item) => ({
+      const response = await fetch(url, {
+        headers: this.headers(),
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Alpaca news failed with ${response.status}`);
+      }
+
+      const data = (await response.json()) as {
+        news?: unknown;
+        next_page_token?: unknown;
+      };
+      if (!Array.isArray(data.news)) {
+        throw new Error("Alpaca returned an incomplete news response");
+      }
+
+      for (const candidate of data.news) {
+        if (!isAlpacaNewsItem(candidate)) continue;
+        const itemSymbols = Array.isArray(candidate.symbols)
+          ? candidate.symbols.filter(
+              (symbol): symbol is string => typeof symbol === "string",
+            )
+          : [];
+        if (
+          !itemSymbols.some((symbol) => requestedTickers.has(symbol.toUpperCase()))
+        ) {
+          continue;
+        }
+        const id = String(candidate.id);
+        if (!itemsById.has(id)) itemsById.set(id, candidate);
+        if (itemsById.size >= requestedLimit) break;
+      }
+
+      pageCount += 1;
+      const nextPageToken =
+        typeof data.next_page_token === "string" &&
+        data.next_page_token.trim().length > 0
+          ? data.next_page_token
+          : null;
+      if (!nextPageToken || itemsById.size >= requestedLimit) {
+        pageToken = null;
+        break;
+      }
+      if (seenPageTokens.has(nextPageToken)) {
+        throw new Error("Alpaca news pagination returned a repeated page token");
+      }
+      seenPageTokens.add(nextPageToken);
+      pageToken = nextPageToken;
+    }
+
+    if (pageToken && itemsById.size < requestedLimit) {
+      throw new Error("Alpaca news pagination exceeded the bounded page limit");
+    }
+
+    const receivedAt = new Date().toISOString();
+    return [...itemsById.values()].map((item) => ({
       source: this.name,
       sourceKind: "licensed_news",
       sourceEventId: String(item.id),
-      receivedAt: new Date().toISOString(),
+      receivedAt,
       publishedAt: item.created_at,
+      providerUpdatedAt:
+        Number.isFinite(Date.parse(item.updated_at))
+          ? item.updated_at
+          : item.created_at,
       payload: item,
     }));
   }

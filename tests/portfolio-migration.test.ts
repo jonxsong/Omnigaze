@@ -37,7 +37,7 @@ describe("portfolio migration artifacts", () => {
     }>("drizzle/meta/_journal.json");
 
     expect(current.prevId).toBe(previous.id);
-    expect(journal.entries.at(-1)).toEqual({
+    expect(journal.entries.find((entry) => entry.idx === 2)).toEqual({
       idx: 2,
       tag: "0002_portfolio_v1",
       version: "6",

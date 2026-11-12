@@ -15,6 +15,7 @@ import {
   InstrumentResolutionError,
   resolveCanonicalInstrument,
 } from "@/lib/services/instrument-resolution";
+import { reportUnexpectedFailure } from "@/lib/unexpected-failure";
 
 export const dynamic = "force-dynamic";
 
@@ -93,6 +94,33 @@ const tools = [
     name: "get_provider_status",
     description:
       "Report which market, news, and filing providers are configured and healthy.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_intelligence_inbox",
+    description:
+      "Return the authenticated user's durable intelligence inbox. A fresh live read may materialize newly observed events; demo or stale provider output is never persisted.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        filter: {
+          type: "string",
+          enum: ["all", "unread", "saved", "alerts"],
+          default: "all",
+        },
+        limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_alert_rules",
+    description:
+      "Return the authenticated user's in-app intelligence alert rules. Rules are absent and disabled until explicitly configured.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -368,6 +396,41 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
           generatedAt: new Date().toISOString(),
         });
       }
+      case "get_intelligence_inbox": {
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const parsed = z
+          .object({
+            filter: z
+              .enum(["all", "unread", "saved", "alerts"])
+              .optional()
+              .default("all"),
+            limit: z.number().int().min(1).max(100).optional().default(50),
+          })
+          .strict()
+          .safeParse(args);
+        if (!parsed.success) return validationError(parsed.error);
+        const { getIntelligenceInbox } = await import(
+          "@/lib/intelligence-inbox/service"
+        );
+        const result = await getIntelligenceInbox(userId, parsed.data);
+        return toolContent(result.data, result.meta);
+      }
+      case "get_alert_rules": {
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const parsed = z.object({}).strict().safeParse(args);
+        if (!parsed.success) return validationError(parsed.error);
+        const { getAlertRules } = await import(
+          "@/lib/intelligence-inbox/service"
+        );
+        const result = await getAlertRules(userId);
+        return toolContent(result.data, result.meta);
+      }
       case "get_portfolio": {
         const parsed = z.object({}).strict().safeParse(args);
         if (!parsed.success) return validationError(parsed.error);
@@ -420,7 +483,14 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
       default:
         return toolError(`Unknown tool: ${name}`);
     }
-  } catch {
+  } catch (failure) {
+    if (name === "get_intelligence_inbox" || name === "get_alert_rules") {
+      const requestId = reportUnexpectedFailure(`mcp.${name}`, failure);
+      return toolError("Tool execution failed.", {
+        code: "tool_execution_failed",
+        requestId,
+      });
+    }
     return toolError("Tool execution failed.", {
       code: "tool_execution_failed",
     });

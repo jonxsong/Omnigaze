@@ -29,14 +29,14 @@ test.describe("Omnigaze public experience", () => {
     await expect(heading).toBeVisible();
 
     const step = page.getByRole("button", {
-      name: /evidence arrives continuously/i,
+      name: /evidence refreshes with you/i,
     });
     await expect(step).toHaveAttribute("aria-expanded", "false");
     await step.click();
     await expect(step).toHaveAttribute("aria-expanded", "true");
     await expect(
-      page.getByRole("region", { name: /evidence arrives continuously/i }),
-    ).toContainText("Live provider pipeline");
+      page.getByRole("region", { name: /evidence refreshes with you/i }),
+    ).toContainText("Request-time provider pipeline");
     await expect(
       page.getByRole("heading", { name: "Signals become structured context" }),
     ).toBeVisible();
