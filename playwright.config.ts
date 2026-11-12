@@ -8,7 +8,9 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // Browser journeys share the local D1 and the Sites test identity. Keep them
+  // serial everywhere so one file cannot mutate another file's account state.
+  workers: 1,
   reporter: [
     ["list"],
     ["html", { open: "never", outputFolder: "outputs/playwright-report" }],

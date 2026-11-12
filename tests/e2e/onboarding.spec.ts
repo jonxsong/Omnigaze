@@ -76,6 +76,62 @@ test.describe("Omnigaze onboarding", () => {
     });
   });
 
+  test("searches, persists, and hands an arbitrary catalog stock to the dashboard", async ({
+    page,
+  }) => {
+    await page.route("**/api/assets/search?**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: [
+            {
+              id: "asset-ibm",
+              symbolId: "NYSE:IBM",
+              symbol: "IBM",
+              name: "International Business Machines Corporation",
+              exchange: "NYSE",
+              status: "active",
+              tradable: true,
+              marginable: true,
+              shortable: true,
+              fractionable: true,
+              attributes: [],
+              provider: "alpaca",
+            },
+          ],
+          meta: {
+            source: "alpaca",
+            catalogAsOf: "2026-11-12T11:00:00.000Z",
+            totalMatches: 1,
+            freshness: { state: "fresh", ageSeconds: 20 },
+          },
+        }),
+      });
+    });
+
+    await page.getByRole("searchbox", { name: "Search active U.S. stocks" }).fill("IBM");
+    await page.getByRole("button", {
+      name: /IBM International Business Machines Corporation/,
+    }).click();
+    await expect(page.getByRole("button", { name: "Remove IBM" })).toBeVisible();
+
+    await page.waitForTimeout(450);
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Remove IBM" })).toBeVisible();
+
+    await page.getByRole("button", { name: /continue/i }).click();
+    await expect(page.getByText("International Business Machines Corporation")).toBeVisible();
+    await page.getByRole("button", { name: "Skip holdings" }).click();
+    await page.getByRole("button", { name: "Use neutral defaults" }).click();
+    await page.getByRole("button", { name: "Build my dashboard" }).click();
+
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(
+      page.getByRole("button", { name: "Remove IBM from watchlist" }),
+    ).toBeVisible();
+  });
+
   test("keeps anonymous position context device-local and sign-in gated", async ({
     page,
   }) => {

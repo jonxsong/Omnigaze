@@ -131,17 +131,87 @@ describe("asset catalog search service", () => {
     expect(String(error)).not.toContain("socket secret details");
   });
 
-  it("exposes exact resolution without using demo data", async () => {
-    const resolved = asset("SHOP", "Shopify Inc.", "NYSE");
-    const resolveExact = vi.fn().mockResolvedValue(resolved);
+  it("coalesces repeated exact resolutions through the fresh catalog", async () => {
+    const shop = asset("SHOP", "Shopify Inc.", "NYSE");
+    const ibm = asset("IBM", "International Business Machines", "NYSE");
+    const listActiveUsEquities = vi.fn().mockResolvedValue([shop, ibm]);
+    const resolveExact = vi.fn().mockResolvedValue(null);
     const provider: AlpacaAssetCatalogClient = {
-      listActiveUsEquities: vi.fn(),
+      listActiveUsEquities,
       resolveExact,
     };
-    const service = new AssetSearchService(provider);
+    const service = new AssetSearchService(provider, () => 10_000);
+
+    await expect(
+      Promise.all([
+        service.resolveExact("shop"),
+        service.resolveExact("IBM"),
+        service.resolveExact("SHOP"),
+      ]),
+    ).resolves.toEqual([shop, ibm, shop]);
+    expect(listActiveUsEquities).toHaveBeenCalledOnce();
+    expect(resolveExact).not.toHaveBeenCalled();
+  });
+
+  it("returns unsupported honestly when a fresh catalog has no exact match", async () => {
+    const listActiveUsEquities = vi
+      .fn()
+      .mockResolvedValue([asset("SHOP", "Shopify Inc.", "NYSE")]);
+    const resolveExact = vi.fn().mockResolvedValue(
+      asset("UNKNOWN", "Should not be used", "NYSE"),
+    );
+    const service = new AssetSearchService({
+      listActiveUsEquities,
+      resolveExact,
+    });
+
+    await expect(service.resolveExact("UNKNOWN")).resolves.toBeNull();
+    expect(listActiveUsEquities).toHaveBeenCalledOnce();
+    expect(resolveExact).not.toHaveBeenCalled();
+  });
+
+  it("uses the exact endpoint when the catalog is unavailable", async () => {
+    const resolved = asset("SHOP", "Shopify Inc.", "NYSE");
+    const listActiveUsEquities = vi
+      .fn()
+      .mockRejectedValue(new AlpacaAssetProviderError("provider_rate_limited", 429));
+    const resolveExact = vi.fn().mockResolvedValue(resolved);
+    const service = new AssetSearchService({
+      listActiveUsEquities,
+      resolveExact,
+    });
 
     await expect(service.resolveExact("SHOP")).resolves.toEqual(resolved);
+    expect(listActiveUsEquities).toHaveBeenCalledOnce();
     expect(resolveExact).toHaveBeenCalledWith("SHOP");
-    expect(provider.listActiveUsEquities).not.toHaveBeenCalled();
+  });
+
+  it("does not trust a stale catalog when exact reverification fails", async () => {
+    let now = 0;
+    const listActiveUsEquities = vi
+      .fn()
+      .mockResolvedValueOnce([asset("SHOP", "Shopify Inc.", "NYSE")])
+      .mockRejectedValue(
+        new AlpacaAssetProviderError("provider_rate_limited", 429),
+      );
+    const resolveExact = vi
+      .fn()
+      .mockRejectedValue(
+        new AlpacaAssetProviderError("provider_unavailable", 503),
+      );
+    const service = new AssetSearchService(
+      { listActiveUsEquities, resolveExact },
+      () => now,
+    );
+
+    await expect(service.resolveExact("SHOP")).resolves.toMatchObject({
+      symbol: "SHOP",
+    });
+    now = ASSET_CATALOG_FRESH_MS + 1;
+    await expect(service.resolveExact("SHOP")).rejects.toMatchObject({
+      code: "provider_unavailable",
+    });
+    expect(listActiveUsEquities).toHaveBeenCalledTimes(2);
+    expect(resolveExact).toHaveBeenCalledOnce();
   });
 });

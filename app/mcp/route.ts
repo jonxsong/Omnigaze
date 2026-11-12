@@ -1,8 +1,5 @@
 import { z } from "zod";
-import {
-  getOmnigazeView,
-  serviceMeta,
-} from "@/lib/services/market-intelligence";
+import { serviceMeta } from "@/lib/services/market-intelligence";
 import { liveMarketData } from "@/lib/services/live-market-data";
 import {
   extractCanonicalSymbols,
@@ -70,7 +67,7 @@ const tools = [
   {
     name: "get_omnigaze_view",
     description:
-      "Return Omnigaze's current interpretation with evidence and uncertainty.",
+      "Generate the authenticated user's current AI interpretation from fresh live evidence, with citations, uncertainty, and evidence-coverage metadata. Never returns demo or stale analysis.",
     inputSchema: {
       type: "object",
       properties: {
@@ -350,10 +347,32 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         );
       }
       case "get_omnigaze_view": {
-        const parsed = z.object({ symbol_id: symbolSchema }).safeParse(args);
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const parsed = z
+          .object({ symbol_id: symbolSchema })
+          .strict()
+          .safeParse(args);
         if (!parsed.success) return validationError(parsed.error);
-        const view = getOmnigazeView(parsed.data.symbol_id);
-        return view ? toolContent(view) : toolError("Symbol not found.");
+        const {
+          generateOmnigazeView,
+          OmnigazeViewError,
+        } = await import("@/lib/services/omnigaze-view");
+        try {
+          const view = await generateOmnigazeView(parsed.data.symbol_id);
+          return toolContent(view.data, {
+            ...view.meta,
+            scope: "personal",
+            identity: "authenticated",
+          });
+        } catch (error) {
+          if (error instanceof OmnigazeViewError) {
+            return toolError(error.message, { code: error.code });
+          }
+          throw error;
+        }
       }
       case "get_watchlist_dashboard": {
         const userId = request.headers.get("oai-authenticated-user-id");

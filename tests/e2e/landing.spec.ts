@@ -51,6 +51,168 @@ test.describe("Omnigaze public experience", () => {
     await expect(page.getByText(/OMNIGAZE VIEW/).first()).toBeVisible();
   });
 
+  test("Ask Omnigaze opens the explicit, sign-in-gated live analysis flow", async ({
+    page,
+  }) => {
+    let analysisRequests = 0;
+    await page.route("**/api/ai/analyze", async (route) => {
+      analysisRequests += 1;
+      await route.abort();
+    });
+
+    await page.goto("/dashboard");
+    await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+    await page.getByRole("button", { name: "Ask Omnigaze", exact: true }).click();
+
+    const dialog = page.getByTestId("omnigaze-view-dialog");
+    await expect(dialog).toBeVisible();
+    await expect(
+      dialog.getByText("Sign in for a live evidence-backed view"),
+    ).toBeVisible();
+    await expect(dialog.getByRole("link", { name: "Sign in to analyze" })).toHaveAttribute(
+      "href",
+      /\/signin-with-chatgpt\?return_to=%2Fdashboard/,
+    );
+    expect(analysisRequests).toBe(0);
+  });
+
+  test("renders a cited live Omnigaze View only after explicit analysis", async ({
+    context,
+    page,
+  }) => {
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+
+    const watchlistsResponse = await context.request.get("/api/watchlists");
+    expect(watchlistsResponse.status()).toBe(200);
+    const watchlists = (await watchlistsResponse.json()) as {
+      data: Array<{
+        id: string;
+        isDefault: boolean;
+        items: Array<{ symbolId: string }>;
+      }>;
+    };
+    const primary =
+      watchlists.data.find((watchlist) => watchlist.isDefault) ?? watchlists.data[0];
+    if (!primary) throw new Error("Expected an authenticated default watchlist.");
+    const addedForTest = !primary.items.some(
+      ({ symbolId }) => symbolId === "NASDAQ:NVDA",
+    );
+    if (addedForTest) {
+      const add = await context.request.post("/api/watchlists", {
+        data: {
+          operation: "add",
+          watchlist_id: primary.id,
+          symbol_id: "NASDAQ:NVDA",
+        },
+      });
+      expect(add.status()).toBe(200);
+      await page.reload();
+      await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+    }
+
+    const generatedAt = "2026-11-12T18:00:02.000Z";
+    let analysisRequests = 0;
+    await page.route("**/api/ai/analyze", async (route) => {
+      analysisRequests += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            stance: "mixed",
+            confidence: 0.58,
+            headline: "Current evidence is mixed",
+            summary: "The latest evidence contains supportive and limiting signals.",
+            whyNow: "A new company update changed the evidence set.",
+            drivers: [{
+              label: "Company update",
+              direction: "mixed",
+              explanation: "The update adds current context.",
+              evidenceIds: ["evidence:alpaca:news-1"],
+            }],
+            unknowns: ["The durability of the development remains unknown."],
+          },
+          meta: {
+            symbolId: "NASDAQ:NVDA",
+            dataCutoff: "2026-11-12T18:00:00.000Z",
+            generatedAt,
+            promptVersion: "2026-11-12.1",
+            dataMode: "live",
+            providerCoverage: "partial",
+            freshness: {
+              state: "fresh",
+              asOf: "2026-11-12T17:59:00.000Z",
+              ageSeconds: 60,
+            },
+            evidenceCount: 1,
+            eventCount: 1,
+            sources: ["alpaca"],
+            evidenceCoverage: {
+              score: 0.4,
+              label: "limited",
+              evidenceCount: 1,
+              sourceCount: 1,
+            },
+            citations: [{
+              id: "evidence:alpaca:news-1",
+              title: "NVIDIA publishes a material update",
+              publisher: "alpaca",
+              publishedAt: "2026-11-12T17:59:00.000Z",
+              url: "https://example.test/nvda",
+              classification: "fact",
+            }],
+            confidenceMeaning: "evidence_interpretation_not_return_probability",
+            disclaimer: "Research support only. This is not investment advice.",
+          },
+        }),
+      });
+    });
+
+    await page
+      .locator(".watchlist-row")
+      .filter({ hasText: "NVDA" })
+      .getByRole("button")
+      .first()
+      .click();
+    await page.getByRole("button", { name: "Ask Omnigaze", exact: true }).click();
+    const dialog = page.getByTestId("omnigaze-view-dialog");
+    await expect(dialog.getByText("Generate a fresh Omnigaze View")).toBeVisible();
+    expect(analysisRequests).toBe(0);
+
+    await dialog.getByRole("button", { name: "Analyze live evidence" }).click();
+    await expect(dialog.getByRole("heading", { name: "Current evidence is mixed" })).toBeVisible();
+    await expect(dialog.getByText("interpretation confidence")).toBeVisible();
+    await expect(dialog.getByText("NVIDIA publishes a material update")).toBeVisible();
+    expect(analysisRequests).toBe(1);
+    await page.screenshot({
+      path: "outputs/omnigaze-live-view-desktop.png",
+      fullPage: false,
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    const dialogOverflow = await dialog.evaluate((element) => ({
+      scrollWidth: element.scrollWidth,
+      clientWidth: element.clientWidth,
+    }));
+    expect(dialogOverflow.scrollWidth).toBeLessThanOrEqual(dialogOverflow.clientWidth);
+    await page.screenshot({
+      path: "outputs/omnigaze-live-view-mobile.png",
+      fullPage: false,
+    });
+
+    if (addedForTest) {
+      const remove = await context.request.post("/api/watchlists", {
+        data: {
+          operation: "remove",
+          watchlist_id: primary.id,
+          symbol_id: "NASDAQ:NVDA",
+        },
+      });
+      expect(remove.status()).toBe(200);
+    }
+  });
+
   test("data status does not present response receipt as provider evidence freshness", async ({
     page,
   }) => {
@@ -267,9 +429,9 @@ test.describe("Omnigaze public experience", () => {
     page,
   }) => {
     let failRefresh = false;
-    await page.route("**/api/market/snapshot?*", async (route) => {
-      const symbol = new URL(route.request().url()).searchParams.get("symbol");
-      if (symbol !== "NASDAQ:NVDA") return route.continue();
+    await page.route("**/api/market/snapshots?*", async (route) => {
+      const symbols = new URL(route.request().url()).searchParams.get("symbols");
+      if (!symbols?.split(",").includes("NASDAQ:NVDA")) return route.continue();
       if (failRefresh) {
         await route.fulfill({
           status: 503,
@@ -287,30 +449,41 @@ test.describe("Omnigaze public experience", () => {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          data: {
+          data: [{
             symbolId: "NASDAQ:NVDA",
-            asOf,
-            session: "regular",
-            price: 181.25,
-            previousClose: 179.5,
-            change: 1.75,
-            changePercent: 0.97,
-            volume: 1_200_000,
-            marketCap: "$4.4T",
-            isDelayed: false,
-            delaySeconds: 0,
-            provider: "Test provider",
-            marketCoverage: "limited-exchange",
-          },
+            status: "ready",
+            data: {
+              symbolId: "NASDAQ:NVDA",
+              asOf,
+              session: "regular",
+              price: 181.25,
+              previousClose: 179.5,
+              change: 1.75,
+              changePercent: 0.97,
+              volume: 1_200_000,
+              marketCap: "$4.4T",
+              isDelayed: false,
+              delaySeconds: 0,
+              provider: "Test provider",
+              marketCoverage: "limited-exchange",
+            },
+            meta: {
+              dataMode: "live",
+              mode: "live",
+              providerCoverage: "partial",
+              coverage: "partial",
+              generatedAt: asOf,
+              freshness: { state: "fresh", asOf, ageSeconds: 0 },
+              providers: [],
+              notice: "Test provider quote.",
+            },
+          }],
           meta: {
-            dataMode: "live",
-            mode: "live",
-            providerCoverage: "partial",
-            coverage: "partial",
+            requestedCount: 1,
+            readyCount: 1,
+            errorCount: 0,
+            partial: false,
             generatedAt: asOf,
-            freshness: { state: "fresh", asOf, ageSeconds: 0 },
-            providers: [],
-            notice: "Test provider quote.",
           },
         }),
       });
@@ -392,13 +565,27 @@ test.describe("Omnigaze public experience", () => {
         }),
       });
     });
-    await page.route("**/api/market/snapshot?*", async (route) => {
-      const symbol = new URL(route.request().url()).searchParams.get("symbol");
-      if (symbol !== "NYSE:IBM") return route.continue();
+    await page.route("**/api/market/snapshots?*", async (route) => {
+      const symbols = new URL(route.request().url()).searchParams.get("symbols");
+      if (!symbols?.split(",").includes("NYSE:IBM")) return route.continue();
       await route.fulfill({
-        status: 503,
+        status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ error: "Market data is unavailable for this symbol." }),
+        body: JSON.stringify({
+          data: [{
+            symbolId: "NYSE:IBM",
+            status: "error",
+            code: "market_data_unavailable",
+            error: "Market data is unavailable for this symbol.",
+          }],
+          meta: {
+            requestedCount: symbols.split(",").length,
+            readyCount: 0,
+            errorCount: 1,
+            partial: true,
+            generatedAt: new Date().toISOString(),
+          },
+        }),
       });
     });
     await page.route("**/api/market/bars?*", async (route) => {
@@ -835,35 +1022,46 @@ test.describe("Omnigaze public experience", () => {
     }
 
     const now = new Date().toISOString();
-    await page.route("**/api/market/snapshot?**", async (route) => {
+    await page.route("**/api/market/snapshots?**", async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          data: {
+          data: [{
             symbolId: "NASDAQ:NVDA",
-            asOf: now,
-            session: "regular",
-            price: 160,
-            previousClose: 158,
-            change: 2,
-            changePercent: 1.27,
-            volume: 1_000,
-            marketCap: "Unavailable",
-            isDelayed: false,
-            delaySeconds: 0,
-            provider: "Alpaca iex",
-            marketCoverage: "limited-exchange",
-          },
+            status: "ready",
+            data: {
+              symbolId: "NASDAQ:NVDA",
+              asOf: now,
+              session: "regular",
+              price: 160,
+              previousClose: 158,
+              change: 2,
+              changePercent: 1.27,
+              volume: 1_000,
+              marketCap: "Unavailable",
+              isDelayed: false,
+              delaySeconds: 0,
+              provider: "Alpaca iex",
+              marketCoverage: "limited-exchange",
+            },
+            meta: {
+              dataMode: "live",
+              mode: "live",
+              providerCoverage: "partial",
+              coverage: "partial",
+              generatedAt: now,
+              freshness: { state: "fresh", asOf: now, ageSeconds: 0 },
+              providers: [],
+              notice: "Live provider data.",
+            },
+          }],
           meta: {
-            dataMode: "live",
-            mode: "live",
-            providerCoverage: "partial",
-            coverage: "partial",
+            requestedCount: 1,
+            readyCount: 1,
+            errorCount: 0,
+            partial: false,
             generatedAt: now,
-            freshness: { state: "fresh", asOf: now, ageSeconds: 0 },
-            providers: [],
-            notice: "Live provider data.",
           },
         }),
       });
@@ -975,7 +1173,7 @@ test.describe("Omnigaze public experience", () => {
       .first()
       .click();
     await expect(page.locator(".demo-banner.provider")).toBeVisible();
-    await page.getByRole("button", { name: "Ask Omnigaze", exact: true }).click();
+    await page.getByRole("button", { name: "Research scenarios", exact: true }).click();
     const workspace = page.getByTestId("portfolio-workspace");
     await workspace.getByRole("button", { name: "Check evidence & calculate" }).click();
     const output = workspace.getByTestId("decision-support-state");

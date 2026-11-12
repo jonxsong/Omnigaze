@@ -1,9 +1,13 @@
 import type { CanonicalSymbol } from "@/lib/market-types";
 
 export const ONBOARDING_DRAFT_KEY = "omnigaze:onboarding-draft";
-export const ONBOARDING_DRAFT_VERSION = 1;
+export const ONBOARDING_DRAFT_VERSION = 2;
 export const ONBOARDING_MAX_SYMBOLS = 12;
 export const DASHBOARD_PREFERENCES_KEY = "omnigaze:dashboard-preferences";
+
+const LEGACY_ONBOARDING_DRAFT_VERSION = 1;
+const DASHBOARD_PREFERENCES_VERSION = 2;
+const canonicalSymbolPattern = /^[A-Z0-9._-]+:[A-Z0-9._-]+$/;
 
 export const onboardingGoals = [
   "material-changes",
@@ -47,11 +51,21 @@ export interface OnboardingPosition {
   averageCost: string;
 }
 
+export interface OnboardingInstrument {
+  id: CanonicalSymbol;
+  ticker: string;
+  exchange: string;
+  name: string;
+  sector: string | null;
+  currency: "USD";
+}
+
 export interface OnboardingDraft {
   version: typeof ONBOARDING_DRAFT_VERSION;
   currentStep: OnboardingStep;
   highestStep: OnboardingStep;
   symbols: CanonicalSymbol[];
+  instruments: OnboardingInstrument[];
   positions: OnboardingPosition[];
   goals: OnboardingGoal[];
   horizon: OnboardingHorizon | null;
@@ -95,6 +109,70 @@ function safeText(value: unknown) {
   return value.trim().slice(0, 32);
 }
 
+function safeLabel(value: unknown, maxLength: number) {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim().replace(/\s+/g, " ");
+  if (!normalized || /[\u0000-\u001F\u007F]/.test(normalized)) return "";
+  return normalized.slice(0, maxLength);
+}
+
+function normalizeInstrument(value: unknown): OnboardingInstrument | null {
+  if (!isRecord(value)) return null;
+  const id = safeLabel(value.id, 40).toUpperCase();
+  const ticker = safeLabel(value.ticker, 20).toUpperCase();
+  const exchange = safeLabel(value.exchange, 20).toUpperCase();
+  const name = safeLabel(value.name, 160);
+  if (
+    !canonicalSymbolPattern.test(id) ||
+    !ticker ||
+    !exchange ||
+    `${exchange}:${ticker}` !== id ||
+    !name
+  ) {
+    return null;
+  }
+
+  return {
+    id: id as CanonicalSymbol,
+    ticker,
+    exchange,
+    name,
+    sector:
+      value.sector === null
+        ? null
+        : safeLabel(value.sector, 80) || null,
+    currency: "USD",
+  };
+}
+
+function fallbackInstrument(symbol: CanonicalSymbol): OnboardingInstrument {
+  const [exchange, ticker] = symbol.split(":");
+  return {
+    id: symbol,
+    ticker,
+    exchange,
+    name: ticker,
+    sector: null,
+    currency: "USD",
+  };
+}
+
+function normalizeAllowedInstruments(
+  values: readonly (CanonicalSymbol | OnboardingInstrument)[],
+) {
+  const entries = values.flatMap((value) => {
+    if (typeof value === "string") {
+      const symbol = value.trim().toUpperCase();
+      return canonicalSymbolPattern.test(symbol)
+        ? [fallbackInstrument(symbol as CanonicalSymbol)]
+        : [];
+    }
+    const instrument = normalizeInstrument(value);
+    return instrument ? [instrument] : [];
+  });
+  return new Map(entries.map((instrument) => [instrument.id, instrument]));
+}
+
 function safeIso(value: unknown, fallback: string) {
   return typeof value === "string" && Number.isFinite(Date.parse(value))
     ? value
@@ -109,6 +187,7 @@ export function createEmptyOnboardingDraft(
     currentStep: 0,
     highestStep: 0,
     symbols: [],
+    instruments: [],
     positions: [],
     goals: [],
     horizon: null,
@@ -123,7 +202,7 @@ export function createEmptyOnboardingDraft(
 
 export function parseOnboardingDraft(
   raw: string | null,
-  allowedSymbols: readonly CanonicalSymbol[],
+  allowedInstruments: readonly (CanonicalSymbol | OnboardingInstrument)[],
   now = new Date().toISOString(),
 ): OnboardingDraft | null {
   if (!raw) return null;
@@ -135,21 +214,43 @@ export function parseOnboardingDraft(
     return null;
   }
 
-  if (!isRecord(input) || input.version !== ONBOARDING_DRAFT_VERSION) {
+  if (
+    !isRecord(input) ||
+    (input.version !== ONBOARDING_DRAFT_VERSION &&
+      input.version !== LEGACY_ONBOARDING_DRAFT_VERSION)
+  ) {
     return null;
   }
 
-  const allowed = new Set(allowedSymbols);
+  const allowed = normalizeAllowedInstruments(allowedInstruments);
+  const suppliedInstruments =
+    input.version === ONBOARDING_DRAFT_VERSION && Array.isArray(input.instruments)
+      ? input.instruments
+          .map(normalizeInstrument)
+          .filter(
+            (instrument): instrument is OnboardingInstrument =>
+              instrument !== null,
+          )
+      : [];
+  const suppliedById = new Map(
+    suppliedInstruments.map((instrument) => [instrument.id, instrument]),
+  );
+  const acceptedById =
+    input.version === LEGACY_ONBOARDING_DRAFT_VERSION ? allowed : suppliedById;
   const symbols = Array.isArray(input.symbols)
     ? Array.from(
         new Set(
-          input.symbols.filter(
-            (symbol): symbol is CanonicalSymbol =>
-              typeof symbol === "string" && allowed.has(symbol as CanonicalSymbol),
-          ),
+          input.symbols.flatMap((value): CanonicalSymbol[] => {
+            if (typeof value !== "string") return [];
+            const symbol = value.trim().toUpperCase() as CanonicalSymbol;
+            return acceptedById.has(symbol) ? [symbol] : [];
+          }),
         ),
       ).slice(0, ONBOARDING_MAX_SYMBOLS)
     : [];
+  const instruments = symbols.map(
+    (symbol) => acceptedById.get(symbol) ?? fallbackInstrument(symbol),
+  );
   const selected = new Set(symbols);
 
   const positions = Array.isArray(input.positions)
@@ -203,6 +304,7 @@ export function parseOnboardingDraft(
     currentStep,
     highestStep,
     symbols,
+    instruments,
     positions,
     goals,
     horizon: isOneOf(onboardingHorizons, input.horizon) ? input.horizon : null,
@@ -224,14 +326,14 @@ export function parseOnboardingDraft(
 
 export function createLocalOnboardingDraftAdapter(
   storage: OnboardingStorage,
-  allowedSymbols: readonly CanonicalSymbol[],
+  allowedInstruments: readonly (CanonicalSymbol | OnboardingInstrument)[],
   clock: () => Date = () => new Date(),
 ): OnboardingDraftAdapter {
   return {
     async load() {
       return parseOnboardingDraft(
         storage.getItem(ONBOARDING_DRAFT_KEY),
-        allowedSymbols,
+        allowedInstruments,
         clock().toISOString(),
       );
     },
@@ -258,8 +360,8 @@ export function createLocalOnboardingDraftAdapter(
         storage.setItem(
           DASHBOARD_PREFERENCES_KEY,
           JSON.stringify({
-            version: 1,
-            watchlist: completed.symbols,
+            version: DASHBOARD_PREFERENCES_VERSION,
+            instruments: completed.instruments,
             selectedSymbol: completed.symbols[0],
             timeframe: "1D",
           }),

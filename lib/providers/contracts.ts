@@ -4,6 +4,9 @@ import type { ProviderHealth, RawSourceEvent } from "@/lib/pipeline/contracts";
 export interface MarketDataProvider {
   readonly name: string;
   getSnapshot(symbol: CanonicalSymbol): Promise<MarketSnapshot>;
+  getSnapshots?(
+    symbols: CanonicalSymbol[],
+  ): Promise<ReadonlyMap<CanonicalSymbol, MarketSnapshot>>;
   getHealth(): Promise<ProviderHealth>;
 }
 

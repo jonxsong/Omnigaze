@@ -313,6 +313,60 @@ describe("authenticated onboarding sync API", () => {
     expect(JSON.stringify(body)).not.toContain("default-list-private-id");
   });
 
+  it("accepts an arbitrary v2 catalog selection only after exact server resolution", async () => {
+    const response = await POST(
+      draftRequest(
+        draft({
+          version: 2,
+          symbols: ["NYSE:IBM"],
+          instruments: [
+            {
+              id: "NYSE:IBM",
+              ticker: "IBM",
+              exchange: "NYSE",
+              name: "Browser-supplied display name",
+              sector: null,
+              currency: "USD",
+            },
+          ],
+          positions: [
+            {
+              symbolId: "NYSE:IBM",
+              owned: true,
+              shares: "4.5",
+              averageCost: "205.25",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.resolveCanonicalInstrument).toHaveBeenCalledWith("NYSE:IBM");
+    expect(mocks.addSymbolToWatchlist).toHaveBeenCalledWith(
+      "user-a",
+      "default-list-private-id",
+      "NYSE:IBM",
+      expect.objectContaining({
+        id: "NYSE:IBM",
+        ticker: "IBM",
+        name: "IBM Incorporated",
+      }),
+    );
+    expect(mocks.putPortfolioHolding).toHaveBeenCalledWith(
+      "user-a",
+      "NYSE:IBM",
+      expect.objectContaining({
+        quantity: "4.5",
+        average_cost: "205.25",
+        expected_version: 0,
+      }),
+    );
+    expect(JSON.stringify(await response.json())).not.toContain(
+      "Browser-supplied display name",
+    );
+  });
+
   it("treats a create race as preserved and never retries an overwrite", async () => {
     mocks.putPortfolioHolding.mockRejectedValue(
       new mocks.PortfolioRepositoryError("holding_version_conflict"),

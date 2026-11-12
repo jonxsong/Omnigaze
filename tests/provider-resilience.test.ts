@@ -60,6 +60,46 @@ describe("market provider resilience", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("loads multiple quotes in one bounded request and isolates malformed peers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        NVDA: {
+          latestTrade: { p: 201.25, t: "2026-11-11T18:42:03.000Z" },
+          dailyBar: { c: 201.1, v: 42_000_000 },
+          prevDailyBar: { c: 198.5 },
+        },
+        MSFT: {
+          latestTrade: { p: 510.5 },
+          dailyBar: { c: 509, v: 20_000_000 },
+          prevDailyBar: { c: 505 },
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new AlpacaProvider({
+      keyId: "test-key-id",
+      secretKey: "test-secret-value",
+      feed: "iex",
+    });
+
+    const snapshots = await provider.getSnapshots([
+      "NASDAQ:NVDA",
+      "NASDAQ:MSFT",
+    ]);
+
+    expect([...snapshots.keys()]).toEqual(["NASDAQ:NVDA"]);
+    expect(snapshots.get("NASDAQ:NVDA")).toMatchObject({
+      symbolId: "NASDAQ:NVDA",
+      price: 201.25,
+      provider: "Alpaca iex",
+    });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const requestedUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(requestedUrl.pathname).toBe("/v2/stocks/snapshots");
+    expect(requestedUrl.searchParams.get("symbols")).toBe("NVDA,MSFT");
+    expect(requestedUrl.searchParams.get("feed")).toBe("iex");
+  });
+
   it("fails closed on an upstream Alpaca error without putting credentials in the error", async () => {
     vi.stubGlobal(
       "fetch",

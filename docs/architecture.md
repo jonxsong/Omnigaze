@@ -59,7 +59,7 @@ flowchart LR
 - User identity is derived at the server boundary; callers cannot choose an `ownerId`.
 - Anonymous onboarding is versioned and device-local. Authenticated holdings use owner-scoped D1 rows with optimistic version checks; a sign-in merge must never silently overwrite positions.
 - Authenticated inbox and alert-rule writes are owner-scoped and compare both user-state versions and event revisions. Exact retries return the current state; conflicting stale writes do not overwrite newer data.
-- Raw provider payloads are retained for auditability, while corrected events are appended rather than silently overwritten.
+- The durable collection ledger retains a minimal, redacted provider envelope plus content digests and revision timestamps; it never stores credentials, request headers, cursor tokens, or article bodies. Corrected events preserve stable provider identity and revision history rather than silently replacing user state.
 
 ## Failure model
 

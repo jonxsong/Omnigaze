@@ -27,7 +27,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { stockWorkspaces } from "@/lib/demo-market-data";
-import type { CanonicalSymbol, Instrument } from "@/lib/market-types";
+import type { CanonicalSymbol } from "@/lib/market-types";
 import {
   createEmptyOnboardingDraft,
   createLocalOnboardingDraftAdapter,
@@ -36,6 +36,7 @@ import {
   type OnboardingGoal,
   type OnboardingHorizon,
   type OnboardingLiquidityNeed,
+  type OnboardingInstrument,
   type OnboardingPosition,
   type OnboardingRiskProfile,
   type OnboardingStep,
@@ -167,11 +168,25 @@ const liquidityLabels = new Map(
   liquidityOptions.map((option) => [option.value, option.label]),
 );
 
-const instruments = stockWorkspaces.map((workspace) => workspace.instrument);
-const supportedSymbols = instruments.map((instrument) => instrument.id);
-const instrumentsById = new Map(
-  instruments.map((instrument) => [instrument.id, instrument]),
+const featuredInstruments: OnboardingInstrument[] = stockWorkspaces.map(
+  ({ instrument }) => ({
+    id: instrument.id,
+    ticker: instrument.ticker,
+    exchange: instrument.exchange,
+    name: instrument.name,
+    sector: instrument.sector || null,
+    currency: "USD",
+  }),
 );
+
+type CatalogSearchResource = {
+  query: string;
+  phase: "idle" | "loading" | "ready" | "error";
+  data: OnboardingInstrument[];
+  catalogAsOf?: string;
+  freshness?: "fresh" | "stale";
+  error?: string;
+};
 
 type SaveState = "restoring" | "saving" | "saved" | "error";
 
@@ -224,7 +239,7 @@ function cleanNumericInput(value: string, decimalPlaces: number) {
   return `${whole.slice(0, 12)}.${decimalParts.join("").slice(0, decimalPlaces)}`;
 }
 
-function StockIdentity({ instrument }: { instrument: Instrument }) {
+function StockIdentity({ instrument }: { instrument: OnboardingInstrument }) {
   return (
     <span className={styles.stockIdentity}>
       <span className={styles.stockAvatar}>{instrument.ticker[0]}</span>
@@ -237,9 +252,13 @@ function StockIdentity({ instrument }: { instrument: Instrument }) {
 }
 
 function SetupPreview({ draft }: { draft: OnboardingDraft }) {
-  const selected = draft.symbols
-    .map((symbol) => instrumentsById.get(symbol))
-    .filter(Boolean) as Instrument[];
+  const selectedById = new Map(
+    draft.instruments.map((instrument) => [instrument.id, instrument]),
+  );
+  const selected = draft.symbols.flatMap((symbol) => {
+    const instrument = selectedById.get(symbol);
+    return instrument ? [instrument] : [];
+  });
   const owned = draft.positions.filter((position) => position.owned);
 
   return (
@@ -262,7 +281,7 @@ function SetupPreview({ draft }: { draft: OnboardingDraft }) {
             {selected.slice(0, 5).map((instrument) => (
               <div key={instrument.id}>
                 <span className={styles.stockAvatar}>{instrument.ticker[0]}</span>
-                <span><strong>{instrument.ticker}</strong><small>{instrument.sector}</small></span>
+                <span><strong>{instrument.ticker}</strong><small>{instrument.sector ?? instrument.exchange}</small></span>
                 {owned.some((position) => position.symbolId === instrument.id) && (
                   <span className={styles.ownedBadge}>OWNED</span>
                 )}
@@ -325,6 +344,11 @@ export function OmnigazeOnboarding({
   const [hydrated, setHydrated] = useState(false);
   const [saveState, setSaveState] = useState<SaveState>("restoring");
   const [query, setQuery] = useState("");
+  const [catalogSearch, setCatalogSearch] = useState<CatalogSearchResource>({
+    query: "",
+    phase: "idle",
+    data: [],
+  });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isCompleting, setIsCompleting] = useState(false);
 
@@ -332,7 +356,7 @@ export function OmnigazeOnboarding({
     let active = true;
     const adapter = createLocalOnboardingDraftAdapter(
       window.localStorage,
-      supportedSymbols,
+      featuredInstruments,
     );
     adapterRef.current = adapter;
 
@@ -373,23 +397,151 @@ export function OmnigazeOnboarding({
     window.requestAnimationFrame(() => headingRef.current?.focus());
   }, [draft.currentStep, hydrated]);
 
+  useEffect(() => {
+    const normalizedQuery = query.trim();
+    if (!normalizedQuery) return;
+
+    const controller = new AbortController();
+    let stopped = false;
+    const timer = window.setTimeout(() => {
+      setCatalogSearch((current) => ({
+        ...current,
+        query: normalizedQuery,
+        phase: "loading",
+        error: undefined,
+      }));
+      void fetch(
+        `/api/assets/search?q=${encodeURIComponent(normalizedQuery)}&limit=20`,
+        {
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        },
+      )
+        .then(async (response) => {
+          const body = (await response.json().catch(() => null)) as
+            | {
+                data?: Array<{
+                  symbolId?: unknown;
+                  symbol?: unknown;
+                  exchange?: unknown;
+                  name?: unknown;
+                }>;
+                meta?: {
+                  catalogAsOf?: unknown;
+                  freshness?: { state?: unknown };
+                };
+                error?: unknown;
+              }
+            | null;
+          if (!response.ok) {
+            throw new Error(
+              typeof body?.error === "string"
+                ? body.error
+                : "Stock search is temporarily unavailable.",
+            );
+          }
+          const data = Array.isArray(body?.data)
+            ? body.data.flatMap((candidate): OnboardingInstrument[] => {
+                const id =
+                  typeof candidate.symbolId === "string"
+                    ? candidate.symbolId.trim().toUpperCase()
+                    : "";
+                const ticker =
+                  typeof candidate.symbol === "string"
+                    ? candidate.symbol.trim().toUpperCase()
+                    : "";
+                const exchange =
+                  typeof candidate.exchange === "string"
+                    ? candidate.exchange.trim().toUpperCase()
+                    : "";
+                const name =
+                  typeof candidate.name === "string"
+                    ? candidate.name.trim()
+                    : "";
+                if (
+                  !/^[A-Z0-9._-]+:[A-Z0-9._-]+$/.test(id) ||
+                  !ticker ||
+                  !exchange ||
+                  `${exchange}:${ticker}` !== id ||
+                  !name
+                ) {
+                  return [];
+                }
+                return [{
+                  id: id as CanonicalSymbol,
+                  ticker,
+                  exchange,
+                  name,
+                  sector: null,
+                  currency: "USD",
+                }];
+              })
+            : [];
+          if (stopped) return;
+          setCatalogSearch({
+            query: normalizedQuery,
+            phase: "ready",
+            data,
+            catalogAsOf:
+              typeof body?.meta?.catalogAsOf === "string"
+                ? body.meta.catalogAsOf
+                : undefined,
+            freshness:
+              body?.meta?.freshness?.state === "stale" ? "stale" : "fresh",
+          });
+        })
+        .catch((error) => {
+          if (stopped || controller.signal.aborted) return;
+          setCatalogSearch({
+            query: normalizedQuery,
+            phase: "error",
+            data: [],
+            error:
+              error instanceof Error
+                ? error.message
+                : "Stock search is temporarily unavailable.",
+          });
+        });
+    }, 250);
+
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query]);
+
   const selectedStocks = useMemo(
-    () =>
-      draft.symbols
-        .map((symbol) => instrumentsById.get(symbol))
-        .filter(Boolean) as Instrument[],
-    [draft.symbols],
+    () => {
+      const selectedById = new Map(
+        draft.instruments.map((instrument) => [instrument.id, instrument]),
+      );
+      return draft.symbols.flatMap((symbol) => {
+        const instrument = selectedById.get(symbol);
+        return instrument ? [instrument] : [];
+      });
+    },
+    [draft.instruments, draft.symbols],
   );
 
-  const filteredStocks = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return instruments;
-    return instruments.filter(
-      (instrument) =>
-        instrument.ticker.toLowerCase().includes(normalized) ||
-        instrument.name.toLowerCase().includes(normalized),
-    );
-  }, [query]);
+  const normalizedQuery = query.trim();
+  const catalogMatchesQuery = catalogSearch.query === normalizedQuery;
+  const activeCatalogPhase = normalizedQuery
+    ? catalogMatchesQuery
+      ? catalogSearch.phase
+      : "loading"
+    : "idle";
+  const visibleStocks = normalizedQuery
+    ? catalogMatchesQuery
+      ? catalogSearch.data
+      : []
+    : featuredInstruments;
+  const selectedInstrumentById = useMemo(
+    () => new Map(selectedStocks.map((instrument) => [instrument.id, instrument])),
+    [selectedStocks],
+  );
 
   const ownedPositions = draft.positions.filter((position) => position.owned);
 
@@ -406,19 +558,32 @@ export function OmnigazeOnboarding({
     [],
   );
 
-  function toggleSymbol(symbolId: CanonicalSymbol) {
+  function toggleInstrument(instrument: OnboardingInstrument) {
+    const symbolId = instrument.id;
     updateDraft((current) => {
       if (current.symbols.includes(symbolId)) {
         return {
           ...current,
           symbols: current.symbols.filter((symbol) => symbol !== symbolId),
+          instruments: current.instruments.filter(
+            (candidate) => candidate.id !== symbolId,
+          ),
           positions: current.positions.filter(
             (position) => position.symbolId !== symbolId,
           ),
         };
       }
       if (current.symbols.length >= ONBOARDING_MAX_SYMBOLS) return current;
-      return { ...current, symbols: [...current.symbols, symbolId] };
+      return {
+        ...current,
+        symbols: [...current.symbols, symbolId],
+        instruments: [
+          ...current.instruments.filter(
+            (candidate) => candidate.id !== symbolId,
+          ),
+          instrument,
+        ],
+      };
     });
   }
 
@@ -472,7 +637,7 @@ export function OmnigazeOnboarding({
 
     if (draft.currentStep === 1) {
       for (const position of ownedPositions) {
-        const instrument = instrumentsById.get(position.symbolId);
+        const instrument = selectedInstrumentById.get(position.symbolId);
         if (!isValidShareQuantity(position.shares)) {
           nextErrors[`shares-${position.symbolId}`] = `Enter a share quantity for ${instrument?.ticker ?? position.symbolId}.`;
         }
@@ -598,18 +763,34 @@ export function OmnigazeOnboarding({
             <input
               id="stocks"
               type="search"
+              maxLength={64}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search by company or ticker"
-              aria-label="Search supported stocks"
+              placeholder="Search any active U.S. stock"
+              aria-label="Search active U.S. stocks"
               aria-describedby={errors.stocks ? "stocks-error" : "stock-search-note"}
               aria-invalid={Boolean(errors.stocks)}
             />
             <span>{draft.symbols.length}/{ONBOARDING_MAX_SYMBOLS}</span>
           </div>
           <p id="stock-search-note" className={styles.fieldNote}>
-            Current alpha coverage includes {instruments.length} supported companies. No brokerage connection is required.
+            Search the active U.S. equity catalog. Featured companies appear before you type; no brokerage connection is required.
           </p>
+          {activeCatalogPhase === "loading" && (
+            <p className={styles.fieldNote} role="status">
+              <LoaderCircle size={13} className={styles.spinner} /> Searching the live asset catalog…
+            </p>
+          )}
+          {activeCatalogPhase === "ready" && catalogSearch.freshness === "stale" && (
+            <p className={styles.fieldNote} role="status">
+              Catalog refresh is delayed; showing the latest verified cached matches.
+            </p>
+          )}
+          {activeCatalogPhase === "error" && (
+            <p className={styles.fieldError} role="alert">
+              {catalogSearch.error ?? "Stock search is temporarily unavailable."} Your selected companies are still saved.
+            </p>
+          )}
           {errors.stocks && <p id="stocks-error" className={styles.fieldError}>{errors.stocks}</p>}
 
           {draft.symbols.length > 0 && (
@@ -622,7 +803,7 @@ export function OmnigazeOnboarding({
                   <button
                     type="button"
                     key={instrument.id}
-                    onClick={() => toggleSymbol(instrument.id)}
+                    onClick={() => toggleInstrument(instrument)}
                     aria-label={`Remove ${instrument.ticker}`}
                   >
                     <span>{instrument.ticker}</span><Trash2 size={12} />
@@ -632,9 +813,9 @@ export function OmnigazeOnboarding({
             </div>
           )}
 
-          <div className={styles.stockResults} aria-label="Supported stocks">
-            {filteredStocks.length > 0 ? (
-              filteredStocks.map((instrument) => {
+          <div className={styles.stockResults} aria-label={normalizedQuery ? "Asset catalog matches" : "Featured stocks"}>
+            {visibleStocks.length > 0 ? (
+              visibleStocks.map((instrument) => {
                 const selected = draft.symbols.includes(instrument.id);
                 return (
                   <button
@@ -642,11 +823,11 @@ export function OmnigazeOnboarding({
                     key={instrument.id}
                     className={selected ? styles.stockSelected : undefined}
                     aria-pressed={selected}
-                    onClick={() => toggleSymbol(instrument.id)}
+                    onClick={() => toggleInstrument(instrument)}
                   >
                     <StockIdentity instrument={instrument} />
                     <span className={styles.stockMeta}>
-                      <small>{instrument.exchange} · {instrument.sector}</small>
+                      <small>{instrument.exchange}{instrument.sector ? ` · ${instrument.sector}` : ""}</small>
                       <span className={styles.selectionMark}>
                         {selected ? <Check size={14} /> : <span>+</span>}
                       </span>
@@ -654,10 +835,20 @@ export function OmnigazeOnboarding({
                   </button>
                 );
               })
+            ) : activeCatalogPhase === "loading" ? (
+              <div className={styles.noResults} role="status">
+                <LoaderCircle className={styles.spinner} size={18} />
+                <div><strong>Searching the catalog</strong><span>Checking active U.S. equities.</span></div>
+              </div>
+            ) : activeCatalogPhase === "error" ? (
+              <div className={styles.noResults}>
+                <Search size={18} />
+                <div><strong>Catalog unavailable</strong><span>Try again shortly; your draft is unchanged.</span></div>
+              </div>
             ) : (
               <div className={styles.noResults}>
                 <Search size={18} />
-                <div><strong>No supported match</strong><span>Try NVDA, Microsoft, AMD, Apple, or Tesla.</span></div>
+                <div><strong>No active U.S. equity match</strong><span>Try the full ticker or company name.</span></div>
               </div>
             )}
           </div>
@@ -925,7 +1116,7 @@ export function OmnigazeOnboarding({
               <ul className={styles.reviewList}>
                 {ownedPositions.map((position) => (
                   <li key={position.symbolId}>
-                    <strong>{instrumentsById.get(position.symbolId)?.ticker}</strong>
+                    <strong>{selectedInstrumentById.get(position.symbolId)?.ticker}</strong>
                     <span>{position.shares} shares{position.averageCost ? ` · $${position.averageCost} avg.` : ""}</span>
                   </li>
                 ))}
@@ -960,7 +1151,7 @@ export function OmnigazeOnboarding({
             <p>
               {isAuthenticated
                 ? "Completing setup adds these stocks and new positions to your account. Existing watchlists and holdings are preserved; research preferences stay on this device for now."
-                : "This anonymous alpha stores setup in your browser. You can sign in from the dashboard to sync the supported watchlist across devices."}
+                : "This anonymous alpha stores setup in your browser. You can sign in from the dashboard to sync the watchlist across devices."}
             </p>
           </div>
           <span>{isAuthenticated ? "ACCOUNT" : "LOCAL"}</span>

@@ -73,6 +73,7 @@ describe("anonymous onboarding draft", () => {
     );
 
     expect(parsed).toMatchObject({
+      version: 2,
       currentStep: 2,
       highestStep: 3,
       symbols: ["NASDAQ:NVDA", "NASDAQ:MSFT"],
@@ -89,6 +90,85 @@ describe("anonymous onboarding draft", () => {
         averageCost: "104.50",
       },
     ]);
+    expect(parsed?.instruments).toEqual([
+      {
+        id: "NASDAQ:NVDA",
+        ticker: "NVDA",
+        exchange: "NASDAQ",
+        name: "NVDA",
+        sector: null,
+        currency: "USD",
+      },
+      {
+        id: "NASDAQ:MSFT",
+        ticker: "MSFT",
+        exchange: "NASDAQ",
+        name: "MSFT",
+        sector: null,
+        currency: "USD",
+      },
+    ]);
+  });
+
+  it("retains safe arbitrary catalog instruments in v2 and drops mismatched descriptors", () => {
+    const parsed = parseOnboardingDraft(
+      JSON.stringify({
+        version: 2,
+        currentStep: 1,
+        highestStep: 1,
+        symbols: ["NYSE:IBM", "NASDAQ:BAD", "NYSE:IBM"],
+        instruments: [
+          {
+            id: "NYSE:IBM",
+            ticker: "IBM",
+            exchange: "NYSE",
+            name: "International Business Machines Corporation",
+            sector: null,
+            currency: "USD",
+          },
+          {
+            id: "NASDAQ:BAD",
+            ticker: "OTHER",
+            exchange: "NYSE",
+            name: "Mismatched identity",
+            sector: null,
+            currency: "USD",
+          },
+        ],
+        positions: [
+          {
+            symbolId: "NYSE:IBM",
+            owned: true,
+            shares: "3.5",
+            averageCost: "210.25",
+          },
+        ],
+        goals: [],
+        horizon: null,
+        riskProfile: null,
+        liquidityNeed: null,
+        holdingsSkipped: false,
+        preferencesSkipped: false,
+        updatedAt: "2026-11-11T20:00:00.000Z",
+        completedAt: null,
+      }),
+      supported,
+    );
+
+    expect(parsed).toMatchObject({
+      version: 2,
+      symbols: ["NYSE:IBM"],
+      instruments: [
+        {
+          id: "NYSE:IBM",
+          ticker: "IBM",
+          exchange: "NYSE",
+          name: "International Business Machines Corporation",
+          currency: "USD",
+        },
+      ],
+      positions: [{ symbolId: "NYSE:IBM", shares: "3.5" }],
+    });
   });
 
   it("persists a resumable draft and hands its watchlist to the dashboard", async () => {
@@ -100,6 +180,24 @@ describe("anonymous onboarding draft", () => {
       currentStep: 3 as const,
       highestStep: 3 as const,
       symbols: ["NASDAQ:NVDA", "NASDAQ:MSFT"] as CanonicalSymbol[],
+      instruments: [
+        {
+          id: "NASDAQ:NVDA" as const,
+          ticker: "NVDA",
+          exchange: "NASDAQ",
+          name: "NVIDIA Corporation",
+          sector: "Technology",
+          currency: "USD" as const,
+        },
+        {
+          id: "NASDAQ:MSFT" as const,
+          ticker: "MSFT",
+          exchange: "NASDAQ",
+          name: "Microsoft Corporation",
+          sector: "Technology",
+          currency: "USD" as const,
+        },
+      ],
     };
 
     await adapter.save(draft);
@@ -109,8 +207,8 @@ describe("anonymous onboarding draft", () => {
     expect(completed.completedAt).toBe("2026-11-11T22:00:00.000Z");
     expect(JSON.parse(storage.values.get(DASHBOARD_PREFERENCES_KEY) ?? "null"))
       .toEqual({
-        version: 1,
-        watchlist: ["NASDAQ:NVDA", "NASDAQ:MSFT"],
+        version: 2,
+        instruments: draft.instruments,
         selectedSymbol: "NASDAQ:NVDA",
         timeframe: "1D",
       });

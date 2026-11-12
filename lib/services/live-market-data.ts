@@ -445,6 +445,128 @@ export class LiveMarketDataOrchestrator {
     };
   }
 
+  async getSnapshots(
+    symbols: CanonicalSymbol[],
+  ): Promise<ReadonlyMap<CanonicalSymbol, OrchestratedSnapshot>> {
+    const uniqueSymbols = [...new Set(symbols)];
+    const results = new Map<CanonicalSymbol, OrchestratedSnapshot>();
+    if (uniqueSymbols.length === 0) return results;
+
+    const now = this.now();
+    const initialReport = await safeHealth(
+      this.dependencies.marketProvider,
+      this.marketCapabilities,
+      now,
+    );
+
+    const fixtureResult = (
+      symbol: CanonicalSymbol,
+      report: ProviderReport,
+      fallbackReason: NonNullable<OrchestrationMeta["fallbackReason"]>,
+    ): OrchestratedSnapshot => {
+      const fixture = this.getDemoSnapshot(symbol);
+      return {
+        data: fixture,
+        meta: {
+          dataMode: "demo",
+          mode: "demo",
+          providerCoverage: "demo",
+          coverage: "demo",
+          generatedAt: now.toISOString(),
+          freshness: freshnessFor(fixture?.asOf ?? null, now, { fixture: true }),
+          providers: [report],
+          fallbackReason,
+          notice: DEMO_NOTICE,
+        },
+      };
+    };
+
+    if (initialReport.status !== "healthy") {
+      for (const symbol of uniqueSymbols) {
+        results.set(
+          symbol,
+          fixtureResult(symbol, initialReport, "provider_unconfigured"),
+        );
+      }
+      return results;
+    }
+
+    const snapshots = new Map<CanonicalSymbol, MarketSnapshot>();
+    const batchMethod = this.dependencies.marketProvider.getSnapshots;
+
+    if (batchMethod) {
+      try {
+        const batch = await batchMethod.call(
+          this.dependencies.marketProvider,
+          uniqueSymbols,
+        );
+        for (const symbol of uniqueSymbols) {
+          const snapshot = batch.get(symbol);
+          if (snapshot?.symbolId === symbol) snapshots.set(symbol, snapshot);
+        }
+      } catch {
+        // A failed batch degrades every requested symbol independently below.
+      }
+    } else {
+      const outcomes = await Promise.allSettled(
+        uniqueSymbols.map((symbol) =>
+          this.dependencies.marketProvider.getSnapshot(symbol),
+        ),
+      );
+      outcomes.forEach((outcome, index) => {
+        const symbol = uniqueSymbols[index];
+        if (
+          outcome.status === "fulfilled" &&
+          outcome.value.symbolId === symbol
+        ) {
+          snapshots.set(symbol, outcome.value);
+        }
+      });
+    }
+
+    for (const symbol of uniqueSymbols) {
+      const snapshot = snapshots.get(symbol);
+      if (snapshot) {
+        const report: ProviderReport = {
+          ...initialReport,
+          attempted: true,
+          latestObservedAt: snapshot.asOf,
+        };
+        const coverage =
+          snapshot.marketCoverage === "limited-exchange" ? "partial" : "complete";
+        results.set(symbol, {
+          data: snapshot,
+          meta: {
+            dataMode: "live",
+            mode: "live",
+            providerCoverage: coverage,
+            coverage,
+            generatedAt: now.toISOString(),
+            freshness: freshnessFor(snapshot.asOf, now, {
+              allowedAgeSeconds: Math.max(1_200, snapshot.delaySeconds + 300),
+            }),
+            providers: [report],
+            notice: LIVE_NOTICE,
+          },
+        });
+        continue;
+      }
+
+      const report: ProviderReport = {
+        ...initialReport,
+        status: "degraded",
+        attempted: true,
+        message: errorMessage(initialReport.provider),
+      };
+      results.set(
+        symbol,
+        fixtureResult(symbol, report, "provider_request_failed"),
+      );
+    }
+
+    return results;
+  }
+
   async getIntelligenceFeed(options: {
     symbols?: CanonicalSymbol[];
     since: string;

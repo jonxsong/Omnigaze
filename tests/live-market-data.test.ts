@@ -155,6 +155,53 @@ describe("live market data orchestration", () => {
     });
   });
 
+  it("keeps valid batch quotes live while degrading only unavailable symbols", async () => {
+    let batchCalls = 0;
+    const provider = marketProvider();
+    provider.getSnapshots = async () => {
+      batchCalls += 1;
+      return new Map([["NASDAQ:NVDA", liveSnapshot()]]);
+    };
+    const service = new LiveMarketDataOrchestrator({
+      marketProvider: provider,
+      intelligenceProviders: [],
+      getDemoSnapshot: (symbol) => ({
+        ...liveSnapshot(),
+        symbolId: symbol,
+        provider: "fixture",
+        marketCoverage: "fixture",
+      }),
+      getDemoEvents: () => [],
+      now: () => NOW,
+    });
+
+    const results = await service.getSnapshots([
+      "NASDAQ:NVDA",
+      "NASDAQ:MSFT",
+    ]);
+
+    expect(batchCalls).toBe(1);
+    expect(results.get("NASDAQ:NVDA")).toMatchObject({
+      data: { symbolId: "NASDAQ:NVDA", provider: "Alpaca iex" },
+      meta: {
+        dataMode: "live",
+        providers: [{ status: "healthy", attempted: true }],
+      },
+    });
+    expect(results.get("NASDAQ:MSFT")).toMatchObject({
+      data: {
+        symbolId: "NASDAQ:MSFT",
+        provider: "fixture",
+        marketCoverage: "fixture",
+      },
+      meta: {
+        dataMode: "demo",
+        fallbackReason: "provider_request_failed",
+        providers: [{ status: "degraded", attempted: true }],
+      },
+    });
+  });
+
   it("preserves a valid empty live feed instead of injecting demo events", async () => {
     const result = await orchestrator().getIntelligenceFeed({
       symbols: ["NASDAQ:NVDA"],

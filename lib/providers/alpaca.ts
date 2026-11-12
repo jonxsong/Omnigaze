@@ -47,6 +47,12 @@ type AlpacaNewsItem = {
   symbols?: string[];
 };
 
+type AlpacaSnapshotPayload = {
+  latestTrade?: { p?: number; t?: string };
+  dailyBar?: { c?: number; v?: number; t?: string };
+  prevDailyBar?: { c?: number };
+};
+
 function isAlpacaNewsItem(value: unknown): value is AlpacaNewsItem {
   if (!value || typeof value !== "object") return false;
   const item = value as Record<string, unknown>;
@@ -64,6 +70,47 @@ function isAlpacaNewsItem(value: unknown): value is AlpacaNewsItem {
 
 function tickerFromSymbol(symbol: CanonicalSymbol) {
   return symbol.split(":")[1];
+}
+
+function normalizeSnapshot(
+  symbol: CanonicalSymbol,
+  data: AlpacaSnapshotPayload,
+  feed: NonNullable<AlpacaConfig["feed"]>,
+): MarketSnapshot {
+  const price = data.latestTrade?.p ?? data.dailyBar?.c;
+  const previousClose = data.prevDailyBar?.c;
+  const asOf = data.latestTrade?.t ?? data.dailyBar?.t;
+  if (
+    typeof price !== "number" ||
+    !Number.isFinite(price) ||
+    typeof previousClose !== "number" ||
+    !Number.isFinite(previousClose) ||
+    previousClose === 0 ||
+    typeof asOf !== "string" ||
+    !Number.isFinite(Date.parse(asOf))
+  ) {
+    throw new Error("Alpaca returned an incomplete snapshot");
+  }
+
+  const change = price - previousClose;
+  return {
+    symbolId: symbol,
+    asOf,
+    session: "regular",
+    price,
+    previousClose,
+    change,
+    changePercent: (change / previousClose) * 100,
+    volume:
+      typeof data.dailyBar?.v === "number" && Number.isFinite(data.dailyBar.v)
+        ? data.dailyBar.v
+        : 0,
+    marketCap: "Unavailable",
+    isDelayed: feed === "delayed_sip",
+    delaySeconds: feed === "delayed_sip" ? 900 : 0,
+    provider: `Alpaca ${feed}`,
+    marketCoverage: feed === "iex" ? "limited-exchange" : "consolidated",
+  };
 }
 
 function normalizedTimestamp(value: string, field: string) {
@@ -141,39 +188,51 @@ export class AlpacaProvider
       throw new Error(`Alpaca snapshot failed with ${response.status}`);
     }
 
-    const data = (await response.json()) as {
-      latestTrade?: { p?: number; t?: string };
-      dailyBar?: { c?: number; v?: number; t?: string };
-      prevDailyBar?: { c?: number };
-    };
-    const price = data.latestTrade?.p ?? data.dailyBar?.c;
-    const previousClose = data.prevDailyBar?.c;
-    const asOf = data.latestTrade?.t ?? data.dailyBar?.t;
-    if (
-      typeof price !== "number" ||
-      typeof previousClose !== "number" ||
-      typeof asOf !== "string" ||
-      !Number.isFinite(Date.parse(asOf))
-    ) {
-      throw new Error("Alpaca returned an incomplete snapshot");
+    return normalizeSnapshot(symbol, (await response.json()) as AlpacaSnapshotPayload, feed);
+  }
+
+  async getSnapshots(
+    symbols: CanonicalSymbol[],
+  ): Promise<ReadonlyMap<CanonicalSymbol, MarketSnapshot>> {
+    const uniqueSymbols = [...new Set(symbols)];
+    if (uniqueSymbols.length === 0) return new Map();
+
+    const feed = this.config.feed ?? "iex";
+    const url = new URL("https://data.alpaca.markets/v2/stocks/snapshots");
+    url.searchParams.set(
+      "symbols",
+      uniqueSymbols.map((symbol) => tickerFromSymbol(symbol)).join(","),
+    );
+    url.searchParams.set("feed", feed);
+
+    const response = await fetch(url, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) {
+      throw new Error(`Alpaca snapshots failed with ${response.status}`);
     }
 
-    const change = price - previousClose;
-    return {
-      symbolId: symbol,
-      asOf,
-      session: "regular",
-      price,
-      previousClose,
-      change,
-      changePercent: (change / previousClose) * 100,
-      volume: data.dailyBar?.v ?? 0,
-      marketCap: "Unavailable",
-      isDelayed: feed === "delayed_sip",
-      delaySeconds: feed === "delayed_sip" ? 900 : 0,
-      provider: `Alpaca ${feed}`,
-      marketCoverage: feed === "iex" ? "limited-exchange" : "consolidated",
-    };
+    const body = (await response.json()) as unknown;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      throw new Error("Alpaca returned an incomplete snapshots response");
+    }
+
+    const snapshotsByTicker = body as Record<string, unknown>;
+    const snapshots = new Map<CanonicalSymbol, MarketSnapshot>();
+    for (const symbol of uniqueSymbols) {
+      const payload = snapshotsByTicker[tickerFromSymbol(symbol)];
+      if (!payload || typeof payload !== "object") continue;
+      try {
+        snapshots.set(
+          symbol,
+          normalizeSnapshot(symbol, payload as AlpacaSnapshotPayload, feed),
+        );
+      } catch {
+        // One malformed or unavailable symbol must not discard valid peers.
+      }
+    }
+    return snapshots;
   }
 
   async getHistoricalBars(

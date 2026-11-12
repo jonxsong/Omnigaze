@@ -66,24 +66,28 @@ describe("MCP JSON-RPC response stability", () => {
     });
   });
 
-  it("returns a stable evidence view envelope with delayed-data metadata", async () => {
-    const body = await rpc("tools/call", {
-      name: "get_omnigaze_view",
-      arguments: { symbol_id: "NASDAQ:MSFT" },
-    });
-    const result = body.result as { content: Array<{ type: string; text: string }> };
-    const content = JSON.parse(result.content[0].text) as {
-      data: { view: { symbolId: string; dataCutoff: string }; evidence: unknown[] };
-      meta: { mode: string; isDelayed: boolean; provider: string };
+  it("fails the live Omnigaze View closed without authenticated identity", async () => {
+    const body = (await (
+      await request(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: "view-contract-test",
+          method: "tools/call",
+          params: {
+            name: "get_omnigaze_view",
+            arguments: { symbol_id: "NASDAQ:MSFT" },
+          },
+        }),
+      )
+    ).json()) as {
+      result: { isError?: boolean; content: Array<{ type: string; text: string }> };
     };
 
-    expect(content.data.view.symbolId).toBe("NASDAQ:MSFT");
-    expect(Number.isNaN(Date.parse(content.data.view.dataCutoff))).toBe(false);
-    expect(content.data.evidence.length).toBeGreaterThan(0);
-    expect(content.meta).toMatchObject({
-      mode: "demo",
-      isDelayed: true,
-      provider: "Omnigaze fixture provider",
+    expect(body.result.isError).toBe(true);
+    expect(body.result.content[0].type).toBe("text");
+    expect(JSON.parse(body.result.content[0].text)).toMatchObject({
+      error: "Authentication required.",
+      details: { code: "auth_required" },
     });
   });
 });

@@ -82,6 +82,7 @@ import {
   type IntelligenceInboxTab,
 } from "@/components/intelligence-inbox-drawer";
 import type { IntelligenceInboxCounts } from "@/lib/intelligence-inbox/contracts";
+import { OmnigazeViewDialog } from "@/components/omnigaze-view-dialog";
 
 const timeframes = ["1D", "1W", "1M", "3M", "1Y"] as const;
 type Timeframe = (typeof timeframes)[number];
@@ -287,6 +288,30 @@ interface SnapshotResource {
   phase: FetchPhase;
   receivedAt?: string;
   error?: string;
+}
+
+interface SnapshotBatchResponse {
+  data: Array<
+    | {
+        symbolId: CanonicalSymbol;
+        status: "ready";
+        data: MarketSnapshot;
+        meta: OrchestrationMeta;
+      }
+    | {
+        symbolId: CanonicalSymbol;
+        status: "error";
+        code: string;
+        error: string;
+      }
+  >;
+  meta: {
+    requestedCount: number;
+    readyCount: number;
+    errorCount: number;
+    partial: boolean;
+    generatedAt: string;
+  };
 }
 
 interface IntelligenceResource {
@@ -689,6 +714,7 @@ export function MarketDashboard({
   const [showSearch, setShowSearch] = useState(false);
   const [showMobileWatchlist, setShowMobileWatchlist] = useState(false);
   const [insightTab, setInsightTab] = useState<"view" | "evidence">("view");
+  const [omnigazeViewOpen, setOmnigazeViewOpen] = useState(false);
   const [portfolioWorkspaceOpen, setPortfolioWorkspaceOpen] = useState(false);
   const [portfolioWorkspaceInitialView, setPortfolioWorkspaceInitialView] =
     useState<"position" | "research">("position");
@@ -926,50 +952,67 @@ export function MarketDashboard({
 
       activeController = new AbortController();
       const timeout = window.setTimeout(() => activeController?.abort(), 10_000);
-      const results = await Promise.allSettled(
-        symbols.map(async (symbol) => {
-          const envelope = await fetchApi<{
-            data: MarketSnapshot;
-            meta: OrchestrationMeta;
-          }>(
-            `/api/market/snapshot?symbol=${encodeURIComponent(symbol)}`,
-            activeController!.signal,
-          );
-          if (envelope.data.symbolId !== symbol) {
-            throw new Error("Snapshot identity did not match the requested symbol.");
-          }
-          return { symbol, envelope };
-        }),
-      );
-      window.clearTimeout(timeout);
-      if (stopped) return;
+      try {
+        const envelope = await fetchApi<SnapshotBatchResponse>(
+          `/api/market/snapshots?symbols=${encodeURIComponent(symbols.join(","))}`,
+          activeController.signal,
+        );
+        if (stopped) return;
 
-      setSnapshotResources((current) => {
-        const next = { ...current };
-        results.forEach((result, index) => {
-          const symbol = symbols[index];
-          if (result.status === "fulfilled") {
-            next[symbol] = {
-              data: result.value.envelope.data,
-              meta: result.value.envelope.meta,
-              phase: "ready",
-              receivedAt: new Date().toISOString(),
-            };
-          } else {
+        const itemsBySymbol = new Map(
+          envelope.data.map((item) => [item.symbolId, item]),
+        );
+        const receivedAt = new Date().toISOString();
+        setSnapshotResources((current) => {
+          const next = { ...current };
+          for (const symbol of symbols) {
+            const item = itemsBySymbol.get(symbol);
+            if (
+              item?.status === "ready" &&
+              item.data.symbolId === symbol
+            ) {
+              next[symbol] = {
+                data: item.data,
+                meta: item.meta,
+                phase: "ready",
+                receivedAt,
+              };
+              continue;
+            }
             next[symbol] = {
               ...next[symbol],
               phase: "error",
               error:
-                result.reason instanceof Error
-                  ? result.reason.message
+                item?.status === "error"
+                  ? item.error
+                  : "Snapshot identity did not match the requested symbol.",
+            };
+          }
+          return next;
+        });
+      } catch (error) {
+        if (stopped) return;
+        setSnapshotResources((current) => {
+          const next = { ...current };
+          for (const symbol of symbols) {
+            next[symbol] = {
+              ...next[symbol],
+              phase: "error",
+              error:
+                error instanceof Error
+                  ? error.message
                   : "Snapshot request failed.",
             };
           }
+          return next;
         });
-        return next;
-      });
-      setNow(Date.now());
-      timer = window.setTimeout(poll, SNAPSHOT_POLL_MS);
+      } finally {
+        window.clearTimeout(timeout);
+        if (!stopped) {
+          setNow(Date.now());
+          timer = window.setTimeout(poll, SNAPSHOT_POLL_MS);
+        }
+      }
     }
 
     void poll();
@@ -1476,6 +1519,11 @@ export function MarketDashboard({
     if (!hasMarketSelection) return;
     setPortfolioWorkspaceInitialView(view);
     setPortfolioWorkspaceOpen(true);
+  }
+
+  function openLiveOmnigazeView() {
+    if (!hasMarketSelection) return;
+    setOmnigazeViewOpen(true);
   }
 
   function openIntelligenceInbox(
@@ -2125,9 +2173,16 @@ export function MarketDashboard({
             <button
               type="button"
               disabled={!hasMarketSelection}
-              onClick={() => openPortfolioWorkspace("research")}
+              onClick={openLiveOmnigazeView}
             >
               <MessageSquareText size={16} /> Ask Omnigaze
+            </button>
+            <button
+              type="button"
+              disabled={!hasMarketSelection}
+              onClick={() => openPortfolioWorkspace("research")}
+            >
+              <Gauge size={16} /> Research scenarios
             </button>
             <Link href="/onboarding"><Settings2 size={16} /> Preferences</Link>
             {session.isAuthenticated && (
@@ -2504,6 +2559,15 @@ export function MarketDashboard({
                   : `Omnigaze is still collecting attributable sources for ${selectedInstrument.ticker}.`}
               </p>
               <small>No analysis or evidence from another company is substituted.</small>
+              {insightTab === "view" && (
+                <button
+                  type="button"
+                  className="ask-button"
+                  onClick={openLiveOmnigazeView}
+                >
+                  <Sparkles size={16} /> Generate live view for {selectedInstrument.ticker}
+                </button>
+              )}
             </div>
           ) : insightTab === "view" ? (
             <div className="view-content">
@@ -2550,9 +2614,9 @@ export function MarketDashboard({
               <button
                 type="button"
                 className="ask-button"
-                onClick={() => openPortfolioWorkspace("research")}
+                onClick={openLiveOmnigazeView}
               >
-                <Sparkles size={16} /> Ask Omnigaze about {selectedInstrument.ticker}
+                <Sparkles size={16} /> Generate live view for {selectedInstrument.ticker}
               </button>
             </div>
           ) : (
@@ -2592,8 +2656,8 @@ export function MarketDashboard({
           </div>
           <button
             type="button"
-            aria-label={`Open research scenarios for ${selectedInstrument.ticker}`}
-            onClick={() => openPortfolioWorkspace("research")}
+            aria-label={`Generate a live Omnigaze View for ${selectedInstrument.ticker}`}
+            onClick={openLiveOmnigazeView}
           >
             <ChevronRight size={18} />
           </button>
@@ -2615,6 +2679,15 @@ export function MarketDashboard({
         ))}
         <span className="ticker-time">Illustrative index fixture · not live</span>
       </footer>
+
+      {hasMarketSelection && (
+        <OmnigazeViewDialog
+          open={omnigazeViewOpen}
+          onOpenChange={setOmnigazeViewOpen}
+          instrument={selectedInstrument}
+          session={session}
+        />
+      )}
 
       {hasMarketSelection && (
         <PortfolioWorkspaceDialog

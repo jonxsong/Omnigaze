@@ -140,7 +140,7 @@ describe("AI analysis route", () => {
       symbolId: "NYSE:IBM",
       dataMode: "live",
       evidenceCount: 1,
-      promptVersion: "test-prompt-v1",
+      promptVersion: "2026-11-12.1",
     });
     expect(JSON.stringify(body)).not.toContain("NVDA");
   });
@@ -184,6 +184,50 @@ describe("AI analysis route", () => {
 
     expect(response.status).toBe(422);
     expect(await response.json()).toMatchObject({ code: "insufficient_evidence" });
+    expect(mocks.analyzeEvidence).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke the model for demo evidence", async () => {
+    mocks.getIntelligenceFeed.mockResolvedValue({
+      data: [],
+      meta: {
+        ...meta,
+        dataMode: "demo",
+        mode: "demo",
+        providerCoverage: "demo",
+        coverage: "demo",
+        freshness: { state: "fixture", asOf: null, ageSeconds: null },
+      },
+    });
+
+    const response = await POST(analyzeRequest({ symbol_id: "NYSE:IBM" }));
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({
+      code: "live_evidence_required",
+    });
+    expect(mocks.analyzeEvidence).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke the model for stale evidence", async () => {
+    mocks.getIntelligenceFeed.mockResolvedValue({
+      data: [],
+      meta: {
+        ...meta,
+        freshness: {
+          state: "stale",
+          asOf: "2026-11-10T08:00:00.000Z",
+          ageSeconds: 172_800,
+        },
+      },
+    });
+
+    const response = await POST(analyzeRequest({ symbol_id: "NYSE:IBM" }));
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({
+      code: "fresh_evidence_required",
+    });
     expect(mocks.analyzeEvidence).not.toHaveBeenCalled();
   });
 });

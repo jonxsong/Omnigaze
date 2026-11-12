@@ -48,7 +48,7 @@ tests/                  Domain and MCP contract tests
 docs/                   Architecture and engineering decisions
 ```
 
-The end-to-end data flow and failure boundaries are documented in [`docs/architecture.md`](docs/architecture.md).
+The end-to-end data flow and failure boundaries are documented in [`docs/architecture.md`](docs/architecture.md). The shipped-capability checklist and remaining production milestones live in [`docs/product-status.md`](docs/product-status.md).
 
 ## Local development
 
@@ -134,11 +134,11 @@ Use `server/discover`, `tools/list`, and `tools/call` with MCP version `2026-07-
 ## Current limitations
 
 - Alpaca currently uses resilient REST polling; long-lived streaming transport is a later infrastructure slice.
-- A request-time news reconciliation still caps interactive reads at 100 events. The separate durable cursor engine processes exactly one frozen-window page per operator tick; continuous collection requires linking the authenticated MCP tool to a hosted schedule after deployment.
+- A request-time news reconciliation still caps interactive reads at 100 events. The separate durable cursor engine processes exactly one frozen-window page per operator tick; continuous collection requires a linked hosted schedule, a current authenticated Omnigaze app connection, and at least one verified successful tick before the UI may claim scheduled collection.
 - SEC ingestion is available on demand but still needs a configured application/contact user agent and scheduled background ingestion.
 - Alert rules currently deliver only inside the Omnigaze inbox during request-time refreshes. Email, SMS, push, browser notifications, and a continuously running background delivery worker are not enabled.
 - Brokerage import and order execution are intentionally not part of this alpha.
-- AI analysis requires an authenticated user and returns `503 ai_unconfigured` when the server secret is absent.
+- AI analysis requires an authenticated user, runs only after an explicit user request, and returns `503 ai_unconfigured` when the server secret is absent. Durable result caching and per-user model budgets/rate controls remain pre-scale work.
 - Omnigaze provides research support, not investment advice or autonomous trading.
 
 See [Scheduled ingestion](docs/scheduled-ingestion.md) for the operator contract, safety invariants, status semantics, and local verification workflow.

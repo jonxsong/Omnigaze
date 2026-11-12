@@ -188,7 +188,46 @@ export class AssetSearchService {
   }
 
   async resolveExact(symbolOrAssetId: string) {
-    return this.provider.resolveExact(symbolOrAssetId);
+    const identifier = symbolOrAssetId.trim();
+    if (!identifier) return null;
+
+    let catalog: CatalogView;
+    try {
+      catalog = await this.catalog();
+    } catch {
+      // The exact endpoint is a bounded fallback when the full catalog cannot
+      // be loaded at all. It preserves symbol verification without trusting
+      // demo data or converting a provider outage into an unsupported symbol.
+      try {
+        return await this.provider.resolveExact(identifier);
+      } catch (error) {
+        throw sanitizedProviderError(error);
+      }
+    }
+
+    if (catalog.state === "fresh") {
+      const assetIdMatch = catalog.cache.assets.find(
+        (asset) => asset.id === identifier,
+      );
+      if (assetIdMatch) return assetIdMatch;
+
+      const ticker = normalizeSearchText(identifier);
+      const tickerMatches = catalog.cache.assets.filter(
+        (asset) => asset.symbol === ticker,
+      );
+      if (tickerMatches.length === 1) return tickerMatches[0];
+      if (tickerMatches.length === 0) return null;
+      // An unexpected duplicate ticker is ambiguous. Let the provider's exact
+      // endpoint choose the canonical asset instead of relying on list order.
+    }
+
+    // A stale catalog is suitable for visibly labeled search fallback, but it
+    // cannot prove that an asset is still active. Reverify exact resolutions.
+    try {
+      return await this.provider.resolveExact(identifier);
+    } catch (error) {
+      throw sanitizedProviderError(error);
+    }
   }
 }
 
