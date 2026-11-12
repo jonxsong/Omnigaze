@@ -40,8 +40,15 @@ button, input { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
-.omnigaze-shell { min-height: 100vh; padding-bottom: 34px; }
+.omnigaze-shell { min-height: 100vh; padding-bottom: 34px; transition: opacity 120ms ease; }
 .omnigaze-shell[data-hydrated="false"] button { pointer-events: none; }
+.omnigaze-shell[data-locale="zh-CN"] {
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", ui-sans-serif, sans-serif;
+  line-height: 1.45;
+}
+.omnigaze-shell[data-locale="zh-CN"] :is(h1, h2, h3, p, button, a, input, span, small) {
+  text-wrap: pretty;
+}
 .topbar {
   position: sticky; z-index: 40; top: 0; display: grid;
   grid-template-columns: 276px minmax(280px, 620px) 1fr; align-items: center;
@@ -97,6 +104,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 .search-error-state button { width: fit-content; margin-top: 4px; padding: 4px 7px; border: 1px solid rgb(98 217 255 / 25%); border-radius: 5px; background: rgb(20 63 79 / 23%); color: #9edcf0; font-size: 8px; cursor: pointer; }
 .search-catalog-notice { display: flex; gap: 6px; align-items: center; padding: 7px 12px; border-top: 1px solid rgb(247 199 104 / 12%); background: rgb(247 199 104 / 4%); color: #9d8557; font-size: 8px; }
 .topbar-actions { justify-content: flex-end; gap: 10px; }
+.dashboard-locale-toggle { display: inline-flex; padding: 2px; border: 1px solid var(--border); border-radius: 8px; background: #0b151f; }
+.dashboard-locale-toggle button { min-width: 30px; height: 27px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: #73869a; font-size: 8px; font-weight: 720; cursor: pointer; }
+.dashboard-locale-toggle button[aria-pressed="true"] { background: rgb(98 217 255 / 12%); color: #b6edfa; box-shadow: inset 0 0 0 1px rgb(98 217 255 / 20%); }
 .market-status { gap: 7px; margin-right: 5px; color: #adbac7; font-size: 10px; }
 .market-status small { color: var(--muted-dim); }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--positive); box-shadow: 0 0 8px rgb(34 211 167 / 70%); }
@@ -406,6 +416,7 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 @media (max-width: 640px) {
   .topbar { height: 54px; padding: 0 10px; }
   .topbar-actions { gap: 6px; }
+  .dashboard-locale-toggle button { min-width: 26px; padding: 0 4px; }
   .global-search-wrap kbd, .demo-banner svg { display: none; }
   .demo-banner { display: grid; grid-template-columns: minmax(0, 1fr) auto; justify-content: stretch; overflow: visible; padding: 6px 10px; white-space: normal; }
   .demo-banner > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

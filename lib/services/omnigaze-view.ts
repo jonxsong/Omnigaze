@@ -13,6 +13,7 @@ import {
   type GuardedOmnigazeViewResult,
 } from "@/lib/ai/omnigaze-view-guard";
 import type { CanonicalSymbol, Evidence, Instrument } from "@/lib/market-types";
+import type { AppLocale } from "@/lib/app-locale";
 import type {
   IntelligenceFeedItem,
   OrchestratedIntelligenceFeed,
@@ -26,6 +27,47 @@ import {
 
 const AI_EVIDENCE_MAX_AGE_SECONDS = 24 * 60 * 60;
 const textEncoder = new TextEncoder();
+const prohibitedAnalysisGuidancePatterns = [
+  /\b(?:you\s+should|we\s+(?:recommend|suggest)(?:\s+that\s+you)?|omnigaze\s+(?:recommends|suggests)(?:\s+that\s+you)?)\s+(?:buy(?:ing)?|sell(?:ing)?|hold(?:ing)?|trim(?:ming)?|add(?:ing)?|reduc(?:e|ing))\b/i,
+  /(?:^|[\n.!?]\s*)(?:buy|sell|hold|trim|reduce)\s+(?:[A-Z]{1,6}\b|the\s+(?:stock|shares?|position)\b|your\s+(?:shares?|position)\b)/i,
+  /\b(?:price\s+target|target\s+price)\s*(?:(?:is|of|at|:|-)\s*)?(?:[$€£¥]\s*)?\d/i,
+  /\b(?:buy|sell|trim|add|reduce)\s+\d[\d,.]*\s+(?:shares?|units?|contracts?)\b/i,
+  /\b(?:guaranteed\s+to|will\s+definitely|must)\s+(?:rise|fall|gain|drop|rally|decline|outperform|underperform)\b/i,
+  /(?:建议|推荐|应该|应当|需要|可以考虑|不妨|最好)(?:你|您)?\s*(?:买入|卖出|持有|加仓|减仓|清仓|做多|做空)/,
+  /(?:买入|卖出|持有|加仓|减仓|清仓)\s*\d[\d,.]*\s*股/,
+  /(?:目标价|目标价格)\s*(?:为|是|：|:)?\s*[¥￥$]?\s*\d/,
+  /(?:一定|必然|肯定|保证会)\s*(?:上涨|下跌|涨|跌|跑赢|跑输)/,
+] as const;
+
+export function assertOmnigazeAnalysisPolicy(analysis: OmnigazeAnalysis) {
+  const modelAuthoredText = [
+    analysis.headline,
+    analysis.summary,
+    analysis.whyNow,
+    ...analysis.drivers.flatMap((driver) => [driver.label, driver.explanation]),
+    ...analysis.unknowns,
+  ].join("\n");
+  if (prohibitedAnalysisGuidancePatterns.some((pattern) => pattern.test(modelAuthoredText))) {
+    throw new Error("prohibited_trade_guidance");
+  }
+}
+
+export function assertOmnigazeAnalysisLocale(
+  analysis: OmnigazeAnalysis,
+  locale: AppLocale,
+) {
+  if (locale !== "zh-CN") return;
+  const modelAuthoredFields = [
+    analysis.headline,
+    analysis.summary,
+    analysis.whyNow,
+    ...analysis.drivers.flatMap((driver) => [driver.label, driver.explanation]),
+    ...analysis.unknowns,
+  ];
+  if (modelAuthoredFields.some((value) => !/[\u3400-\u9fff]/u.test(value))) {
+    throw new Error("analysis_locale_mismatch");
+  }
+}
 
 export type OmnigazeViewErrorCode =
   | "ai_unconfigured"
@@ -153,6 +195,7 @@ type OmnigazeViewDependencies = {
     evidence: Evidence[];
     events: ReturnType<typeof buildAnalysisContextFromFeed>["events"];
     dataCutoff: string;
+    locale: AppLocale;
   }): Promise<OmnigazeAnalysis>;
   guard: OmnigazeViewGuard;
   modelConfig(): string;
@@ -295,6 +338,7 @@ function coreView(
     context: ReturnType<typeof buildAnalysisContextFromFeed>;
     feed: OrchestratedIntelligenceFeed;
     generatedAt: string;
+    promptVersion: string;
   },
 ) {
   return cachedOmnigazeViewSchema.parse({
@@ -303,7 +347,7 @@ function coreView(
       symbolId: input.symbolId,
       dataCutoff: input.context.dataCutoff,
       generatedAt: input.generatedAt,
-      promptVersion: OMNIGAZE_ANALYSIS_PROMPT_VERSION,
+      promptVersion: input.promptVersion,
       dataMode: "live",
       providerCoverage: input.context.sourceMeta.providerCoverage,
       freshness: {
@@ -327,6 +371,11 @@ function coreView(
 export interface GenerateOmnigazeViewRequest {
   ownerId: string;
   requestId?: string;
+  locale?: AppLocale;
+}
+
+export function omnigazeAnalysisPromptVersion(locale: AppLocale) {
+  return `${OMNIGAZE_ANALYSIS_PROMPT_VERSION}:${locale}`;
 }
 
 export async function generateOmnigazeView(
@@ -335,6 +384,8 @@ export async function generateOmnigazeView(
   dependencies: Partial<OmnigazeViewDependencies> = {},
 ): Promise<GeneratedOmnigazeView> {
   const deps = { ...defaultDependencies, ...dependencies };
+  const locale: AppLocale = request.locale === "zh-CN" ? "zh-CN" : "en";
+  const promptVersion = omnigazeAnalysisPromptVersion(locale);
   if (!deps.isAiConfigured()) throw new OmnigazeViewError("ai_unconfigured");
 
   let resolved: ResolvedInstrument;
@@ -378,7 +429,7 @@ export async function generateOmnigazeView(
   const guarded = await deps.guard.execute({
     ownerId: request.ownerId,
     symbolId: resolved.id,
-    promptVersion: OMNIGAZE_ANALYSIS_PROMPT_VERSION,
+    promptVersion,
     modelConfig: deps.modelConfig(),
     requestId: request.requestId,
     freshness: {
@@ -387,25 +438,37 @@ export async function generateOmnigazeView(
       maximumAgeSeconds: AI_EVIDENCE_MAX_AGE_SECONDS,
     },
     fingerprint: { evidence: await fingerprintItems(liveItems) },
-    generate: async () =>
-      coreView(await deps.analyze(context), {
+    generate: async () => {
+      const analysis = await deps.analyze({ ...context, locale });
+      assertGroundedAnalysis(
+        analysis,
+        context.evidence.map((item) => item.id),
+      );
+      assertOmnigazeAnalysisPolicy(analysis);
+      assertOmnigazeAnalysisLocale(analysis, locale);
+      return coreView(analysis, {
         symbolId: resolved.id,
         context,
         feed,
         generatedAt: deps.now().toISOString(),
-      }),
+        promptVersion,
+      });
+    },
   });
 
   assertGroundedAnalysis(
     guarded.value.data,
     context.evidence.map((item) => item.id),
   );
+  assertOmnigazeAnalysisPolicy(guarded.value.data);
+  assertOmnigazeAnalysisLocale(guarded.value.data, locale);
 
   const current = coreView(guarded.value.data, {
     symbolId: resolved.id,
     context,
     feed,
     generatedAt: guarded.value.meta.generatedAt,
+    promptVersion,
   });
   return {
     ...current,

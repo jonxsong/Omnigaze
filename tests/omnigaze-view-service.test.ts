@@ -36,6 +36,19 @@ const analysis: OmnigazeAnalysis = {
   unknowns: ["The durability of the development remains unknown."],
 };
 
+const chineseAnalysis: OmnigazeAnalysis = {
+  ...analysis,
+  headline: "证据呈现混合信号",
+  summary: "最新证据同时包含支持与限制因素。",
+  whyNow: "新的公司公告改变了当前证据集。",
+  drivers: analysis.drivers.map((driver) => ({
+    ...driver,
+    label: "公司公告",
+    explanation: "该公告提供了新的近期背景。",
+  })),
+  unknowns: ["相关影响能否持续仍不明确。"],
+};
+
 function liveFeed(
   overrides: Partial<OrchestratedIntelligenceFeed> = {},
 ): OrchestratedIntelligenceFeed {
@@ -144,6 +157,7 @@ describe("generateOmnigazeView", () => {
     });
     expect(deps.analyze).toHaveBeenCalledWith(
       expect.objectContaining({
+        locale: "en",
         instrument: expect.objectContaining({ id: symbolId, ticker: "IBM" }),
         evidence: [
           expect.objectContaining({
@@ -179,6 +193,7 @@ describe("generateOmnigazeView", () => {
         freshness: { state: "fresh", ageSeconds: 60 },
         evidenceCount: 1,
         eventCount: 1,
+        promptVersion: "2026-11-12.1:en",
         sources: ["alpaca"],
         evidenceCoverage: {
           score: 0.4,
@@ -198,6 +213,68 @@ describe("generateOmnigazeView", () => {
         },
       },
     });
+  });
+
+  it("isolates Chinese and English generation identities and model inputs", async () => {
+    const english = dependencies();
+    const chinese = dependencies();
+    chinese.analyze.mockResolvedValue(chineseAnalysis);
+
+    await generateOmnigazeView(
+      symbolId,
+      { ownerId: "owner-1", locale: "en" },
+      english,
+    );
+    const chineseResult = await generateOmnigazeView(
+      symbolId,
+      { ownerId: "owner-1", locale: "zh-CN" },
+      chinese,
+    );
+
+    const englishGuard = vi.mocked(english.guard!.execute).mock.calls[0][0];
+    const chineseGuard = vi.mocked(chinese.guard!.execute).mock.calls[0][0];
+    expect(englishGuard.promptVersion).toBe("2026-11-12.1:en");
+    expect(chineseGuard.promptVersion).toBe("2026-11-12.1:zh-CN");
+    expect(chineseGuard.promptVersion).not.toBe(englishGuard.promptVersion);
+    expect(chinese.analyze).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "zh-CN" }),
+    );
+    expect(chineseResult.meta.promptVersion).toBe("2026-11-12.1:zh-CN");
+  });
+
+  it.each([
+    "建议您买入 IBM",
+    "目标价为 $250",
+    "卖出 10 股 IBM",
+    "IBM 一定上涨",
+    "You should buy IBM",
+    "We recommend buying IBM",
+    "We recommend that you buy IBM",
+    "推荐买入 IBM",
+    "Buy 10 shares",
+  ])("rejects prescriptive generated analysis: %s", async (summary) => {
+    const deps = dependencies();
+    deps.analyze.mockResolvedValue({ ...analysis, summary });
+
+    await expect(
+      generateOmnigazeView(
+        symbolId,
+        { ownerId: "owner-1", locale: "en" },
+        deps,
+      ),
+    ).rejects.toThrow("prohibited_trade_guidance");
+  });
+
+  it("rejects a Chinese request when model-authored fields remain English", async () => {
+    const deps = dependencies();
+
+    await expect(
+      generateOmnigazeView(
+        symbolId,
+        { ownerId: "owner-1", locale: "zh-CN" },
+        deps,
+      ),
+    ).rejects.toThrow("analysis_locale_mismatch");
   });
 
   it("excludes volatile receipt time from the evidence content fingerprint", async () => {

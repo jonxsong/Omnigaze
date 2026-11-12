@@ -104,11 +104,13 @@ describe("MCP live Omnigaze View parity", () => {
     const body = await callView(true, {
       symbol_id: "NYSE:IBM",
       request_id: "mcp-request-1",
+      locale: "zh-CN",
     });
 
     expect(mocks.generateOmnigazeView).toHaveBeenCalledWith("NYSE:IBM", {
       ownerId: "trusted-user",
       requestId: "mcp-request-1",
+      locale: "zh-CN",
     });
     expect(body.result.structuredContent).toMatchObject({
       data: { stance: "mixed", confidence: 0.6 },

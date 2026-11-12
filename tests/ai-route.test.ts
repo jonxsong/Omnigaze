@@ -140,10 +140,27 @@ describe("AI analysis route", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it("analyzes an arbitrary server-verified equity without fixture identity fallback", async () => {
+    mocks.analyzeEvidence.mockResolvedValueOnce({
+      stance: "mixed",
+      confidence: 0.5,
+      headline: "证据呈现混合信号",
+      summary: "最新证据同时包含支持与限制因素。",
+      whyNow: "新的公司公告改变了当前证据集。",
+      drivers: [
+        {
+          label: "公司公告",
+          direction: "mixed",
+          explanation: "该公告提供了新的近期背景。",
+          evidenceIds: ["evidence:alpaca:ibm-news-1"],
+        },
+      ],
+      unknowns: ["相关影响能否持续仍不明确。"],
+    });
     const response = await POST(
       analyzeRequest({
         symbol_id: "nyse:ibm",
         request_id: "route-request-1",
+        locale: "zh-CN",
       }),
     );
     const body = (await response.json()) as {
@@ -174,13 +191,14 @@ describe("AI analysis route", () => {
           ticker: "IBM",
           name: "International Business Machines Corporation",
         }),
+        locale: "zh-CN",
       }),
     );
     expect(body.meta).toMatchObject({
       symbolId: "NYSE:IBM",
       dataMode: "live",
       evidenceCount: 1,
-      promptVersion: "2026-11-12.1",
+      promptVersion: "2026-11-12.1:zh-CN",
       ai: expect.objectContaining({
         source: "generated",
         budget: expect.objectContaining({ charged: true }),
@@ -189,6 +207,17 @@ describe("AI analysis route", () => {
     expect(response.headers.get("x-omnigaze-ai-cache")).toBe("miss");
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(JSON.stringify(body)).not.toContain("NVDA");
+  });
+
+  it("rejects unsupported analysis locales at the strict HTTP boundary", async () => {
+    const response = await POST(
+      analyzeRequest({ symbol_id: "NYSE:IBM", locale: "zh-TW" }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "invalid_request" });
+    expect(mocks.resolveCanonicalInstrument).not.toHaveBeenCalled();
+    expect(mocks.analyzeEvidence).not.toHaveBeenCalled();
   });
 
   it("rejects anonymous model calls before provider or AI work", async () => {

@@ -1,5 +1,6 @@
 import { Agent, run } from "@openai/agents";
 import type { Evidence, IntelligenceEvent, Instrument } from "@/lib/market-types";
+import type { AppLocale } from "@/lib/app-locale";
 import {
   assertGroundedAnalysis,
   omnigazeAnalysisSchema,
@@ -18,9 +19,10 @@ type AnalysisInput = {
   evidence: Evidence[];
   events: IntelligenceEvent[];
   dataCutoff: string;
+  locale?: AppLocale;
 };
 
-const instructions = `You are the Omnigaze market intelligence analyst.
+const baseInstructions = `You are the Omnigaze market intelligence analyst.
 
 Your job is to interpret supplied public evidence, never to predict prices or tell a user to buy, sell, or hold a security.
 
@@ -38,14 +40,22 @@ Rules:
 - Write concise language suitable for a real-time market dashboard.
 - Your output is research support, not investment advice.`;
 
+export function analysisInstructionsForLocale(locale: AppLocale) {
+  const languageRequirement = locale === "zh-CN"
+    ? `Write every model-authored narrative field in clear Simplified Chinese. This applies to headline, summary, whyNow, every driver label and explanation, and every unknown. Preserve tickers, company names, proper nouns, evidence IDs, and quoted source text exactly as supplied; do not translate, rewrite, or fabricate source material.`
+    : `Write every model-authored narrative field in clear English. Preserve tickers, company names, proper nouns, evidence IDs, and quoted source text exactly as supplied; do not translate, rewrite, or fabricate source material.`;
+  return `${baseInstructions}\n- ${languageRequirement}`;
+}
+
 export async function analyzeEvidence(input: AnalysisInput): Promise<OmnigazeAnalysis> {
   if (!process.env.OPENAI_API_KEY) {
     throw new Error("OPENAI_API_KEY is not configured.");
   }
 
+  const locale = input.locale ?? "en";
   const agent = new Agent({
     name: "Omnigaze evidence analyst",
-    instructions,
+    instructions: analysisInstructionsForLocale(locale),
     outputType: omnigazeAnalysisSchema,
     ...(process.env.OPENAI_MODEL ? { model: process.env.OPENAI_MODEL } : {}),
   });
@@ -53,7 +63,10 @@ export async function analyzeEvidence(input: AnalysisInput): Promise<OmnigazeAna
   const result = await run(
     agent,
     JSON.stringify({
-      task: "Create an evidence-backed near-term Omnigaze View.",
+      task: locale === "zh-CN"
+        ? "用简体中文创建一份以证据为基础的近期 Omnigaze 观点。"
+        : "Create an evidence-backed near-term Omnigaze View in English.",
+      outputLocale: locale,
       instrument: input.instrument,
       dataCutoff: input.dataCutoff,
       evidence: input.evidence,

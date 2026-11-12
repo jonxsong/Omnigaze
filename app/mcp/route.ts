@@ -73,6 +73,12 @@ const tools = [
       type: "object",
       properties: {
         symbol_id: { type: "string", pattern: canonicalSymbolPattern },
+        locale: {
+          type: "string",
+          enum: ["en", "zh-CN"],
+          default: "en",
+          description: "Language for model-authored narrative. Source evidence remains unchanged.",
+        },
         request_id: {
           type: "string",
           minLength: 8,
@@ -93,6 +99,12 @@ const tools = [
     inputSchema: {
       type: "object",
       properties: {
+        locale: {
+          type: "string",
+          enum: ["en", "zh-CN"],
+          default: "en",
+          description: "Language for model-authored narrative. Source evidence remains unchanged.",
+        },
         request_id: {
           type: "string",
           minLength: 8,
@@ -382,6 +394,7 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         const parsed = z
           .object({
             symbol_id: symbolSchema,
+            locale: z.enum(["en", "zh-CN"]).optional().default("en"),
             request_id: z
               .string()
               .trim()
@@ -401,6 +414,7 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
           const view = await generateOmnigazeView(parsed.data.symbol_id, {
             ownerId: userId,
             requestId: parsed.data.request_id,
+            locale: parsed.data.locale,
           });
           return toolContent(view.data, {
             ...view.meta,
@@ -436,6 +450,7 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         }
         const parsed = z
           .object({
+            locale: z.enum(["en", "zh-CN"]).optional().default("en"),
             request_id: z
               .string()
               .trim()
@@ -454,6 +469,7 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         try {
           const brief = await generatePersonalDailyBrief(userId, {
             requestId: parsed.data.request_id,
+            locale: parsed.data.locale,
           });
           return toolContent(brief.data, {
             ...brief.meta,

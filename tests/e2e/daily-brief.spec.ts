@@ -103,6 +103,32 @@ function dailyBriefEnvelope(cacheState: "generated" | "hit" = "generated") {
   };
 }
 
+function chineseDailyBriefEnvelope() {
+  const envelope = dailyBriefEnvelope();
+  return {
+    ...envelope,
+    data: {
+      ...envelope.data,
+      headline: "人工智能基础设施与云需求影响今日自选股",
+      summary: "最新公司与监管证据显示，NVIDIA 与 Microsoft 面临相互矛盾的信号。",
+      developments: envelope.data.developments.map((development, index) => ({
+        ...development,
+        title:
+          index === 0
+            ? "NVIDIA 回应新的出口政策限制"
+            : "Microsoft 报告云端人工智能需求持续",
+        whyItMatters:
+          index === 0
+            ? "该限制可能改变近期数据中心预期，但现有证据尚不能证明市场波动的单一原因。"
+            : "这项更新支持基础设施需求，但目前无法确认本轮支出周期会持续多久。",
+      })),
+      watchNext: ["关注正式政策指引与公司的后续确认。"],
+      unknowns: ["市场反应能否持续仍不确定。"],
+    },
+    meta: { ...envelope.meta, promptVersion: "2026-11-12.2.zh-CN" },
+  };
+}
+
 test.describe("Personal Daily Brief", () => {
   test("is manual, sign-in gated, and mobile safe for anonymous visitors", async ({
     page,
@@ -147,13 +173,16 @@ test.describe("Personal Daily Brief", () => {
     await expect(page).toHaveURL(/\/dashboard$/);
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
 
-    const requestBodies: Array<{ request_id?: unknown }> = [];
+    const requestBodies: Array<{ request_id?: unknown; locale?: unknown }> = [];
     let briefRequests = 0;
     let rateLimitNext = false;
     await page.route("**/api/ai/daily-brief", async (route) => {
       briefRequests += 1;
       requestBodies.push(
-        (route.request().postDataJSON() ?? {}) as { request_id?: unknown },
+        (route.request().postDataJSON() ?? {}) as {
+          request_id?: unknown;
+          locale?: unknown;
+        },
       );
       if (briefRequests === 1) {
         await route.abort("failed");
@@ -214,6 +243,7 @@ test.describe("Personal Daily Brief", () => {
         /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
       ),
     );
+    expect(requestBodies[0]?.locale).toBe("en");
     expect(requestBodies[1]?.request_id).toBe(requestBodies[0]?.request_id);
 
     await card.getByRole("button", { name: "Refresh brief" }).click();
@@ -263,5 +293,47 @@ test.describe("Personal Daily Brief", () => {
     await expect(card.getByText(/failed its integrity checks/)).toBeVisible();
     await expect(card.getByRole("button", { name: "Try a new brief" })).toBeEnabled();
     await expect(card.getByText("99%")).toHaveCount(0);
+  });
+
+  test("requests Chinese generation and never retains it after switching to English", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      window.localStorage.setItem("omnigaze:app-locale:v1", "zh-CN");
+    });
+    let requestBody: { request_id?: unknown; locale?: unknown } | null = null;
+    await page.route("**/api/ai/daily-brief", async (route) => {
+      requestBody = (route.request().postDataJSON() ?? {}) as {
+        request_id?: unknown;
+        locale?: unknown;
+      };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(chineseDailyBriefEnvelope()),
+      });
+    });
+
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await expect(page).toHaveURL(/\/dashboard$/);
+    const card = page.getByTestId("daily-brief-card");
+    await card.getByRole("button", { name: "生成我的每日简报" }).click();
+
+    await expect(
+      card.getByRole("heading", {
+        name: "人工智能基础设施与云需求影响今日自选股",
+      }),
+    ).toBeVisible();
+    expect(requestBody).toMatchObject({ locale: "zh-CN" });
+    await expect(card).toContainText("NVIDIA comments on updated export policy");
+
+    await page
+      .getByRole("group", { name: "仪表盘语言" })
+      .getByRole("button", { name: "EN" })
+      .click();
+    await expect(card.getByRole("button", { name: "Build my Daily Brief" })).toBeVisible();
+    await expect(
+      card.getByText("人工智能基础设施与云需求影响今日自选股"),
+    ).toHaveCount(0);
   });
 });

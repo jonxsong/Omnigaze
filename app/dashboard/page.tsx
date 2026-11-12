@@ -9,6 +9,7 @@ import {
   type DashboardHolding,
   type DashboardInstrument,
 } from "@/components/market-dashboard";
+import { AppLocaleProvider } from "@/components/app-locale";
 import { extractCanonicalSymbols } from "@/lib/api/personal-intelligence";
 import type { CanonicalSymbol } from "@/lib/market-types";
 import { getUserPortfolio } from "@/lib/repositories/portfolio";
@@ -35,12 +36,14 @@ export default async function DashboardPage() {
   const user = await getChatGPTUser();
   if (!user) {
     return (
-      <MarketDashboard
-        session={{
-          isAuthenticated: false,
-          signInPath: chatGPTSignInPath("/dashboard"),
-        }}
-      />
+      <AppLocaleProvider>
+        <MarketDashboard
+          session={{
+            isAuthenticated: false,
+            signInPath: chatGPTSignInPath("/dashboard"),
+          }}
+        />
+      </AppLocaleProvider>
     );
   }
 
@@ -110,12 +113,14 @@ export default async function DashboardPage() {
   }
 
   return (
-    <MarketDashboard
-      session={session}
-      accountWatchlist={accountWatchlist}
-      accountSyncUnavailable={accountSyncUnavailable}
-      accountHoldings={accountHoldings}
-      accountPortfolioUnavailable={accountPortfolioUnavailable}
-    />
+    <AppLocaleProvider>
+      <MarketDashboard
+        session={session}
+        accountWatchlist={accountWatchlist}
+        accountSyncUnavailable={accountSyncUnavailable}
+        accountHoldings={accountHoldings}
+        accountPortfolioUnavailable={accountPortfolioUnavailable}
+      />
+    </AppLocaleProvider>
   );
 }

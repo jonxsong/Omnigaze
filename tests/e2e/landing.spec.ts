@@ -120,13 +120,18 @@ test.describe("Omnigaze public experience", () => {
     let analysisRequests = 0;
     let abortNextAnalysis = false;
     let rateLimitNextAnalysis = false;
-    const analysisBodies: Array<{ symbol_id?: unknown; request_id?: unknown }> = [];
+    const analysisBodies: Array<{
+      symbol_id?: unknown;
+      request_id?: unknown;
+      locale?: unknown;
+    }> = [];
     await page.route("**/api/ai/analyze", async (route) => {
       analysisRequests += 1;
       analysisBodies.push(
         (route.request().postDataJSON() ?? {}) as {
           symbol_id?: unknown;
           request_id?: unknown;
+          locale?: unknown;
         },
       );
       if (abortNextAnalysis) {
@@ -173,7 +178,7 @@ test.describe("Omnigaze public experience", () => {
             symbolId: "NASDAQ:NVDA",
             dataCutoff: "2026-11-12T18:00:00.000Z",
             generatedAt,
-            promptVersion: "2026-11-12.1",
+            promptVersion: "2026-11-12.1:en",
             dataMode: "live",
             providerCoverage: "partial",
             freshness: {
@@ -244,7 +249,10 @@ test.describe("Omnigaze public experience", () => {
     await expect(dialog.getByText("Fresh model analysis generated")).toBeVisible();
     await expect(dialog.getByText(/19 of 20 remain/)).toBeVisible();
     expect(analysisRequests).toBe(1);
-    expect(analysisBodies[0]).toMatchObject({ symbol_id: "NASDAQ:NVDA" });
+    expect(analysisBodies[0]).toMatchObject({
+      symbol_id: "NASDAQ:NVDA",
+      locale: "en",
+    });
     expect(analysisBodies[0]?.request_id).toEqual(expect.stringMatching(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
     ));

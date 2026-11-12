@@ -19,10 +19,15 @@ import {
   X,
 } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
+import { useAppLocale } from "@/components/app-locale";
+import {
+  portfolioWorkspaceCopy,
+  type PortfolioWorkspaceCopyKey,
+} from "@/components/portfolio-workspace-copy";
+import type { AppLocale } from "@/lib/app-locale";
 import type { CanonicalSymbol } from "@/lib/market-types";
 import {
   formatMicrosAsQuantity,
-  formatMicrosAsUsd,
   isEligibleDecisionCurrent,
   parseDecisionSupportEnvelope,
   parseHoldingMutationEnvelope,
@@ -92,36 +97,31 @@ type HoldingMutationPayload = {
 };
 
 type PositionStatus =
-  | { kind: "idle"; message: "" }
-  | { kind: "success" | "error" | "conflict" | "session"; message: string };
+  | { kind: "idle"; messageKey: null }
+  | {
+      kind: "success" | "error" | "conflict" | "session";
+      messageKey: PortfolioWorkspaceCopyKey;
+    };
 
 type ScenarioResource =
-  | { phase: "idle"; data?: undefined; message?: undefined }
-  | { phase: "ready"; key: string; data: DecisionSupportEnvelope; message?: undefined }
-  | { phase: "loading"; key: string; data?: undefined; message?: undefined }
-  | { phase: "error"; key: string; data?: undefined; message: string };
+  | { phase: "idle"; data?: undefined; messageKey?: undefined }
+  | { phase: "ready"; key: string; data: DecisionSupportEnvelope; messageKey?: undefined }
+  | { phase: "loading"; key: string; data?: undefined; messageKey?: undefined }
+  | {
+      phase: "error";
+      key: string;
+      data?: undefined;
+      messageKey: PortfolioWorkspaceCopyKey;
+    };
 
-const suppressedReasonCopy: Record<string, string> = {
-  live_market_data_required:
-    "Live provider data is unavailable. Demo prices are never used.",
-  fresh_market_data_required:
-    "The latest quote is stale or its freshness is unknown.",
-  valid_market_price_required: "No valid market price is available.",
-  market_data_unavailable: "No valid market price is available.",
-  insufficient_evidence:
-    "At least two attributable evidence items are required.",
-  independent_sources_required:
-    "At least two distinct provider streams are required.",
-  live_evidence_required:
-    "Live intelligence evidence is unavailable. Demo events never qualify.",
-  fresh_evidence_required:
-    "The newest intelligence evidence is stale or its freshness is unknown.",
-};
-
-function responseError(body: unknown, fallback: string) {
-  if (body && typeof body === "object" && "error" in body) {
-    const error = (body as { error?: unknown }).error;
-    if (typeof error === "string" && error.trim()) return error;
+function responseErrorKey(
+  body: unknown,
+  fallback: PortfolioWorkspaceCopyKey,
+  messages: Record<string, PortfolioWorkspaceCopyKey>,
+) {
+  if (body && typeof body === "object" && "code" in body) {
+    const code = (body as { code?: unknown }).code;
+    if (typeof code === "string" && messages[code]) return messages[code];
   }
   return fallback;
 }
@@ -136,9 +136,17 @@ function asWorkspaceHolding(
   };
 }
 
-function formatAsOf(value: string | undefined) {
-  if (!value || !Number.isFinite(Date.parse(value))) return "time unavailable";
-  return new Intl.DateTimeFormat("en-US", {
+function intlLocale(locale: AppLocale) {
+  return locale === "zh-CN" ? "zh-CN" : "en-US";
+}
+
+function formatAsOf(
+  value: string | undefined,
+  locale: AppLocale,
+  unavailable: string,
+) {
+  if (!value || !Number.isFinite(Date.parse(value))) return unavailable;
+  return new Intl.DateTimeFormat(intlLocale(locale), {
     month: "short",
     day: "numeric",
     hour: "numeric",
@@ -146,18 +154,47 @@ function formatAsOf(value: string | undefined) {
   }).format(new Date(value));
 }
 
-function formatDistance(bps: number) {
-  const sign = bps > 0 ? "+" : bps < 0 ? "−" : "";
-  const absolute = Math.abs(bps);
-  const whole = Math.floor(absolute / 100);
-  const remainder = absolute % 100;
-  return `${sign}${whole}${remainder ? `.${remainder.toString().padStart(2, "0")}` : ""}%`;
+function formatDistance(bps: number, locale: AppLocale) {
+  return new Intl.NumberFormat(intlLocale(locale), {
+    style: "percent",
+    maximumFractionDigits: 2,
+    signDisplay: "exceptZero",
+  }).format(bps / 10_000);
 }
 
-function zoneLabel(kind: string) {
-  if (kind === "pullback_review") return "Pullback review";
-  if (kind === "strength_review") return "Strength review";
-  return "Downside review";
+function formatUsdMicros(value: number, locale: AppLocale) {
+  return new Intl.NumberFormat(intlLocale(locale), {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value / 1_000_000);
+}
+
+function formatQuantityMicros(value: number, locale: AppLocale) {
+  return new Intl.NumberFormat(intlLocale(locale), {
+    maximumFractionDigits: 6,
+  }).format(Number(formatMicrosAsQuantity(value)));
+}
+
+function formatStoredQuantity(value: string, locale: AppLocale) {
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? new Intl.NumberFormat(intlLocale(locale), {
+        maximumFractionDigits: 6,
+      }).format(number)
+    : value;
+}
+
+function formatStoredUsd(value: string, locale: AppLocale) {
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? new Intl.NumberFormat(intlLocale(locale), {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 6,
+      }).format(number)
+    : value;
 }
 
 export function PortfolioWorkspaceDialog({
@@ -175,6 +212,48 @@ export function PortfolioWorkspaceDialog({
   onHoldingRemoved,
   onPortfolioReloaded,
 }: PortfolioWorkspaceDialogProps) {
+  const { locale } = useAppLocale();
+  const copy = portfolioWorkspaceCopy[locale];
+  const portfolioReadErrors: Record<string, PortfolioWorkspaceCopyKey> = {
+    auth_required: "authenticationRequired",
+    portfolio_unavailable: "portfolioUnavailable",
+  };
+  const positionSaveErrors: Record<string, PortfolioWorkspaceCopyKey> = {
+    auth_required: "sessionExpiredDraft",
+    invalid_json: "positionSaveFailed",
+    invalid_request: "positionSaveFailed",
+    invalid_symbol: "positionSaveFailed",
+    holding_not_found: "alreadyRemoved",
+    symbol_not_supported: "positionSaveFailed",
+    version_conflict: "positionChanged",
+    holding_update_failed: "positionSaveFailed",
+  };
+  const positionRemoveErrors: Record<string, PortfolioWorkspaceCopyKey> = {
+    auth_required: "authenticationRequired",
+    invalid_query: "positionRemoveFailed",
+    invalid_symbol: "positionRemoveFailed",
+    holding_not_found: "alreadyRemoved",
+    version_conflict: "positionChanged",
+    holding_delete_failed: "positionRemoveFailed",
+  };
+  const scenarioErrors: Record<string, PortfolioWorkspaceCopyKey> = {
+    auth_required: "authenticationRequired",
+    invalid_json: "researchUnavailable",
+    invalid_request: "researchUnavailable",
+    asset_catalog_unavailable: "researchUnavailable",
+    symbol_not_supported: "researchUnavailable",
+    decision_support_unavailable: "researchUnavailable",
+  };
+  const suppressedReasonCopy: Record<string, string> = {
+    live_market_data_required: copy.liveMarketRequired,
+    fresh_market_data_required: copy.freshMarketRequired,
+    valid_market_price_required: copy.validMarketRequired,
+    market_data_unavailable: copy.validMarketRequired,
+    insufficient_evidence: copy.insufficientEvidence,
+    independent_sources_required: copy.independentSourcesRequired,
+    live_evidence_required: copy.liveEvidenceRequired,
+    fresh_evidence_required: copy.freshEvidenceRequired,
+  };
   const quantityId = useId();
   const averageCostId = useId();
   const budgetId = useId();
@@ -185,7 +264,7 @@ export function PortfolioWorkspaceDialog({
   const [averageCost, setAverageCost] = useState(holding?.averageCost ?? "");
   const [positionStatus, setPositionStatus] = useState<PositionStatus>({
     kind: "idle",
-    message: "",
+    messageKey: null,
   });
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -242,7 +321,7 @@ export function PortfolioWorkspaceDialog({
     setActiveView(initialView);
     setQuantity(holding?.quantity ?? "");
     setAverageCost(holding?.averageCost ?? "");
-    setPositionStatus({ kind: "idle", message: "" });
+    setPositionStatus({ kind: "idle", messageKey: null });
     setRetryPayload(null);
     setConflictHolding(undefined);
     setConfirmRemove(false);
@@ -261,7 +340,7 @@ export function PortfolioWorkspaceDialog({
         setScenarioResource({
           phase: "error",
           key: scenarioKey,
-          message: "Quote context expired. Recheck the evidence before viewing numbers.",
+          messageKey: "quoteExpired",
         }),
       Math.max(0, expiresAt - Date.now()),
     );
@@ -270,7 +349,7 @@ export function PortfolioWorkspaceDialog({
         setScenarioResource({
           phase: "error",
           key: scenarioKey,
-          message: "Market context may have changed. Recheck the evidence to refresh scenarios.",
+          messageKey: "marketContextChanged",
         });
       }
     };
@@ -279,14 +358,14 @@ export function PortfolioWorkspaceDialog({
       window.clearTimeout(timeout);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [scenarioKey, visibleScenarioResource]);
+  }, [copy.marketContextChanged, copy.quoteExpired, scenarioKey, visibleScenarioResource]);
 
   function clearPositionRetry() {
     setRetryPayload(null);
     if (positionStatus.kind === "conflict") return;
     setConflictHolding(undefined);
     if (positionStatus.kind !== "idle") {
-      setPositionStatus({ kind: "idle", message: "" });
+      setPositionStatus({ kind: "idle", messageKey: null });
     }
   }
 
@@ -301,7 +380,7 @@ export function PortfolioWorkspaceDialog({
     if (!response.ok) {
       onPortfolioAvailabilityChange("unavailable");
       throw new Error(
-        responseError(body, "Your portfolio is temporarily unavailable."),
+        responseErrorKey(body, "portfolioUnavailable", portfolioReadErrors),
       );
     }
     const next = parsePortfolioReadEnvelope(body).map(asWorkspaceHolding);
@@ -316,17 +395,14 @@ export function PortfolioWorkspaceDialog({
       const latest = next.find(({ symbolId }) => symbolId === instrument.id);
       setPositionStatus({
         kind: "success",
-        message: latest
-          ? "Latest account position loaded."
-          : "Portfolio reconnected. No saved position exists for this stock.",
+        messageKey: latest
+          ? "latestPositionLoaded"
+          : "reconnectedNoPosition",
       });
-    } catch (error) {
+    } catch {
       setPositionStatus({
         kind: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "Your portfolio is temporarily unavailable.",
+        messageKey: "portfolioUnavailable",
       });
     }
   }
@@ -339,14 +415,12 @@ export function PortfolioWorkspaceDialog({
       setConflictHolding(latest);
       setPositionStatus({
         kind: "conflict",
-        message:
-          "This position changed elsewhere. Your draft is preserved; load the latest version before saving again.",
+        messageKey: "positionChanged",
       });
     } catch {
       setPositionStatus({
         kind: "conflict",
-        message:
-          "This position changed elsewhere. Your draft is preserved, but the latest version could not be loaded yet.",
+        messageKey: "positionChangedUnavailable",
       });
     }
   }
@@ -359,9 +433,9 @@ export function PortfolioWorkspaceDialog({
     setConflictHolding(undefined);
     setPositionStatus({
       kind: "success",
-      message: conflictHolding
-        ? "Latest position loaded. Review it before saving."
-        : "The latest account has no position for this stock. Review before saving a new one.",
+      messageKey: conflictHolding
+        ? "latestReview"
+        : "latestNoPosition",
     });
   }
 
@@ -371,20 +445,26 @@ export function PortfolioWorkspaceDialog({
     if (portfolioAvailability !== "ready") {
       setPositionStatus({
         kind: "error",
-        message: "Reconnect your portfolio before making changes.",
+        messageKey: "reconnectBeforeChanges",
       });
       return;
     }
     const validated = validatePositionFields(quantity, averageCost);
     if (!validated.success) {
-      setPositionStatus({ kind: "error", message: validated.error });
+      setPositionStatus({
+        kind: "error",
+        messageKey:
+          validated.error.startsWith("Enter a positive share")
+            ? "invalidQuantity"
+            : "invalidAverageCost",
+      });
       return;
     }
     const expectedVersion = holding?.persistence === "server" ? holding.version : 0;
     if (expectedVersion === null || expectedVersion < 0) {
       setPositionStatus({
         kind: "error",
-        message: "The saved position version is unavailable. Refresh before saving.",
+        messageKey: "savedVersionUnavailable",
       });
       return;
     }
@@ -400,7 +480,7 @@ export function PortfolioWorkspaceDialog({
       } satisfies HoldingMutationPayload);
     setRetryPayload(payload);
     setSaving(true);
-    setPositionStatus({ kind: "idle", message: "" });
+    setPositionStatus({ kind: "idle", messageKey: null });
 
     try {
       const response = await fetch(
@@ -425,14 +505,18 @@ export function PortfolioWorkspaceDialog({
       if (response.status === 401) {
         setPositionStatus({
           kind: "session",
-          message: "Your session expired. Sign in again; your draft is still here.",
+          messageKey: "sessionExpiredDraft",
         });
         return;
       }
       if (!response.ok) {
         setPositionStatus({
           kind: "error",
-          message: responseError(body, "Position could not be saved."),
+          messageKey: responseErrorKey(
+            body,
+            "positionSaveFailed",
+            positionSaveErrors,
+          ),
         });
         return;
       }
@@ -446,15 +530,12 @@ export function PortfolioWorkspaceDialog({
       setAverageCost(saved.averageCost ?? "");
       setPositionStatus({
         kind: "success",
-        message: "Position saved to your account.",
+        messageKey: "positionSaved",
       });
-    } catch (error) {
+    } catch {
       setPositionStatus({
         kind: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "Position could not be saved.",
+        messageKey: "positionSaveFailed",
       });
     } finally {
       setSaving(false);
@@ -471,7 +552,7 @@ export function PortfolioWorkspaceDialog({
       return;
     }
     setRemoving(true);
-    setPositionStatus({ kind: "idle", message: "" });
+    setPositionStatus({ kind: "idle", messageKey: null });
     try {
       const response = await fetch(
         `/api/portfolio/holdings/${encodeURIComponent(instrument.id)}?expected_version=${holding.version}`,
@@ -496,7 +577,7 @@ export function PortfolioWorkspaceDialog({
           setConfirmRemove(false);
           setPositionStatus({
             kind: "success",
-            message: "Position was already removed. The stock remains on your watchlist.",
+            messageKey: "alreadyRemoved",
           });
           return;
         }
@@ -504,14 +585,18 @@ export function PortfolioWorkspaceDialog({
       if (response.status === 401) {
         setPositionStatus({
           kind: "session",
-          message: "Your session expired. Sign in again to remove this position.",
+          messageKey: "sessionExpiredRemove",
         });
         return;
       }
       if (!response.ok) {
         setPositionStatus({
           kind: "error",
-          message: responseError(body, "Position could not be removed."),
+          messageKey: responseErrorKey(
+            body,
+            "positionRemoveFailed",
+            positionRemoveErrors,
+          ),
         });
         return;
       }
@@ -522,7 +607,7 @@ export function PortfolioWorkspaceDialog({
         candidate?.data?.symbolId !== instrument.id ||
         candidate.data.deleted !== true
       ) {
-        throw new Error("The removal response did not match this stock.");
+        throw new Error(copy.removalMismatch);
       }
       onHoldingRemoved(instrument.id);
       setQuantity("");
@@ -530,15 +615,12 @@ export function PortfolioWorkspaceDialog({
       setConfirmRemove(false);
       setPositionStatus({
         kind: "success",
-        message: "Position removed. The stock remains on your watchlist.",
+        messageKey: "positionRemoved",
       });
-    } catch (error) {
+    } catch {
       setPositionStatus({
         kind: "error",
-        message:
-          error instanceof Error
-            ? error.message
-            : "Position could not be removed.",
+        messageKey: "positionRemoveFailed",
       });
     } finally {
       setRemoving(false);
@@ -551,7 +633,7 @@ export function PortfolioWorkspaceDialog({
       setScenarioResource({
         phase: "error",
         key: scenarioKey,
-        message: "A fresh provider quote is required before scenario numbers can be shown.",
+        messageKey: "freshQuoteRequiredBeforeNumbers",
       });
       return;
     }
@@ -561,7 +643,7 @@ export function PortfolioWorkspaceDialog({
       setScenarioResource({
         phase: "error",
         key: scenarioKey,
-        message: validatedBudget.error,
+        messageKey: "invalidBudget",
       });
       return;
     }
@@ -594,7 +676,11 @@ export function PortfolioWorkspaceDialog({
         setScenarioResource({
           phase: "error",
           key: requestKey,
-          message: responseError(body, "Research scenarios are temporarily unavailable."),
+          messageKey: responseErrorKey(
+            body,
+            "researchUnavailable",
+            scenarioErrors,
+          ),
         });
         return;
       }
@@ -613,7 +699,7 @@ export function PortfolioWorkspaceDialog({
         setScenarioResource({
           phase: "error",
           key: requestKey,
-          message: "The returned quote context is no longer fresh. Recheck before viewing numbers.",
+          messageKey: "returnedQuoteStale",
         });
         return;
       }
@@ -627,21 +713,18 @@ export function PortfolioWorkspaceDialog({
         setScenarioResource({
           phase: "error",
           key: requestKey,
-          message: "Your saved position changed. Refresh it before calculating scenarios.",
+          messageKey: "savedPositionChanged",
         });
         void fetchPortfolio().catch(() => undefined);
         return;
       }
       setScenarioResource({ phase: "ready", key: requestKey, data: parsed });
-    } catch (error) {
+    } catch {
       if (controller.signal.aborted) return;
       setScenarioResource({
         phase: "error",
         key: requestKey,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Research scenarios are temporarily unavailable.",
+        messageKey: "researchUnavailable",
       });
     }
   }
@@ -675,18 +758,18 @@ export function PortfolioWorkspaceDialog({
               <div>
                 <span>{instrument.exchange}:{instrument.ticker}</span>
                 <DialogPrimitive.Title>
-                  Position &amp; research workspace
+                  {copy.workspaceTitle}
                 </DialogPrimitive.Title>
                 <p>{instrument.name}</p>
               </div>
             </div>
             <DialogPrimitive.Close className={styles.closeButton}>
               <X size={18} />
-              <span className="sr-only">Close workspace</span>
+              <span className="sr-only">{copy.closeWorkspace}</span>
             </DialogPrimitive.Close>
           </header>
 
-          <div className={styles.tabs} role="tablist" aria-label="Portfolio workspace">
+          <div className={styles.tabs} role="tablist" aria-label={copy.workspaceAria}>
             <button
               type="button"
               role="tab"
@@ -694,7 +777,7 @@ export function PortfolioWorkspaceDialog({
               className={activeView === "position" ? styles.activeTab : ""}
               onClick={() => setActiveView("position")}
             >
-              <BriefcaseBusiness size={15} /> Position
+              <BriefcaseBusiness size={15} /> {copy.position}
             </button>
             <button
               type="button"
@@ -703,7 +786,7 @@ export function PortfolioWorkspaceDialog({
               className={activeView === "research" ? styles.activeTab : ""}
               onClick={() => setActiveView("research")}
             >
-              <Sparkles size={15} /> Research scenarios
+              <Sparkles size={15} /> {copy.researchScenarios}
             </button>
           </div>
 
@@ -711,16 +794,13 @@ export function PortfolioWorkspaceDialog({
             {activeView === "position" ? (
               <section
                 role="tabpanel"
-                aria-label="Position"
+                aria-label={copy.position}
                 className={styles.positionPanel}
               >
                 <div className={styles.sectionIntro}>
-                  <span>YOUR POSITION</span>
-                  <h2>{holding ? "Update what you own" : "Add this position"}</h2>
-                  <p>
-                    This context helps Omnigaze frame concentration and hypothetical
-                    scenarios. It never places an order.
-                  </p>
+                  <span>{copy.yourPosition}</span>
+                  <h2>{holding ? copy.updateWhatYouOwn : copy.addThisPosition}</h2>
+                  <p>{copy.positionIntro}</p>
                 </div>
 
                 {!session.isAuthenticated ? (
@@ -729,19 +809,19 @@ export function PortfolioWorkspaceDialog({
                     <div>
                       <strong>
                         {holding?.persistence === "browser"
-                          ? "This position is saved on this device"
-                          : "Sign in to save positions"}
+                          ? copy.devicePositionTitle
+                          : copy.signInToSave}
                       </strong>
                       <p>
                         {holding?.persistence === "browser"
-                          ? `${holding.quantity} shares${holding.averageCost ? ` · $${holding.averageCost} average cost` : ""}. Edit browser-only setup from onboarding, or sign in to sync across devices.`
-                          : "Account positions are private, versioned, and available across your devices."}
+                          ? `${formatStoredQuantity(holding.quantity, locale)} ${copy.shares}${holding.averageCost ? ` · ${formatStoredUsd(holding.averageCost, locale)} ${copy.averageCost}` : ""}. ${copy.devicePositionSuffix}`
+                          : copy.accountPositionsPrivate}
                       </p>
                       <div className={styles.gateActions}>
                         <a href={session.signInPath} target="_top">
-                          Sign in to sync <ArrowRight size={14} />
+                          {copy.signInToSync} <ArrowRight size={14} />
                         </a>
-                        <Link href="/onboarding">Edit device setup</Link>
+                        <Link href="/onboarding">{copy.editDeviceSetup}</Link>
                       </div>
                     </div>
                   </div>
@@ -755,20 +835,17 @@ export function PortfolioWorkspaceDialog({
                     <div>
                       <strong>
                         {portfolioAvailability === "refreshing"
-                          ? "Reconnecting your portfolio"
-                          : "Portfolio sync is unavailable"}
+                          ? copy.reconnectingPortfolio
+                          : copy.portfolioSyncUnavailable}
                       </strong>
-                      <p>
-                        Existing data is not treated as empty. Reconnect before adding
-                        or editing a position.
-                      </p>
+                      <p>{copy.reconnectBeforeEdit}</p>
                       <button
                         type="button"
                         className={styles.secondaryButton}
                         disabled={portfolioAvailability === "refreshing"}
                         onClick={() => void recoverPortfolio()}
                       >
-                        <RefreshCw size={14} /> Retry
+                        <RefreshCw size={14} /> {copy.retry}
                       </button>
                     </div>
                   </div>
@@ -776,7 +853,7 @@ export function PortfolioWorkspaceDialog({
                   <>
                     <div className={styles.formGrid} aria-busy={saving || removing}>
                       <label htmlFor={quantityId}>
-                        <span>Shares owned</span>
+                        <span>{copy.sharesOwned}</span>
                         <input
                           id={quantityId}
                           inputMode="decimal"
@@ -788,10 +865,10 @@ export function PortfolioWorkspaceDialog({
                             clearPositionRetry();
                           }}
                         />
-                        <small>Positive amount · up to six decimal places</small>
+                        <small>{copy.quantityHint}</small>
                       </label>
                       <label htmlFor={averageCostId}>
-                        <span>Average cost per share <i>optional</i></span>
+                        <span>{copy.averageCostPerShare} <i>{copy.optional}</i></span>
                         <div className={styles.moneyInput}>
                           <b>$</b>
                           <input
@@ -807,7 +884,7 @@ export function PortfolioWorkspaceDialog({
                           />
                           <b>USD</b>
                         </div>
-                        <small>Quantity will be marked current as of now</small>
+                        <small>{copy.quantityCurrentNow}</small>
                       </label>
                     </div>
 
@@ -815,9 +892,9 @@ export function PortfolioWorkspaceDialog({
                       <div className={styles.savedContext}>
                         <Check size={14} />
                         <span>
-                          Account position · version {holding.version}
+                          {copy.accountPosition} · {copy.version} {holding.version}
                           {holding.quantityAsOf
-                            ? ` · as of ${formatAsOf(holding.quantityAsOf)}`
+                            ? ` · ${copy.asOf} ${formatAsOf(holding.quantityAsOf, locale, copy.timeUnavailable)}`
                             : ""}
                         </span>
                       </div>
@@ -834,14 +911,14 @@ export function PortfolioWorkspaceDialog({
                           <AlertTriangle size={16} />
                         )}
                         <div>
-                          <span>{positionStatus.message}</span>
+                          <span>{copy[positionStatus.messageKey]}</span>
                           {positionStatus.kind === "conflict" && conflictHolding !== undefined && (
                             <button type="button" onClick={loadConflictHolding}>
-                              Load latest position
+                              {copy.loadLatestPosition}
                             </button>
                           )}
                           {positionStatus.kind === "session" && (
-                            <a href="/dashboard" target="_top">Sign in again</a>
+                            <a href="/dashboard" target="_top">{copy.signInAgain}</a>
                           )}
                         </div>
                       </div>
@@ -855,28 +932,28 @@ export function PortfolioWorkspaceDialog({
                         onClick={() => void savePosition()}
                       >
                         {saving ? (
-                          <><LoaderCircle className={styles.spinner} size={15} /> Saving…</>
+                          <><LoaderCircle className={styles.spinner} size={15} /> {copy.saving}</>
                         ) : (
-                          <><BriefcaseBusiness size={15} /> {holding ? "Save changes" : "Save position"}</>
+                          <><BriefcaseBusiness size={15} /> {holding ? copy.saveChanges : copy.savePosition}</>
                         )}
                       </button>
                       {holding?.persistence === "server" &&
                         (confirmRemove ? (
                           <div className={styles.removeConfirm}>
-                            <span>Remove this position?</span>
+                            <span>{copy.removeQuestion}</span>
                             <button
                               type="button"
                               onClick={() => setConfirmRemove(false)}
                               disabled={removing}
                             >
-                              Cancel
+                              {copy.cancel}
                             </button>
                             <button
                               type="button"
                               onClick={() => void removePosition()}
                               disabled={removing}
                             >
-                              {removing ? "Removing…" : "Remove"}
+                              {removing ? copy.removing : copy.remove}
                             </button>
                           </div>
                         ) : (
@@ -886,7 +963,7 @@ export function PortfolioWorkspaceDialog({
                             onClick={() => setConfirmRemove(true)}
                             disabled={saving || removing}
                           >
-                            <Trash2 size={14} /> Remove position
+                            <Trash2 size={14} /> {copy.removePosition}
                           </button>
                         ))}
                     </div>
@@ -896,37 +973,31 @@ export function PortfolioWorkspaceDialog({
             ) : (
               <section
                 role="tabpanel"
-                aria-label="Research scenarios"
+                aria-label={copy.researchScenarios}
                 className={styles.researchPanel}
               >
                 <div className={styles.researchControls}>
                   <div className={styles.sectionIntro}>
-                    <span>EVIDENCE-GATED</span>
-                    <h2>Research scenarios</h2>
-                    <p>
-                      Calculate review checkpoints from a fresh quote and corroborated
-                      evidence. These are not targets or recommendations.
-                    </p>
+                    <span>{copy.evidenceGated}</span>
+                    <h2>{copy.researchScenarios}</h2>
+                    <p>{copy.researchIntro}</p>
                   </div>
 
                   {!session.isAuthenticated ? (
                     <div className={styles.gateCard}>
                       <LockKeyhole size={22} />
                       <div>
-                        <strong>Sign in to run evidence-gated scenarios</strong>
-                        <p>
-                          The service derives your saved holding privately and never
-                          accepts a caller-supplied account identity.
-                        </p>
+                        <strong>{copy.signInForScenarios}</strong>
+                        <p>{copy.privateScenarioIdentity}</p>
                         <a href={session.signInPath} target="_top">
-                          Sign in <ArrowRight size={14} />
+                          {copy.signIn} <ArrowRight size={14} />
                         </a>
                       </div>
                     </div>
                   ) : (
                     <>
                       <fieldset className={styles.segmentField}>
-                        <legend>Review range</legend>
+                        <legend>{copy.reviewRange}</legend>
                         <div>
                           {(["tight", "balanced", "wide"] as const).map((value) => (
                             <label key={value}>
@@ -937,7 +1008,7 @@ export function PortfolioWorkspaceDialog({
                                 checked={preset === value}
                                 onChange={() => setPreset(value)}
                               />
-                              <span>{value[0].toUpperCase() + value.slice(1)}</span>
+                              <span>{copy[value]}</span>
                             </label>
                           ))}
                         </div>
@@ -945,12 +1016,12 @@ export function PortfolioWorkspaceDialog({
 
                       <fieldset className={styles.segmentField}>
                         <legend>
-                          Research horizon <small>context only</small>
+                          {copy.researchHorizon} <small>{copy.contextOnly}</small>
                         </legend>
                         <div>
                           {([
-                            ["near_term", "Near term"],
-                            ["long_term", "Long term"],
+                            ["near_term", copy.nearTerm],
+                            ["long_term", copy.longTerm],
                           ] as const).map(([value, label]) => (
                             <label key={value}>
                               <input
@@ -967,7 +1038,7 @@ export function PortfolioWorkspaceDialog({
                       </fieldset>
 
                       <label className={styles.budgetField} htmlFor={budgetId}>
-                        <span>Hypothetical USD budget <i>optional</i></span>
+                        <span>{copy.hypotheticalBudget} <i>{copy.optional}</i></span>
                         <div className={styles.moneyInput}>
                           <b>$</b>
                           <input
@@ -980,7 +1051,7 @@ export function PortfolioWorkspaceDialog({
                           />
                           <b>USD</b>
                         </div>
-                        <small>Add scenarios appear only when a budget is entered.</small>
+                        <small>{copy.budgetHint}</small>
                       </label>
 
                       <div className={`${styles.quoteReadiness} ${styles[quoteState]}`}>
@@ -988,8 +1059,8 @@ export function PortfolioWorkspaceDialog({
                         <div>
                           <strong>
                             {quoteState === "fresh"
-                              ? "Fresh provider quote ready"
-                              : "Fresh provider quote required"}
+                              ? copy.freshQuoteReady
+                              : copy.freshQuoteRequired}
                           </strong>
                           <small>{quoteLabel}</small>
                         </div>
@@ -1002,9 +1073,9 @@ export function PortfolioWorkspaceDialog({
                         onClick={() => void runScenario()}
                       >
                         {visibleScenarioResource.phase === "loading" ? (
-                          <><LoaderCircle className={styles.spinner} size={15} /> Checking evidence…</>
+                          <><LoaderCircle className={styles.spinner} size={15} /> {copy.checkingEvidence}</>
                         ) : (
-                          <><FileSearch size={15} /> Check evidence &amp; calculate</>
+                          <><FileSearch size={15} /> {copy.checkAndCalculate}</>
                         )}
                       </button>
                     </>
@@ -1019,40 +1090,38 @@ export function PortfolioWorkspaceDialog({
                   {visibleScenarioResource.phase === "idle" ? (
                     <div className={styles.outputPlaceholder}>
                       <Sparkles size={24} />
-                      <strong>No scenario calculated yet</strong>
-                      <p>
-                        Omnigaze will first verify quote freshness and evidence coverage.
-                        If either is insufficient, no price or quantity numbers appear.
-                      </p>
+                      <strong>{copy.noScenario}</strong>
+                      <p>{copy.noScenarioDescription}</p>
                     </div>
                   ) : visibleScenarioResource.phase === "loading" ? (
                     <div className={styles.outputPlaceholder} role="status">
                       <LoaderCircle className={styles.spinner} size={24} />
-                      <strong>Checking live context</strong>
-                      <p>Verifying market freshness and attributable evidence.</p>
+                      <strong>{copy.checkingLiveContext}</strong>
+                      <p>{copy.verifyingContext}</p>
                     </div>
                   ) : visibleScenarioResource.phase === "error" ? (
                     <div className={styles.outputAlert} role="alert">
                       <AlertTriangle size={20} />
-                      <div><strong>Scenario unavailable</strong><p>{visibleScenarioResource.message}</p></div>
+                      <div>
+                        <strong>{copy.scenarioUnavailable}</strong>
+                        <p>{copy[visibleScenarioResource.messageKey]}</p>
+                      </div>
                     </div>
                   ) : ineligibleDecision ? (
                     <div className={styles.ineligible} role="status">
                       <ShieldCheck size={20} />
                       <div>
-                        <strong>Numbers withheld by the evidence gate</strong>
-                        <p>
-                          Omnigaze will not calculate from stale, demo, or under-sourced context.
-                        </p>
+                        <strong>{copy.numbersWithheld}</strong>
+                        <p>{copy.numbersWithheldDescription}</p>
                         <ul>
                           {ineligibleDecision.suppressedReasons.map((reason) => (
                             <li key={reason}>
-                              {suppressedReasonCopy[reason] ?? "A required safety condition was not met."}
+                              {suppressedReasonCopy[reason] ?? copy.safetyConditionMissing}
                             </li>
                           ))}
                         </ul>
                         <small>
-                          {scenarioContext?.evidenceCount ?? 0} attributable items · {scenarioContext?.providerStreamCount ?? scenarioContext?.independentSourceCount ?? 0} provider streams
+                          {scenarioContext?.evidenceCount ?? 0} {copy.attributableItems} · {scenarioContext?.providerStreamCount ?? scenarioContext?.independentSourceCount ?? 0} {copy.providerStreams}
                         </small>
                       </div>
                     </div>
@@ -1060,42 +1129,66 @@ export function PortfolioWorkspaceDialog({
                     <div className={styles.results}>
                       <div className={styles.resultHeading}>
                         <div>
-                          <span>RESEARCH SCENARIO · NOT A RECOMMENDATION</span>
-                          <h3>Review checkpoints for {instrument.ticker}</h3>
+                          <span>{copy.researchNotRecommendation}</span>
+                          <h3>{copy.reviewCheckpointsFor} {instrument.ticker}</h3>
                           <p>
-                            {scenarioContext?.quote?.provider ?? "Provider quote"} · {formatAsOf(eligibleDecision.asOf)}
+                            {scenarioContext?.quote?.provider ?? copy.providerQuote} · {formatAsOf(eligibleDecision.asOf, locale, copy.timeUnavailable)}
                             {scenarioContext?.quote?.marketCoverage
-                              ? ` · ${scenarioContext.quote.marketCoverage.replaceAll("-", " ")} coverage`
+                              ? ` · ${scenarioContext.quote.marketCoverage === "limited-exchange"
+                                ? copy.partialCoverage
+                                : scenarioContext.quote.marketCoverage === "consolidated"
+                                  ? copy.consolidatedCoverage
+                                  : copy.fixtureCoverage}`
                               : ""}
                           </p>
                         </div>
                         <div className={styles.coverageBadge}>
                           <strong>{Math.round(eligibleDecision.evidenceConfidence.score * 100)}%</strong>
-                          <span>evidence coverage</span>
-                          <small>{eligibleDecision.evidenceConfidence.label}</small>
+                          <span>{copy.evidenceCoverage}</span>
+                          <small>{copy[eligibleDecision.evidenceConfidence.label]}</small>
                         </div>
                       </div>
 
                       <div className={styles.zoneGrid}>
                         {eligibleDecision.zones.map((zone) => (
                           <article key={zone.kind}>
-                            <span>{zoneLabel(zone.kind)}</span>
-                            <strong>{formatMicrosAsUsd(zone.priceMicros)}</strong>
-                            <small>{formatDistance(zone.distanceBps)} from current quote</small>
-                            <p>{zone.explanation}</p>
+                            <span>
+                              {zone.kind === "pullback_review"
+                                ? copy.pullbackReview
+                                : zone.kind === "strength_review"
+                                  ? copy.strengthReview
+                                  : copy.downsideReview}
+                            </span>
+                            <strong>{formatUsdMicros(zone.priceMicros, locale)}</strong>
+                            <small>{formatDistance(zone.distanceBps, locale)} {copy.fromCurrentQuote}</small>
+                            <p>
+                              {locale === "zh-CN"
+                                ? zone.kind === "pullback_review"
+                                  ? copy.pullbackExplanation
+                                  : zone.kind === "strength_review"
+                                    ? copy.strengthExplanation
+                                    : copy.downsideExplanation
+                                : zone.explanation}
+                            </p>
                           </article>
                         ))}
                       </div>
 
                       {eligibleDecision.positionScenarios.length > 0 && (
                         <section className={styles.hypotheticalSection}>
-                          <div><span>HYPOTHETICAL POSITION SIZES</span><small>No order is placed</small></div>
+                          <div><span>{copy.hypotheticalPositionSizes}</span><small>{copy.noOrderPlaced}</small></div>
                           <ul>
                             {eligibleDecision.positionScenarios.map((scenario) => (
                               <li key={`${scenario.kind}-${scenario.fractionBps}`}>
-                                <span>{scenario.label}</span>
-                                <strong>{formatMicrosAsQuantity(scenario.quantityMicros)} shares</strong>
-                                <small>{scenario.kind === "trim" ? "Review-only trim" : "Budget-based add"}</small>
+                                <span>
+                                  {locale === "zh-CN"
+                                    ? scenario.kind === "trim"
+                                      ? `${scenario.fractionBps / 100}% 减仓情景`
+                                      : `输入预算的 ${scenario.fractionBps / 100}%`
+                                    : scenario.label}
+                                </span>
+                                <strong>{formatQuantityMicros(scenario.quantityMicros, locale)} {copy.shares}</strong>
+                                <small>{scenario.kind === "trim" ? copy.reviewOnlyTrim : copy.budgetBasedAdd}</small>
                               </li>
                             ))}
                           </ul>
@@ -1104,16 +1197,16 @@ export function PortfolioWorkspaceDialog({
 
                       {scenarioContext?.evidence && scenarioContext.evidence.length > 0 && (
                         <section className={styles.citations}>
-                          <div><span>CITED EVIDENCE</span><small>{scenarioContext.evidence.length} items</small></div>
+                          <div><span>{copy.citedEvidence}</span><small>{scenarioContext.evidence.length} {copy.items}</small></div>
                           <ul>
                             {scenarioContext.evidence.map((citation) => (
                               <li key={citation.id}>
                                 <div>
                                   <strong>{citation.headline}</strong>
-                                  <span>{citation.source} · {formatAsOf(citation.publishedAt)}</span>
+                                  <span>{citation.source} · {formatAsOf(citation.publishedAt, locale, copy.timeUnavailable)}</span>
                                 </div>
                                 {citation.sourceUrl && (
-                                  <a href={citation.sourceUrl} target="_blank" rel="noreferrer" aria-label={`Open source: ${citation.headline}`}>
+                                  <a href={citation.sourceUrl} target="_blank" rel="noreferrer" aria-label={`${copy.openSource}: ${citation.headline}`}>
                                     <ExternalLink size={14} />
                                   </a>
                                 )}
@@ -1124,14 +1217,19 @@ export function PortfolioWorkspaceDialog({
                       )}
 
                       <section className={styles.assumptions}>
-                        <strong>Assumptions &amp; limits</strong>
+                        <strong>{copy.assumptionsAndLimits}</strong>
                         <ul>
-                          {eligibleDecision.assumptions.map((assumption) => (
+                          {(locale === "zh-CN"
+                            ? [
+                                `${copy[eligibleDecision.preset]}${copy.presetAssumptionSuffix}`,
+                                copy.priceAssumption,
+                                copy.quantityAssumption,
+                              ]
+                            : eligibleDecision.assumptions
+                          ).map((assumption) => (
                             <li key={assumption}>{assumption}</li>
                           ))}
-                          <li>
-                            Evidence coverage is not a probability of direction or return.
-                          </li>
+                          <li>{copy.evidenceNotProbability}</li>
                         </ul>
                       </section>
                     </div>
@@ -1143,8 +1241,8 @@ export function PortfolioWorkspaceDialog({
 
           <footer className={styles.footer}>
             <ShieldCheck size={14} />
-            <span>Research support only · Not investment advice · No trade execution</span>
-            <span><Clock3 size={13} /> Live context is revalidated on demand</span>
+            <span>{copy.researchOnly}</span>
+            <span><Clock3 size={13} /> {copy.liveContextRevalidated}</span>
           </footer>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>

@@ -92,11 +92,14 @@ describe("MCP personalized Daily Brief parity", () => {
   });
 
   it("returns the personal brief with MCP scope and retry identity parity", async () => {
-    const body = await callBrief(true, { request_id: "brief-request-1" });
+    const body = await callBrief(true, {
+      request_id: "brief-request-1",
+      locale: "zh-CN",
+    });
 
     expect(mocks.generatePersonalDailyBrief).toHaveBeenCalledWith(
       "daily-brief-owner",
-      { requestId: "brief-request-1" },
+      { requestId: "brief-request-1", locale: "zh-CN" },
     );
     expect(body.result.structuredContent).toMatchObject({
       data: { headline: "Two tracked companies changed today" },

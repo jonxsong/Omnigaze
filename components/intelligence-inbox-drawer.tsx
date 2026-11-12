@@ -24,7 +24,10 @@ import {
   X,
 } from "lucide-react";
 import { Dialog as DialogPrimitive } from "radix-ui";
+import { useAppLocale } from "@/components/app-locale";
+import { intelligenceInboxCopy } from "@/components/intelligence-inbox-copy";
 import type { CanonicalSymbol, Materiality } from "@/lib/market-types";
+import type { AppLocale } from "@/lib/app-locale";
 import type {
   AlertMinimumMateriality,
   AlertRuleMutationResponse,
@@ -119,7 +122,8 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function responseError(body: unknown, fallback: string) {
+function responseError(body: unknown, fallback: string, locale: AppLocale) {
+  if (locale === "zh-CN") return fallback;
   const error = asRecord(body).error;
   return typeof error === "string" && error.trim() ? error : fallback;
 }
@@ -132,16 +136,17 @@ function isHealthySyncStatus(status: IntelligenceInboxSyncMeta["status"]) {
   );
 }
 
-function formatEventTime(value: string) {
+function formatEventTime(value: string, locale: AppLocale) {
+  const copy = intelligenceInboxCopy[locale];
   const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "Time unavailable";
+  if (!Number.isFinite(timestamp)) return copy.time.unavailable;
   const ageMs = Date.now() - timestamp;
   const ageMinutes = Math.max(0, Math.floor(ageMs / 60_000));
-  if (ageMinutes < 1) return "Just now";
-  if (ageMinutes < 60) return `${ageMinutes}m ago`;
+  if (ageMinutes < 1) return copy.time.justNow;
+  if (ageMinutes < 60) return copy.time.minutesAgo(ageMinutes);
   const ageHours = Math.floor(ageMinutes / 60);
-  if (ageHours < 24) return `${ageHours}h ago`;
-  return new Intl.DateTimeFormat("en-US", {
+  if (ageHours < 24) return copy.time.hoursAgo(ageHours);
+  return new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en-US", {
     month: "short",
     day: "numeric",
     hour: "numeric",
@@ -149,12 +154,14 @@ function formatEventTime(value: string) {
   }).format(new Date(timestamp));
 }
 
-function materialityLabel(value: Materiality) {
-  return `${value[0].toUpperCase()}${value.slice(1)} impact`;
+function materialityLabel(value: Materiality, locale: AppLocale) {
+  return intelligenceInboxCopy[locale].materiality[value];
 }
 
-function symbolLabel(item: IntelligenceInboxItem) {
-  if (item.event.symbols.length === 0) return "Market";
+function symbolLabel(item: IntelligenceInboxItem, locale: AppLocale) {
+  if (item.event.symbols.length === 0) {
+    return intelligenceInboxCopy[locale].market;
+  }
   const tickers = item.event.symbols.map(({ ticker }) => ticker);
   return tickers.slice(0, 2).join(" · ") + (tickers.length > 2 ? ` +${tickers.length - 2}` : "");
 }
@@ -228,6 +235,8 @@ export function IntelligenceInboxDrawer({
   onSaveRequestHandled,
   onCountsChange,
 }: IntelligenceInboxDrawerProps) {
+  const { locale } = useAppLocale();
+  const copy = intelligenceInboxCopy[locale];
   const [tab, setTab] = useState<IntelligenceInboxTab>(initialTab);
   const [filter, setFilter] = useState<InboxFilter>("all");
   const [inbox, setInbox] = useState<InboxResource>({
@@ -264,12 +273,12 @@ export function IntelligenceInboxDrawer({
       const body = (await response.json().catch(() => null)) as unknown;
       if (!response.ok) {
         throw new Error(
-          responseError(body, `Inbox refresh failed with ${response.status}.`),
+          responseError(body, copy.errors.inboxRefresh(response.status), locale),
         );
       }
       const parsed = body as IntelligenceInboxResponse;
       if (!Array.isArray(parsed?.data?.items) || !parsed?.data?.counts || !parsed?.meta?.sync) {
-        throw new Error("The intelligence inbox returned an invalid response.");
+        throw new Error(copy.errors.inboxInvalid);
       }
       setInbox({
         phase: isHealthySyncStatus(parsed.meta.sync.status) ? "ready" : "degraded",
@@ -278,8 +287,9 @@ export function IntelligenceInboxDrawer({
         sync: parsed.meta.sync,
         message: isHealthySyncStatus(parsed.meta.sync.status)
           ? null
-          : parsed.meta.sync.notice ??
-            "Live provider refresh is delayed. Stored account events remain available.",
+          : locale === "en"
+            ? parsed.meta.sync.notice ?? copy.errors.inboxDelayed
+            : copy.errors.inboxDelayed,
       });
       setRules({ phase: "ready", rules: parsed.data.rules, message: null });
       return true;
@@ -291,11 +301,11 @@ export function IntelligenceInboxDrawer({
         message:
           error instanceof Error
             ? error.message
-            : "The intelligence inbox is temporarily unavailable.",
+            : copy.errors.inboxUnavailable,
       }));
       return false;
     }
-  }, []);
+  }, [copy, locale]);
 
   const loadSaved = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -313,7 +323,8 @@ export function IntelligenceInboxDrawer({
         throw new Error(
           responseError(
             body,
-            `Saved intelligence refresh failed with ${response.status}.`,
+            copy.errors.savedRefresh(response.status),
+            locale,
           ),
         );
       }
@@ -323,7 +334,7 @@ export function IntelligenceInboxDrawer({
         !parsed?.data?.counts ||
         !parsed?.meta?.sync
       ) {
-        throw new Error("Saved intelligence returned an invalid response.");
+        throw new Error(copy.errors.savedInvalid);
       }
       setInbox((current) => {
         const merged = new Map(
@@ -346,8 +357,9 @@ export function IntelligenceInboxDrawer({
           sync: parsed.meta.sync,
           message: isHealthySyncStatus(parsed.meta.sync.status)
             ? null
-            : parsed.meta.sync.notice ??
-              "Live provider refresh is delayed. Stored saved intelligence remains available.",
+            : locale === "en"
+              ? parsed.meta.sync.notice ?? copy.errors.savedDelayed
+              : copy.errors.savedDelayed,
         };
       });
       setRules({ phase: "ready", rules: parsed.data.rules, message: null });
@@ -361,11 +373,11 @@ export function IntelligenceInboxDrawer({
         message:
           error instanceof Error
             ? error.message
-            : "Saved intelligence is temporarily unavailable.",
+            : copy.errors.savedUnavailable,
       }));
       return false;
     }
-  }, []);
+  }, [copy, locale]);
 
   const loadInboxItem = useCallback(async (eventId: string) => {
     try {
@@ -381,7 +393,7 @@ export function IntelligenceInboxDrawer({
       if (response.status === 404) return { status: "not_found" as const };
       if (!response.ok) {
         throw new Error(
-          responseError(body, `Inbox item lookup failed with ${response.status}.`),
+          responseError(body, copy.errors.itemLookup(response.status), locale),
         );
       }
       const parsed = body as IntelligenceInboxItemResponse;
@@ -389,7 +401,7 @@ export function IntelligenceInboxDrawer({
         parsed?.data?.item?.event?.eventId !== eventId ||
         typeof parsed.data.item.state?.version !== "number"
       ) {
-        throw new Error("The inbox item lookup returned an invalid response.");
+        throw new Error(copy.errors.itemInvalid);
       }
       return { status: "found" as const, item: parsed.data.item };
     } catch (error) {
@@ -398,10 +410,10 @@ export function IntelligenceInboxDrawer({
         message:
           error instanceof Error
             ? error.message
-            : "The durable inbox item could not be loaded.",
+            : copy.errors.itemUnavailable,
       };
     }
-  }, []);
+  }, [copy, locale]);
 
   const loadRules = useCallback(async (signal?: AbortSignal) => {
     setRules((current) => ({
@@ -419,12 +431,12 @@ export function IntelligenceInboxDrawer({
       const body = (await response.json().catch(() => null)) as unknown;
       if (!response.ok) {
         throw new Error(
-          responseError(body, `Alert rules refresh failed with ${response.status}.`),
+          responseError(body, copy.errors.rulesRefresh(response.status), locale),
         );
       }
       const parsed = body as AlertRulesResponse;
       if (!Array.isArray(parsed?.data?.rules)) {
-        throw new Error("The alert rules endpoint returned an invalid response.");
+        throw new Error(copy.errors.rulesInvalid);
       }
       setRules({ phase: "ready", rules: parsed.data.rules, message: null });
       return true;
@@ -436,11 +448,11 @@ export function IntelligenceInboxDrawer({
         message:
           error instanceof Error
             ? error.message
-            : "Alert rules are temporarily unavailable.",
+            : copy.errors.rulesUnavailable,
       }));
       return false;
     }
-  }, []);
+  }, [copy, locale]);
 
   useEffect(() => {
     if (!open) return;
@@ -607,13 +619,17 @@ export function IntelligenceInboxDrawer({
             const refreshed = await loadInbox();
             setActionMessage(
               refreshed
-                ? "This event changed in another session. Omnigaze loaded the latest account state."
-                : "This event changed in another session. Your optimistic change was rolled back, but the latest account state could not be loaded.",
+                ? copy.conflict.inboxReloaded
+                : copy.conflict.inboxRollback,
             );
             return "conflict" as const;
           }
           throw new Error(
-            responseError(body, `Inbox update failed with ${response.status}.`),
+            responseError(
+              body,
+              copy.errors.inboxUpdate(response.status),
+              locale,
+            ),
           );
         }
         const parsed = body as InboxStateMutationResponse;
@@ -621,7 +637,7 @@ export function IntelligenceInboxDrawer({
           parsed?.data?.eventId !== eventId ||
           typeof parsed.data.state?.version !== "number"
         ) {
-          throw new Error("The inbox update returned an invalid response.");
+          throw new Error(copy.errors.inboxUpdateInvalid);
         }
         setInbox((current) => {
           const candidate = current.items.find(
@@ -640,7 +656,7 @@ export function IntelligenceInboxDrawer({
         return "saved" as const;
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : "Inbox update failed.";
+          error instanceof Error ? error.message : copy.errors.inboxUpdateFailed;
         const focused = await loadInboxItem(eventId);
         let refreshed = false;
         if (focused.status === "found") {
@@ -663,8 +679,8 @@ export function IntelligenceInboxDrawer({
         }
         setActionMessage(
           refreshed
-            ? `${message} Omnigaze loaded the latest account state.`
-            : `${message} The latest account state could not be verified; the optimistic view was rolled back.`,
+            ? copy.conflict.accountReloaded(message)
+            : copy.conflict.accountUnverified(message),
         );
         return "error" as const;
       } finally {
@@ -675,7 +691,7 @@ export function IntelligenceInboxDrawer({
         });
       }
     },
-    [busyItems, loadInbox, loadInboxItem],
+    [busyItems, copy, loadInbox, loadInboxItem, locale],
   );
 
   const updateRule = useCallback(
@@ -753,18 +769,22 @@ export function IntelligenceInboxDrawer({
             const refreshed = await loadRules();
             setActionMessage(
               refreshed
-                ? "This rule changed in another session. Omnigaze loaded the latest version."
-                : "This rule changed in another session. Your optimistic change was rolled back, but the latest rule could not be loaded.",
+                ? copy.conflict.ruleReloaded
+                : copy.conflict.ruleRollback,
             );
             return;
           }
           throw new Error(
-            responseError(body, `Alert rule update failed with ${response.status}.`),
+            responseError(
+              body,
+              copy.errors.ruleUpdate(response.status),
+              locale,
+            ),
           );
         }
         const parsed = body as AlertRuleMutationResponse;
         if (parsed?.data?.rule?.symbol.id !== symbolId) {
-          throw new Error("The alert rule update returned an invalid response.");
+          throw new Error(copy.errors.ruleUpdateInvalid);
         }
         setRules((current) => ({
           ...current,
@@ -775,7 +795,7 @@ export function IntelligenceInboxDrawer({
         }));
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : "Alert rule update failed.";
+          error instanceof Error ? error.message : copy.errors.ruleUpdateFailed;
         const refreshed = await loadRules();
         if (!refreshed) {
           setRules((current) => {
@@ -802,8 +822,8 @@ export function IntelligenceInboxDrawer({
         }
         setActionMessage(
           refreshed
-            ? `${message} Omnigaze loaded the latest rule state.`
-            : `${message} The latest rule state could not be verified; the optimistic view was rolled back.`,
+            ? copy.conflict.ruleStateReloaded(message)
+            : copy.conflict.ruleStateUnverified(message),
         );
       } finally {
         setBusyRules((current) => {
@@ -813,7 +833,7 @@ export function IntelligenceInboxDrawer({
         });
       }
     },
-    [busyRules, instruments, loadRules, rules.rules],
+    [busyRules, copy, instruments, loadRules, locale, rules.rules],
   );
 
   useEffect(() => {
@@ -834,7 +854,7 @@ export function IntelligenceInboxDrawer({
     }
     if (!isAuthenticated) {
       handledSaveNonces.current.add(saveRequest.nonce);
-      setActionMessage("Sign in before saving intelligence to your thesis.");
+      setActionMessage(copy.saveFlow.signIn);
       onSaveRequestHandled?.(saveRequest, "auth_required");
       return;
     }
@@ -864,14 +884,14 @@ export function IntelligenceInboxDrawer({
         const focused = await loadInboxItem(saveRequest.eventId);
         if (focused.status === "error") {
           setActionMessage(
-            `${focused.message} Nothing was saved.`,
+            copy.saveFlow.nothingSaved(focused.message),
           );
           onSaveRequestHandled?.(saveRequest, "error");
           return;
         }
         if (focused.status === "not_found") {
           setActionMessage(
-            "This event is not eligible for durable saving. Demo, stale, and unverified feed items are never added to your account inbox.",
+            copy.saveFlow.ineligible,
           );
           onSaveRequestHandled?.(saveRequest, "not_found");
           return;
@@ -884,7 +904,7 @@ export function IntelligenceInboxDrawer({
       }
       if (item.state.saved) {
         setTab("saved");
-        setActionMessage("This event is already saved in your thesis workspace.");
+        setActionMessage(copy.saveFlow.alreadySaved);
         onSaveRequestHandled?.(saveRequest, "already_saved");
         return;
       }
@@ -892,7 +912,7 @@ export function IntelligenceInboxDrawer({
       const result = await mutateItem(item, { saved: true });
       if (result === "saved") {
         setTab("saved");
-        setActionMessage("Saved to your thesis workspace.");
+        setActionMessage(copy.saveFlow.saved);
       }
       onSaveRequestHandled?.(saveRequest, result);
     })();
@@ -901,6 +921,7 @@ export function IntelligenceInboxDrawer({
     inbox.phase,
     inbox.sync,
     isAuthenticated,
+    copy,
     loadInboxItem,
     mutateItem,
     onSaveRequestHandled,
@@ -910,16 +931,16 @@ export function IntelligenceInboxDrawer({
 
   const syncLabel =
     inbox.sync?.hasMoreCandidates
-      ? "Catching up on fresh evidence"
+      ? copy.sync.catchingUp
       : inbox.sync?.status === "live"
-        ? "Live provider check complete"
+        ? copy.sync.liveComplete
         : inbox.sync?.status === "refresh_deferred"
-          ? "Recent provider check reused"
+          ? copy.sync.recentReused
           : inbox.sync?.status === "empty_watchlist"
-            ? "Add stocks to begin monitoring"
+            ? copy.sync.addStocks
             : inbox.items.length > 0
-              ? "Showing stored account intelligence"
-              : "Live provider refresh unavailable";
+              ? copy.sync.stored
+              : copy.sync.unavailable;
 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
@@ -937,10 +958,10 @@ export function IntelligenceInboxDrawer({
                 {unreadCount > 0 && <i />}
               </span>
               <div>
-                <span>PERSONAL MARKET INTELLIGENCE</span>
-                <DialogPrimitive.Title>Intelligence inbox</DialogPrimitive.Title>
+                <span>{copy.header.eyebrow}</span>
+                <DialogPrimitive.Title>{copy.header.title}</DialogPrimitive.Title>
                 <DialogPrimitive.Description id="intelligence-inbox-description">
-                  Evidence that matters to the stocks you follow.
+                  {copy.header.description}
                 </DialogPrimitive.Description>
               </div>
             </div>
@@ -949,7 +970,7 @@ export function IntelligenceInboxDrawer({
                 <button
                   type="button"
                   className={styles.refreshButton}
-                  aria-label="Refresh intelligence inbox"
+                  aria-label={copy.header.refreshAria}
                   disabled={inbox.phase === "loading" || inbox.phase === "refreshing"}
                   onClick={() => {
                     void (async () => {
@@ -970,7 +991,7 @@ export function IntelligenceInboxDrawer({
               )}
               <DialogPrimitive.Close className={styles.closeButton}>
                 <X size={18} />
-                <span className="sr-only">Close intelligence inbox</span>
+                <span className="sr-only">{copy.header.closeAria}</span>
               </DialogPrimitive.Close>
             </div>
           </header>
@@ -978,26 +999,20 @@ export function IntelligenceInboxDrawer({
           {!isAuthenticated ? (
             <div className={styles.authGate} data-testid="inbox-auth-gate">
               <span className={styles.gateIcon}><ShieldCheck size={25} /></span>
-              <span className={styles.eyebrow}>YOUR PRIVATE WORKSPACE</span>
-              <h2>Sign in to keep your intelligence</h2>
-              <p>
-                Read state, saved research, and alert rules belong to your account and
-                stay synchronized across your Omnigaze sessions.
-              </p>
+              <span className={styles.eyebrow}>{copy.auth.eyebrow}</span>
+              <h2>{copy.auth.title}</h2>
+              <p>{copy.auth.body}</p>
               <a href={signInPath} target="_top">
-                <LogIn size={16} /> Sign in to continue
+                <LogIn size={16} /> {copy.auth.action}
               </a>
-              <small>
-                Omnigaze does not create background alerts or store inbox activity
-                while you are signed out.
-              </small>
+              <small>{copy.auth.note}</small>
             </div>
           ) : (
             <>
               <nav
                 className={styles.tabs}
                 role="tablist"
-                aria-label="Intelligence inbox views"
+                aria-label={copy.tabs.aria}
                 onKeyDown={(event) => {
                   if (
                     event.key !== "ArrowLeft" &&
@@ -1032,14 +1047,14 @@ export function IntelligenceInboxDrawer({
                   aria-controls="intelligence-inbox-panel"
                   aria-label={
                     unreadCount > 0
-                      ? `Inbox, ${unreadCount} unread`
-                      : "Inbox"
+                      ? copy.tabs.inboxUnread(unreadCount)
+                      : copy.tabs.inbox
                   }
                   tabIndex={tab === "inbox" ? 0 : -1}
                   className={tab === "inbox" ? styles.activeTab : undefined}
                   onClick={() => setTab("inbox")}
                 >
-                  <Inbox size={15} /> Inbox
+                  <Inbox size={15} /> {copy.tabs.inbox}
                   {unreadCount > 0 && <span>{unreadCount > 99 ? "99+" : unreadCount}</span>}
                 </button>
                 <button
@@ -1052,7 +1067,7 @@ export function IntelligenceInboxDrawer({
                   className={tab === "saved" ? styles.activeTab : undefined}
                   onClick={() => setTab("saved")}
                 >
-                  <Bookmark size={15} /> Saved
+                  <Bookmark size={15} /> {copy.tabs.saved}
                 </button>
                 <button
                   id={inboxTabId("rules")}
@@ -1064,7 +1079,7 @@ export function IntelligenceInboxDrawer({
                   className={tab === "rules" ? styles.activeTab : undefined}
                   onClick={() => setTab("rules")}
                 >
-                  <SlidersHorizontal size={15} /> Rules
+                  <SlidersHorizontal size={15} /> {copy.tabs.rules}
                 </button>
               </nav>
 
@@ -1072,14 +1087,14 @@ export function IntelligenceInboxDrawer({
                 <div
                   className={styles.filterBar}
                   role="group"
-                  aria-label="Filter intelligence"
+                  aria-label={copy.filters.aria}
                 >
                   {(
                     [
-                      ["all", "All"],
-                      ["unread", "Unread"],
-                      ["alerts", "Alerts"],
-                      ["high_impact", "High impact"],
+                      ["all", copy.filters.all],
+                      ["unread", copy.filters.unread],
+                      ["alerts", copy.filters.alerts],
+                      ["high_impact", copy.filters.highImpact],
                     ] as const
                   ).map(([value, label]) => (
                     <button
@@ -1102,8 +1117,8 @@ export function IntelligenceInboxDrawer({
                     <strong>{syncLabel}</strong>
                     <span>
                       {tab === "rules"
-                        ? rules.message ?? "Stored alert rules remain visible."
-                        : inbox.message ?? "Stored inbox events remain visible."}
+                        ? rules.message ?? copy.storedRulesVisible
+                        : inbox.message ?? copy.storedInboxVisible}
                     </span>
                   </div>
                 </div>
@@ -1112,7 +1127,7 @@ export function IntelligenceInboxDrawer({
               {pendingDeferredSave ? (
                 <div className={styles.actionNotice} role="status" aria-live="polite">
                   <LoaderCircle className={styles.spinning} size={14} />
-                  Finishing the durable refresh before saving…
+                  {copy.finishingSave}
                 </div>
               ) : actionMessage ? (
                 <div className={styles.actionNotice} role="status" aria-live="polite">
@@ -1157,7 +1172,7 @@ export function IntelligenceInboxDrawer({
                   {inbox.sync?.status === "live" ? <Radio size={12} /> : <Clock3 size={12} />}
                   {syncLabel}
                 </span>
-                <span>Live, fresh evidence only. Demo and stale items never create alerts.</span>
+                <span>{copy.footerSafety}</span>
               </footer>
             </>
           )}
@@ -1168,11 +1183,13 @@ export function IntelligenceInboxDrawer({
 }
 
 function LoadingState() {
+  const { locale } = useAppLocale();
+  const copy = intelligenceInboxCopy[locale];
   return (
     <div className={styles.loadingState} role="status">
       <LoaderCircle className={styles.spinning} size={22} />
-      <strong>Checking your market intelligence</strong>
-      <span>Matching fresh provider evidence to your watchlist…</span>
+      <strong>{copy.loading.title}</strong>
+      <span>{copy.loading.body}</span>
     </div>
   );
 }
@@ -1186,18 +1203,20 @@ function EmptyState({
   filter: InboxFilter;
   watchedCount: number;
 }) {
+  const { locale } = useAppLocale();
+  const localized = intelligenceInboxCopy[locale];
   const copy =
     watchedCount === 0
-      ? ["Your inbox starts with a watchlist", "Add a stock and Omnigaze will check fresh provider evidence when you return."]
+      ? localized.empty.watchlist
       : tab === "saved"
-        ? ["No saved research yet", "Save an event to keep it available for your thesis, even after it leaves the recent feed."]
+        ? localized.empty.saved
         : filter === "unread"
-          ? ["You are caught up", "There are no unread intelligence events in your account."]
+          ? localized.empty.unread
           : filter === "alerts"
-            ? ["No matching alerts", "Alert rules are opt-in. Enable one in Rules to surface matching fresh evidence here."]
+            ? localized.empty.alerts
             : filter === "high_impact"
-              ? ["No high-impact events", "No stored events currently meet the high or critical impact filter."]
-              : ["No provider events yet", "Omnigaze will keep checking for live, fresh evidence tied to your watchlist."];
+              ? localized.empty.highImpact
+              : localized.empty.provider;
   return (
     <div className={styles.emptyState} role="status">
       <span><Sparkles size={21} /></span>
@@ -1221,6 +1240,8 @@ function InboxEventCard({
     >,
   ): Promise<"saved" | "conflict" | "error">;
 }) {
+  const { locale } = useAppLocale();
+  const copy = intelligenceInboxCopy[locale];
   const needsRead = !item.state.read || item.state.hasUpdate;
   return (
     <article
@@ -1231,16 +1252,16 @@ function InboxEventCard({
     >
       <div className={styles.eventTopline}>
         <div>
-          {needsRead && <i aria-label="Unread" />}
-          <span className={styles.symbolChip}>{symbolLabel(item)}</span>
+          {needsRead && <i aria-label={copy.event.unreadAria} />}
+          <span className={styles.symbolChip}>{symbolLabel(item, locale)}</span>
           <span className={`${styles.impactChip} ${styles[item.event.materiality]}`}>
-            {materialityLabel(item.event.materiality)}
+            {materialityLabel(item.event.materiality, locale)}
           </span>
           {item.alert.triggered && (
-            <span className={styles.alertChip}><Bell size={11} /> Rule match</span>
+            <span className={styles.alertChip}><Bell size={11} /> {copy.event.ruleMatch}</span>
           )}
         </div>
-        <time dateTime={item.event.publishedAt}>{formatEventTime(item.event.publishedAt)}</time>
+        <time dateTime={item.event.publishedAt}>{formatEventTime(item.event.publishedAt, locale)}</time>
       </div>
 
       <h3>{item.event.headline}</h3>
@@ -1248,12 +1269,12 @@ function InboxEventCard({
 
       <div className={styles.eventContext}>
         <span>{item.event.source.name}</span>
-        {item.event.category && <span>{item.event.category.replaceAll("_", " ")}</span>}
-        {item.event.claimStatus && <span>{item.event.claimStatus.replaceAll("-", " ")}</span>}
-        {item.event.isControversial && <span className={styles.controversy}>Controversy</span>}
+        {item.event.category && <span>{copy.category[item.event.category]}</span>}
+        {item.event.claimStatus && <span>{copy.claimStatus[item.event.claimStatus]}</span>}
+        {item.event.isControversial && <span className={styles.controversy}>{copy.event.controversy}</span>}
         {item.state.hasUpdate && (
           <span className={styles.updated}>
-            {item.state.read ? "Updated since read" : "Provider update"}
+            {item.state.read ? copy.event.updatedSinceRead : copy.event.providerUpdate}
           </span>
         )}
       </div>
@@ -1268,10 +1289,10 @@ function InboxEventCard({
               if (needsRead) void onMutate(item, { read: true });
             }}
           >
-            <ExternalLink size={13} /> Open source
+            <ExternalLink size={13} /> {copy.event.openSource}
           </a>
         ) : (
-          <span className={styles.noSource}><FileText size={13} /> Source link unavailable</span>
+          <span className={styles.noSource}><FileText size={13} /> {copy.event.sourceUnavailable}</span>
         )}
         <button
           type="button"
@@ -1280,7 +1301,7 @@ function InboxEventCard({
           onClick={() => void onMutate(item, { read: needsRead })}
         >
           {needsRead ? <Check size={13} /> : <RotateCcw size={13} />}
-          {needsRead ? "Mark read" : "Mark unread"}
+          {needsRead ? copy.event.markRead : copy.event.markUnread}
         </button>
         <button
           type="button"
@@ -1290,7 +1311,7 @@ function InboxEventCard({
           onClick={() => void onMutate(item, { saved: !item.state.saved })}
         >
           {item.state.saved ? <BookmarkCheck size={13} /> : <Bookmark size={13} />}
-          {item.state.saved ? "Saved" : "Save for thesis"}
+          {item.state.saved ? copy.event.saved : copy.event.saveForThesis}
         </button>
         <button
           type="button"
@@ -1299,9 +1320,9 @@ function InboxEventCard({
           onClick={() => void onMutate(item, { dismissed: !item.state.dismissed })}
         >
           {item.state.dismissed ? <RotateCcw size={13} /> : <Trash2 size={13} />}
-          {item.state.dismissed ? "Restore" : "Dismiss"}
+          {item.state.dismissed ? copy.event.restore : copy.event.dismiss}
         </button>
-        {busy && <LoaderCircle className={styles.spinning} size={14} aria-label="Saving" />}
+        {busy && <LoaderCircle className={styles.spinning} size={14} aria-label={copy.event.savingAria} />}
       </div>
     </article>
   );
@@ -1323,34 +1344,32 @@ function RulesPanel({
     >,
   ): Promise<void>;
 }) {
+  const { locale } = useAppLocale();
+  const copy = intelligenceInboxCopy[locale];
   if (resource.phase === "loading" && resource.rules.length === 0) return <LoadingState />;
   return (
     <div className={styles.rulesPanel}>
       <div className={styles.deliveryNotice}>
         <span><BellRing size={18} /></span>
         <div>
-          <strong>In-app only</strong>
-          <p>
-            Matching evidence appears in Omnigaze when it becomes available and when
-            you next open the app. Email, SMS, push, and browser notifications are not
-            enabled.
-          </p>
+          <strong>{copy.rules.deliveryTitle}</strong>
+          <p>{copy.rules.deliveryBody}</p>
         </div>
       </div>
 
       <div className={styles.rulesIntro}>
         <div>
-          <span className={styles.eyebrow}>WATCHLIST RULES</span>
-          <h2>Choose what earns your attention</h2>
+          <span className={styles.eyebrow}>{copy.rules.eyebrow}</span>
+          <h2>{copy.rules.title}</h2>
         </div>
-        <p>Rules are off by default and are never inferred from onboarding answers.</p>
+        <p>{copy.rules.intro}</p>
       </div>
 
       {instruments.length === 0 ? (
         <div className={styles.emptyState} role="status">
           <span><SlidersHorizontal size={21} /></span>
-          <strong>Add a stock before creating a rule</strong>
-          <p>Each alert rule is scoped to one symbol on your watchlist.</p>
+          <strong>{copy.rules.emptyTitle}</strong>
+          <p>{copy.rules.emptyBody}</p>
         </div>
       ) : (
         <div className={styles.ruleList}>
@@ -1382,7 +1401,7 @@ function RulesPanel({
                     <div><strong>{instrument.ticker}</strong><small>{instrument.name}</small></div>
                   </div>
                   <label className={styles.ruleSwitch}>
-                    <span className="sr-only">Enable {instrument.ticker} in-app alert rule</span>
+                    <span className="sr-only">{copy.rules.enableAria(instrument.ticker)}</span>
                     <input
                       type="checkbox"
                       checked={rule.enabled}
@@ -1390,12 +1409,12 @@ function RulesPanel({
                       onChange={(event) => void onUpdate(instrument.id, { enabled: event.target.checked })}
                     />
                     <i aria-hidden="true" />
-                    <b>{rule.enabled ? "On" : "Off"}</b>
+                    <b>{rule.enabled ? copy.rules.on : copy.rules.off}</b>
                   </label>
                 </div>
                 <div className={styles.ruleFields} aria-disabled={!rule.enabled}>
                   <label>
-                    <span>Minimum impact</span>
+                    <span>{copy.rules.minimumImpact}</span>
                     <select
                       value={rule.minimumMateriality}
                       disabled={busy || !rule.enabled}
@@ -1405,9 +1424,9 @@ function RulesPanel({
                         })
                       }
                     >
-                      <option value="medium">Medium or higher</option>
-                      <option value="high">High or critical</option>
-                      <option value="critical">Critical only</option>
+                      <option value="medium">{copy.rules.mediumOrHigher}</option>
+                      <option value="high">{copy.rules.highOrCritical}</option>
+                      <option value="critical">{copy.rules.criticalOnly}</option>
                     </select>
                   </label>
                   <label className={styles.checkField}>
@@ -1421,10 +1440,10 @@ function RulesPanel({
                         })
                       }
                     />
-                    <span><b>Include controversy</b><small>Reported disputes, allegations, and reputation events.</small></span>
+                    <span><b>{copy.rules.includeControversy}</b><small>{copy.rules.controversyHelp}</small></span>
                   </label>
                 </div>
-                {busy && <span className={styles.ruleSaving}><LoaderCircle className={styles.spinning} size={13} /> Saving rule…</span>}
+                {busy && <span className={styles.ruleSaving}><LoaderCircle className={styles.spinning} size={13} /> {copy.rules.saving}</span>}
               </article>
             );
           })}

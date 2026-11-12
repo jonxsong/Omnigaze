@@ -32,6 +32,21 @@ const analysis: DailyBriefAnalysis = {
   unknowns: ["The durability of the reaction remains unknown."],
 };
 
+const chineseAnalysis: DailyBriefAnalysis = {
+  ...analysis,
+  headline: "两家自选公司今日出现新变化",
+  summary: "最新证据改变了当前跨自选股背景。",
+  developments: [
+    {
+      ...analysis.developments[0],
+      title: "两家公司更新改变了现有证据集",
+      whyItMatters: "这些更新可能改变近期市场预期。",
+    },
+  ],
+  watchNext: ["关注公司的后续确认。"],
+  unknowns: ["市场反应能否持续仍不明确。"],
+};
+
 function watchlists() {
   return [
     {
@@ -198,6 +213,7 @@ describe("generatePersonalDailyBrief", () => {
         identity: expect.objectContaining({
           briefDate: "2026-11-12",
           modelConfig: "test-model",
+          promptVersion: "2026-11-12.2.en",
           cacheKey: expect.stringMatching(/^[a-f0-9]{64}$/),
         }),
       }),
@@ -216,6 +232,7 @@ describe("generatePersonalDailyBrief", () => {
         omittedSymbolCount: 0,
         evidenceCount: 2,
         sourceCount: 2,
+        promptVersion: "2026-11-12.2.en",
         cache: { state: "generated" },
         budget: { consumed: true, remaining: 18, limit: 20 },
       },
@@ -223,6 +240,81 @@ describe("generatePersonalDailyBrief", () => {
     expect(JSON.stringify(deps.analyze.mock.calls[0][0])).not.toMatch(
       /shares|quantity|averageCost|targetPrice/i,
     );
+  });
+
+  it("isolates model input and cache identity by requested output locale", async () => {
+    const englishDeps = dependencies();
+    const chineseDeps = dependencies();
+    chineseDeps.analyze.mockResolvedValue(chineseAnalysis);
+
+    const english = await generatePersonalDailyBrief("owner-1", {}, englishDeps);
+    const chinese = await generatePersonalDailyBrief(
+      "owner-1",
+      { locale: "zh-CN" },
+      chineseDeps,
+    );
+
+    const englishGuardInput = englishDeps.guard.execute.mock.calls[0][0];
+    const chineseGuardInput = chineseDeps.guard.execute.mock.calls[0][0];
+    expect(englishGuardInput.identity.promptVersion).toBe("2026-11-12.2.en");
+    expect(chineseGuardInput.identity.promptVersion).toBe(
+      "2026-11-12.2.zh-CN",
+    );
+    expect(englishGuardInput.identity.cacheKey).not.toBe(
+      chineseGuardInput.identity.cacheKey,
+    );
+    expect(english.meta.promptVersion).toBe("2026-11-12.2.en");
+    expect(chinese.meta.promptVersion).toBe("2026-11-12.2.zh-CN");
+    expect(englishDeps.analyze).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "en" }),
+    );
+    expect(chineseDeps.analyze).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "zh-CN" }),
+    );
+  });
+
+  it("rejects a non-Chinese generated or cached narrative for zh-CN", async () => {
+    const generatedDeps = dependencies();
+    await expect(
+      generatePersonalDailyBrief(
+        "owner-1",
+        { locale: "zh-CN" },
+        generatedDeps,
+      ),
+    ).rejects.toThrow("daily_brief_locale_mismatch");
+
+    const cachedDeps = dependencies();
+    cachedDeps.guard.execute = vi.fn().mockResolvedValue({
+      value: {
+        ...analysis,
+        briefDate: "2026-11-12",
+        window: {
+          since: "2026-11-11T18:00:00.000Z",
+          through: NOW.toISOString(),
+        },
+      },
+      meta: {
+        source: "cache",
+        deduplicated: false,
+        modelConfig: "test-model",
+        evidenceFingerprint: "c".repeat(64),
+        cacheExpiresAt: "2026-11-13T00:00:00.000Z",
+        generatedAt: "2026-11-12T18:00:02.000Z",
+        budget: {
+          charged: false,
+          remaining: 20,
+          limit: 20,
+          resetAt: "2026-11-13T00:00:00.000Z",
+        },
+      },
+    });
+    await expect(
+      generatePersonalDailyBrief(
+        "owner-1",
+        { locale: "zh-CN" },
+        cachedDeps,
+      ),
+    ).rejects.toThrow("daily_brief_locale_mismatch");
   });
 
   it("serves a validated cache hit without invoking the model or charging budget", async () => {

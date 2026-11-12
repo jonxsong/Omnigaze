@@ -15,9 +15,11 @@ import {
   type DailyBriefGuardResult,
 } from "@/lib/ai/daily-brief-guard";
 import {
+  assertDailyBriefAnalysisLocale,
   assertDailyBriefAnalysisPolicy,
-  DAILY_BRIEF_PROMPT_VERSION,
+  dailyBriefPromptVersion,
 } from "@/lib/ai/generate-daily-brief";
+import type { AppLocale } from "@/lib/app-locale";
 import { resolveOmnigazeModelConfig } from "@/lib/ai/omnigaze-view-guard";
 import { extractCanonicalSymbols } from "@/lib/api/personal-intelligence";
 import type { CanonicalSymbol } from "@/lib/market-types";
@@ -104,6 +106,7 @@ type DailyBriefDependencies = {
     minimumMateriality: "low";
   }): Promise<OrchestratedIntelligenceFeed>;
   analyze(input: {
+    locale: AppLocale;
     briefDate: string;
     window: { since: string; through: string };
     trackedSymbols: readonly CanonicalSymbol[];
@@ -184,6 +187,7 @@ function citationSet(selection: DailyBriefEvidenceSelection) {
 
 export interface GeneratePersonalDailyBriefRequest {
   requestId?: string;
+  locale?: AppLocale;
 }
 
 export async function generatePersonalDailyBrief(
@@ -192,6 +196,8 @@ export async function generatePersonalDailyBrief(
   dependencies: Partial<DailyBriefDependencies> = {},
 ): Promise<DailyBriefEnvelope> {
   const deps = { ...defaultDependencies, ...dependencies };
+  const locale: AppLocale = request.locale === "zh-CN" ? "zh-CN" : "en";
+  const promptVersion = dailyBriefPromptVersion(locale);
   if (!deps.isAiConfigured()) {
     throw new DailyBriefServiceError("ai_unconfigured");
   }
@@ -237,7 +243,7 @@ export async function generatePersonalDailyBrief(
   const briefDate = selection.window.through.slice(0, 10);
   const modelConfig = deps.modelConfig();
   const identity = await createDailyBriefCacheIdentity({
-    promptVersion: DAILY_BRIEF_PROMPT_VERSION,
+    promptVersion,
     modelKey: modelConfig,
     briefDate,
     trackedSymbols: selection.trackedSymbols,
@@ -249,7 +255,7 @@ export async function generatePersonalDailyBrief(
     identity: {
       ...identity,
       briefDate,
-      promptVersion: DAILY_BRIEF_PROMPT_VERSION,
+      promptVersion,
       modelConfig,
     },
     freshness: {
@@ -259,6 +265,7 @@ export async function generatePersonalDailyBrief(
     },
     generate: async () => {
       const analysis = await deps.analyze({
+        locale,
         briefDate,
         window: selection.window,
         trackedSymbols: selection.trackedSymbols,
@@ -266,6 +273,7 @@ export async function generatePersonalDailyBrief(
       });
       assertGroundedDailyBrief(analysis, selection.items);
       assertDailyBriefAnalysisPolicy(analysis);
+      assertDailyBriefAnalysisLocale(analysis, locale);
       return dailyBriefSchema.parse({
         ...analysis,
         briefDate,
@@ -276,6 +284,7 @@ export async function generatePersonalDailyBrief(
 
   assertGroundedDailyBrief(guarded.value, selection.items);
   assertDailyBriefAnalysisPolicy(guarded.value);
+  assertDailyBriefAnalysisLocale(guarded.value, locale);
   const citations = citationSet(selection);
   const cacheState = guarded.meta.deduplicated
     ? "deduplicated"
@@ -296,7 +305,7 @@ export async function generatePersonalDailyBrief(
       sourceCount: new Set(selection.items.map((item) => item.source)).size,
       evidenceCoverage: dailyBriefEvidenceCoverage(selection),
       citations,
-      promptVersion: DAILY_BRIEF_PROMPT_VERSION,
+      promptVersion,
       generatedAt: guarded.meta.generatedAt,
       cache: {
         state: cacheState,

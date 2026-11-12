@@ -77,6 +77,14 @@ The intelligence inbox also degrades independently. If a provider fails or retur
 
 AI analysis also degrades independently. Cache and budget reads fail closed before model invocation; cache hits and same-isolate followers spend no additional model budget. A single-stock cache lifetime is the earlier of five minutes or the evidence-freshness boundary. A Daily Brief is recomputed whenever its watchlist or selected evidence identity changes and otherwise expires after at most six hours or at the evidence-freshness boundary. Both operations share one atomic owner budget. The durable ledger stores hashed request and operation keys rather than raw model inputs, and bounded cleanup removes expired cache rows plus old reservation history.
 
+## Bilingual application boundary
+
+One client locale provider carries a persisted English/Chinese preference from the landing page through onboarding and the authenticated or anonymous dashboard. The first server render stays deterministic, then hydration applies the saved preference, updates the document language and title, and exposes the same in-product language switch throughout the journey.
+
+Typed, surface-scoped copy dictionaries cover controls, status labels, accessibility text, validation, and safe error states in the dashboard, inbox, Daily Brief, Omnigaze View, and portfolio research workspaces. Dates and numbers use the active locale. Provider names, exchange-qualified tickers, company names, headlines, excerpts, citations, and evidence payloads remain unchanged so localization never alters a source or implies a machine translation. Arbitrary upstream error text is not rendered in Chinese; stable application error codes map to reviewed localized copy instead.
+
+Explicit Daily Brief and Omnigaze View requests carry a strict locale through the browser, HTTP API, service, model prompt, and optional MCP argument. Locale-specific prompt versions isolate durable cache entries, in-flight deduplication, and budget operation identities, so an English result cannot satisfy a Chinese request. Model-authored Chinese fields are checked for Chinese output, grounding, and bilingual non-prescriptive policy both before a cache write and after a cache read; citations and source text remain verbatim.
+
 `GET /api/health` remains a liveness response but reports `status: degraded` unless both provider checks and the required D1 inbox, ingestion, single-stock AI, and Daily Brief guardrail schema markers are ready. The schema probe reads metadata only, exposes no rows or binding details, and catches a missing migration before authenticated traffic reaches a stateful workflow.
 
 ### Production telemetry boundary

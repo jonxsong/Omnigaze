@@ -15,6 +15,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Responsive desktop and mobile layouts, including a scroll-safe live Omnigaze View.
 - [x] Manual personalized Daily Brief with cited multi-symbol developments, omissions, unknowns, and visible AI-usage provenance.
 - [x] Search discovery foundation: canonical metadata, JSON-LD, `robots.txt`, and `sitemap.xml`.
+- [x] One persisted English/Chinese preference across the landing page, onboarding, dashboard, inbox, Daily Brief, Omnigaze View, and portfolio research workspaces.
 
 ## Market data and pipelines
 
@@ -42,6 +43,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Closed operator-only MCP ingestion tool with authenticated identity enforcement.
 - [x] Durable, model-aware AI-result caching with stable evidence fingerprints, freshness-bounded TTLs, atomic shared per-owner budgets, rolling limits, and cross-isolate leases.
 - [x] Generated cross-watchlist Daily Brief with deterministic live-evidence selection, strict grounding, owner-scoped caching, HTTP/MCP parity, and a manual dashboard workflow.
+- [x] Locale-aware Daily Brief and Omnigaze View generation with English/Chinese cache isolation, source-language preservation, and bilingual non-prescriptive output checks.
 
 ## Engineering and operations
 
@@ -55,5 +57,4 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Lazy-load the Recharts workspace and reduce the initial dashboard bundle by roughly one third.
 - [x] Privacy-bounded production error and latency telemetry for health, batched quotes, explicit AI generation, and MCP, including correlated response headers and uncaught Vinext runtime errors.
 - [ ] Extend telemetry to the remaining HTTP routes and establish a sampling/retention policy before materially higher traffic.
-- [x] Carry one persisted English/Chinese preference from the landing page through the full onboarding journey.
-- [ ] Complete Chinese localization for the dashboard, inbox, and research workspaces.
+- [x] Localize product controls, accessibility labels, validation, and safe error states while preserving tickers, company names, and cited source material in their original language.

@@ -1,6 +1,14 @@
 "use client";
 
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -75,6 +83,15 @@ import {
 import type { IntelligenceInboxCounts } from "@/lib/intelligence-inbox/contracts";
 import { OmnigazeViewDialog } from "@/components/omnigaze-view-dialog";
 import { DailyBriefCard } from "@/components/daily-brief-card";
+import { useAppLocale } from "@/components/app-locale";
+import {
+  formatMarketDashboardCopy,
+  formatWatchlistSyncMessage,
+  localizeDemoIntelligenceEvent,
+  type DashboardCopyKey,
+  type WatchlistSyncMessageCode,
+} from "@/components/market-dashboard-copy";
+import type { AppLocale } from "@/lib/app-locale";
 
 const MarketPriceChart = lazy(() => import("@/components/market-price-chart"));
 
@@ -84,6 +101,11 @@ type Timeframe = (typeof timeframes)[number];
 const DASHBOARD_PREFERENCES_KEY = "omnigaze:dashboard-preferences";
 const DASHBOARD_PREFERENCES_VERSION = 2;
 const canonicalSymbolPattern = /^[A-Z0-9._-]+:[A-Z0-9._-]+$/;
+
+type DashboardTranslator = (
+  key: DashboardCopyKey,
+  values?: Record<string, string | number>,
+) => string;
 
 export interface DashboardInstrument {
   id: CanonicalSymbol;
@@ -413,6 +435,7 @@ function isFixtureSource(meta: OrchestrationMeta | undefined, snapshot: MarketSn
 function normalizeFeedItem(
   item: IntelligenceFeedItem,
   selectedSymbol: CanonicalSymbol,
+  t: DashboardTranslator,
 ): IntelligenceEvent {
   const category: IntelligenceEvent["category"] =
     item.sourceKind === "sec_filing"
@@ -427,7 +450,7 @@ function normalizeFeedItem(
     id: item.id,
     symbolId: item.symbolIds[0] ?? selectedSymbol,
     headline: item.headline,
-    summary: item.summary ?? "No provider summary was supplied for this event.",
+    summary: item.summary ?? t("noProviderSummary"),
     occurredAt: item.publishedAt,
     materiality: item.materiality,
     possibleDirection: "unclear",
@@ -437,108 +460,133 @@ function normalizeFeedItem(
   };
 }
 
-function formatFreshness(value: string | undefined, now: number) {
-  if (!value) return "freshness unavailable";
+function localeTag(locale: AppLocale) {
+  return locale === "zh-CN" ? "zh-CN" : "en-US";
+}
+
+function formatFreshness(
+  value: string | undefined,
+  now: number,
+  locale: AppLocale,
+  t: DashboardTranslator,
+) {
+  if (!value) return t("freshnessUnavailable");
   const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "freshness unavailable";
+  if (!Number.isFinite(timestamp)) return t("freshnessUnavailable");
   const seconds = Math.max(0, Math.floor((now - timestamp) / 1_000));
-  if (seconds < 15) return "updated just now";
-  if (seconds < 60) return `updated ${seconds}s ago`;
+  if (seconds < 15) return t("updatedJustNow");
+  if (seconds < 60) return t("updatedSeconds", { count: seconds });
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `updated ${minutes}m ago`;
+  if (minutes < 60) return t("updatedMinutes", { count: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `updated ${hours}h ago`;
-  return `timestamped ${new Intl.DateTimeFormat("en-US", {
+  if (hours < 24) return t("updatedHours", { count: hours });
+  return t("timestamped", { date: new Intl.DateTimeFormat(localeTag(locale), {
     month: "short",
     day: "numeric",
     year: "numeric",
-  }).format(new Date(timestamp))}`;
+  }).format(new Date(timestamp)) });
 }
 
-function formatTimestampAge(value: string | null | undefined, now: number) {
+function formatTimestampAge(
+  value: string | null | undefined,
+  now: number,
+  locale: AppLocale,
+  t: DashboardTranslator,
+) {
   if (!value) return null;
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return null;
   const seconds = Math.max(0, Math.floor((now - timestamp) / 1_000));
-  if (seconds < 15) return "just now";
-  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 15) return t("justNow");
+  if (seconds < 60) return t("secondsAgo", { count: seconds });
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return t("minutesAgo", { count: minutes });
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `on ${new Intl.DateTimeFormat("en-US", {
+  if (hours < 24) return t("hoursAgo", { count: hours });
+  return t("onDate", { date: new Intl.DateTimeFormat(localeTag(locale), {
     month: "short",
     day: "numeric",
     year: "numeric",
-  }).format(new Date(timestamp))}`;
+  }).format(new Date(timestamp)) });
 }
 
 function formatEvidenceTiming(
   observedAt: string | null | undefined,
   responseReceivedAt: string | undefined,
   now: number,
+  locale: AppLocale,
+  t: DashboardTranslator,
 ) {
-  const observationAge = formatTimestampAge(observedAt, now);
-  if (observationAge) return `Evidence observed ${observationAge}`;
+  const observationAge = formatTimestampAge(observedAt, now, locale, t);
+  if (observationAge) return t("evidenceObserved", { age: observationAge });
 
-  const receiptAge = formatTimestampAge(responseReceivedAt, now);
+  const receiptAge = formatTimestampAge(responseReceivedAt, now, locale, t);
   return receiptAge
-    ? `Evidence time unavailable · Response received ${receiptAge}`
-    : "Evidence time unavailable";
+    ? t("evidenceReceipt", { age: receiptAge })
+    : t("evidenceTimeUnavailable");
 }
 
 function formatHealthTiming(
   checkedAt: string | null | undefined,
   responseReceivedAt: string | undefined,
   now: number,
+  locale: AppLocale,
+  t: DashboardTranslator,
 ) {
-  const checkAge = formatTimestampAge(checkedAt, now);
-  if (checkAge) return `Health checked ${checkAge}`;
+  const checkAge = formatTimestampAge(checkedAt, now, locale, t);
+  if (checkAge) return t("healthChecked", { age: checkAge });
 
-  const receiptAge = formatTimestampAge(responseReceivedAt, now);
+  const receiptAge = formatTimestampAge(responseReceivedAt, now, locale, t);
   return receiptAge
-    ? `Health check time unavailable · Response received ${receiptAge}`
-    : "Health check time unavailable";
+    ? t("healthReceipt", { age: receiptAge })
+    : t("healthTimeUnavailable");
 }
 
-function formatProviderTiming(provider: ProviderReport, now: number) {
-  const observationAge = formatTimestampAge(provider.latestObservedAt, now);
-  const checkAge = formatTimestampAge(provider.checkedAt, now);
+function formatProviderTiming(
+  provider: ProviderReport,
+  now: number,
+  locale: AppLocale,
+  t: DashboardTranslator,
+) {
+  const observationAge = formatTimestampAge(provider.latestObservedAt, now, locale, t);
+  const checkAge = formatTimestampAge(provider.checkedAt, now, locale, t);
   const observationLabel = observationAge
-    ? `Evidence observed ${observationAge}`
-    : "Evidence time unavailable";
+    ? t("evidenceObserved", { age: observationAge })
+    : t("evidenceTimeUnavailable");
   const checkLabel = checkAge
-    ? `Health checked ${checkAge}`
-    : "Health check time unavailable";
-  return `${observationLabel} · ${checkLabel}`;
+    ? t("healthChecked", { age: checkAge })
+    : t("healthTimeUnavailable");
+  return t("providerTiming", { observation: observationLabel, health: checkLabel });
 }
 
-function formatIngestionMode(mode: IngestionReadiness["mode"]) {
-  if (mode === "scheduled") return "Scheduled";
-  if (mode === "request_time") return "Request-time";
-  return "Unavailable";
+function formatIngestionMode(mode: IngestionReadiness["mode"], t: DashboardTranslator) {
+  if (mode === "scheduled") return t("ingestionScheduled");
+  if (mode === "request_time") return t("ingestionRequestTime");
+  return t("ingestionUnavailable");
 }
 
-function formatIngestionStatus(status: IngestionReadiness["status"]) {
-  if (status === "catching_up") return "Catching up";
-  if (status === "idle") return "Idle";
-  if (status === "unavailable") return "Unavailable";
-  return `${status.charAt(0).toUpperCase()}${status.slice(1)}`;
+function formatIngestionStatus(status: IngestionReadiness["status"], t: DashboardTranslator) {
+  if (status === "catching_up") return t("statusCatchingUp");
+  if (status === "idle") return t("statusIdle");
+  if (status === "healthy") return t("statusHealthy");
+  if (status === "delayed") return t("statusDelayed");
+  if (status === "degraded") return t("statusDegraded");
+  return t("ingestionUnavailable");
 }
 
-function ingestionStatusDescription(status: IngestionReadiness["status"]) {
-  if (status === "healthy") return "Recent collection runs completed.";
+function ingestionStatusDescription(status: IngestionReadiness["status"], t: DashboardTranslator) {
+  if (status === "healthy") return t("collectionHealthy");
   if (status === "catching_up") {
-    return "Provider work is due, running, or resuming.";
+    return t("collectionCatchingUp");
   }
   if (status === "delayed") {
-    return "Collection is overdue beyond its declared cadence.";
+    return t("collectionDelayed");
   }
   if (status === "degraded") {
-    return "A recent run or provider partition is failing.";
+    return t("collectionDegraded");
   }
-  if (status === "idle") return "No collection run has completed yet.";
-  return "Collection status could not be read.";
+  if (status === "idle") return t("collectionIdle");
+  return t("collectionUnreadable");
 }
 
 function ingestionStatusDot(status: IngestionReadiness["status"]) {
@@ -552,78 +600,81 @@ function ingestionStatusDot(status: IngestionReadiness["status"]) {
 function formatCadence(
   seconds: number | null,
   mode: IngestionReadiness["mode"],
+  t: DashboardTranslator,
 ) {
-  if (mode === "request_time") return "No background cadence";
-  if (mode === "unavailable") return "Unavailable";
+  if (mode === "request_time") return t("noBackgroundCadence");
+  if (mode === "unavailable") return t("unavailable");
   if (!Number.isFinite(seconds) || seconds === null || seconds <= 0) {
-    return "Not reported";
+    return t("notReported");
   }
 
   if (seconds % 3_600 === 0) {
     const hours = seconds / 3_600;
-    return `Every ${hours} ${hours === 1 ? "hour" : "hours"}`;
+    return t("everyHours", { count: hours, unit: t(hours === 1 ? "hour" : "hours") });
   }
   if (seconds % 60 === 0) {
     const minutes = seconds / 60;
-    return `Every ${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+    return t("everyMinutes", { count: minutes, unit: t(minutes === 1 ? "minute" : "minutes") });
   }
-  return `Every ${seconds} ${seconds === 1 ? "second" : "seconds"}`;
+  return t("everySeconds", { count: seconds, unit: t(seconds === 1 ? "second" : "seconds") });
 }
 
 function formatOperationalTimestamp(
   value: string | null | undefined,
   now: number,
   unavailableLabel: string,
+  locale: AppLocale,
+  t: DashboardTranslator,
 ) {
-  const age = formatTimestampAge(value, now);
+  const age = formatTimestampAge(value, now, locale, t);
   return age ?? unavailableLabel;
 }
 
-function sessionLabel(session: MarketSnapshot["session"]) {
-  if (session === "regular") return "Provider session · Regular";
-  if (session === "pre-market") return "Provider session · Pre-market";
-  if (session === "after-hours") return "Provider session · After hours";
-  return "Provider session · Closed";
+function sessionLabel(session: MarketSnapshot["session"], t: DashboardTranslator) {
+  if (session === "regular") return t("sessionRegular");
+  if (session === "pre-market") return t("sessionPreMarket");
+  if (session === "after-hours") return t("sessionAfterHours");
+  return t("sessionClosed");
 }
 
-function formatPrice(value: number) {
-  return new Intl.NumberFormat("en-US", {
+function formatPrice(value: number, locale: AppLocale) {
+  return new Intl.NumberFormat(localeTag(locale), {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 2,
   }).format(value);
 }
 
-function formatCompact(value: number) {
-  return new Intl.NumberFormat("en-US", {
+function formatCompact(value: number, locale: AppLocale) {
+  return new Intl.NumberFormat(localeTag(locale), {
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(value);
 }
 
-function formatTime(value: string) {
-  return new Intl.DateTimeFormat("en-US", {
+function formatTime(value: string, locale: AppLocale) {
+  return new Intl.DateTimeFormat(localeTag(locale), {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value));
 }
 
-function formatChartLabel(value: string, timeframe: Timeframe) {
+function formatChartLabel(value: string, timeframe: Timeframe, locale: AppLocale) {
   const date = new Date(value);
   if (timeframe === "1D") {
-    return new Intl.DateTimeFormat("en-US", {
+    return new Intl.DateTimeFormat(localeTag(locale), {
       hour: "numeric",
       minute: "2-digit",
     }).format(date);
   }
   if (timeframe === "1W" || timeframe === "1M") {
-    return new Intl.DateTimeFormat("en-US", {
+    return new Intl.DateTimeFormat(localeTag(locale), {
       month: "short",
       day: "numeric",
       hour: timeframe === "1W" ? "numeric" : undefined,
     }).format(date);
   }
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat(localeTag(locale), {
     month: "short",
     day: "numeric",
   }).format(date);
@@ -633,16 +684,51 @@ function movementClass(value: number) {
   return value >= 0 ? "market-positive" : "market-negative";
 }
 
-function evidenceLabel(classification: EvidenceClassification) {
-  if (classification === "derived") return "Derived";
-  if (classification === "inference") return "Omnigaze inference";
-  return "Fact";
+function evidenceLabel(classification: EvidenceClassification, t: DashboardTranslator) {
+  if (classification === "derived") return t("evidenceDerived");
+  if (classification === "inference") return t("evidenceInference");
+  return t("evidenceFact");
 }
 
-function materialityLabel(materiality: Materiality) {
-  return materiality === "critical"
-    ? "Critical"
-    : `${materiality[0].toUpperCase()}${materiality.slice(1)}`;
+function materialityLabel(materiality: Materiality, t: DashboardTranslator) {
+  if (materiality === "critical") return t("materialityCritical");
+  if (materiality === "high") return t("materialityHigh");
+  if (materiality === "medium") return t("materialityMedium");
+  return t("materialityLow");
+}
+
+function providerStatusLabel(
+  status: ProviderReport["status"],
+  t: DashboardTranslator,
+) {
+  if (status === "healthy") return t("statusHealthy");
+  if (status === "degraded") return t("statusDegraded");
+  return t("statusUnconfigured");
+}
+
+function applicationStatusLabel(value: string | undefined, t: DashboardTranslator) {
+  if (value === "ok") return t("statusOk");
+  if (value === "degraded") return t("statusDegraded");
+  return value ?? t("responding");
+}
+
+function marketCoverageLabel(
+  value: MarketSnapshot["marketCoverage"],
+  t: DashboardTranslator,
+) {
+  if (value === "limited-exchange") return t("coverageLimited");
+  if (value === "consolidated") return t("coverageConsolidated");
+  return t("coverageFixture");
+}
+
+function stanceLabel(
+  value: "bullish" | "bearish" | "mixed" | "neutral",
+  t: DashboardTranslator,
+) {
+  if (value === "bullish") return t("stanceBullish");
+  if (value === "bearish") return t("stanceBearish");
+  if (value === "mixed") return t("stanceMixed");
+  return t("stanceNeutral");
 }
 
 function BrandMark() {
@@ -662,6 +748,11 @@ export function MarketDashboard({
   accountHoldings = null,
   accountPortfolioUnavailable = false,
 }: MarketDashboardProps) {
+  const { hydrated, locale, setLocale } = useAppLocale();
+  const t = useCallback<DashboardTranslator>(
+    (key, values) => formatMarketDashboardCopy(locale, key, values),
+    [locale],
+  );
   const authoritativeWatchlist = useMemo(
     () => {
       if (!session.isAuthenticated) return null;
@@ -732,16 +823,14 @@ export function MarketDashboard({
       if (accountSyncUnavailable || !accountWatchlist) return "unavailable";
       return "synced";
     });
-  const [watchlistSyncMessage, setWatchlistSyncMessage] = useState<string | null>(
-    null,
-  );
+  const [watchlistSyncMessageCode, setWatchlistSyncMessageCode] =
+    useState<WatchlistSyncMessageCode | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const preferencesTouchedRef = useRef(false);
   const intelligenceInboxSaveNonceRef = useRef(0);
-  const shellRef = useRef<HTMLElement>(null);
   const accountPersistenceEnabled =
     session.isAuthenticated && Boolean(accountWatchlist) && !accountSyncUnavailable;
-  const watchlistName = accountWatchlist?.name ?? "Core holdings";
+  const watchlistName = accountWatchlist?.name ?? t("coreHoldings");
   const watchlistIds = useMemo(
     () => new Set(watchlist.map(({ id }) => id)),
     [watchlist],
@@ -777,8 +866,9 @@ export function MarketDashboard({
   );
 
   useEffect(() => {
-    shellRef.current?.setAttribute("data-hydrated", "true");
-  }, []);
+    if (!hydrated) return;
+    document.title = t("documentTitle");
+  }, [hydrated, t]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
@@ -1235,12 +1325,23 @@ export function MarketDashboard({
     hasMarketSelection &&
     intelligenceMatchesSelection &&
     intelligenceResource.phase === "ready"
-      ? feedItems.map((item) => normalizeFeedItem(item, selectedSymbol))
-      : selectedWorkspace?.events ?? [];
+      ? feedItems.map((item) => {
+          const event = normalizeFeedItem(item, selectedSymbol, t);
+          return intelligenceResource.meta?.dataMode === "demo"
+            ? localizeDemoIntelligenceEvent(locale, event)
+            : event;
+        })
+      : selectedWorkspace?.events.map((event) =>
+          localizeDemoIntelligenceEvent(locale, event),
+        ) ?? [];
   const feedItemById = new Map(feedItems.map((item) => [item.id, item]));
   const viewHeadline =
     selectedWorkspace?.events[0]?.headline ??
-    `Awaiting evidence-backed analysis for ${selectedInstrument.ticker}`;
+    t("awaitingHeadline", { ticker: selectedInstrument.ticker });
+  const displayedViewHeadline =
+    locale === "zh-CN" && selectedWorkspace
+      ? t("fixtureViewTitle")
+      : viewHeadline;
   const snapshotUsesApi = Boolean(selectedSnapshotResource?.data);
   const fixtureData = snapshot
     ? isFixtureSource(selectedSnapshotResource?.meta, snapshot)
@@ -1270,21 +1371,23 @@ export function MarketDashboard({
             : "loading";
   const sourceLabel =
     sourceState === "empty"
-      ? "No symbol selected"
+      ? t("sourceNoSelection")
       : sourceState === "provider"
-      ? snapshot?.provider ?? "Provider quote"
+      ? snapshot?.provider ?? t("sourceProviderQuote")
       : sourceState === "stale"
-        ? "Last known provider quote"
+        ? t("lastKnownQuote")
       : sourceState === "fallback"
-        ? "Bundled demo fallback"
+        ? t("sourceFallback")
         : sourceState === "unavailable"
-          ? "Quote unavailable"
+          ? t("quoteUnavailable")
         : sourceState === "loading"
-          ? "Loading provider status"
-          : "Omnigaze demo fixture";
+          ? t("sourceLoading")
+          : t("sourceDemo");
   const freshness = formatFreshness(
     selectedSnapshotResource?.meta?.freshness.asOf ?? snapshot?.asOf,
     now,
+    locale,
+    t,
   );
   const providerReports = [
     ...(healthResource.data?.providers ?? healthResource.data?.providerHealth ?? []),
@@ -1312,16 +1415,16 @@ export function MarketDashboard({
   ).length;
   const dataModeLabel =
     sourceState === "empty"
-      ? "No symbols selected"
+      ? t("modeNoSelection")
       : sourceState === "provider"
-      ? "Provider data"
+      ? t("modeProvider")
       : sourceState === "stale"
-        ? "Provider quote · stale"
+        ? t("modeStale")
       : sourceState === "unavailable"
-        ? "Quote unavailable"
+        ? t("modeUnavailable")
       : sourceState === "loading"
-        ? "Checking source"
-        : "Demo data";
+        ? t("modeChecking")
+        : t("modeDemo");
 
   const normalizedSearchQuery = query.trim();
   const catalogMatchesQuery = catalogSearch.query === normalizedSearchQuery;
@@ -1340,7 +1443,7 @@ export function MarketDashboard({
   const providerChartData: MarketPoint[] =
     chartResource?.data?.bars.map((bar) => ({
       timestamp: bar.timestamp,
-      label: formatChartLabel(bar.timestamp, timeframe),
+      label: formatChartLabel(bar.timestamp, timeframe, locale),
       price: bar.close,
       volume: bar.volume,
     })) ?? [];
@@ -1358,6 +1461,25 @@ export function MarketDashboard({
       (chartResource?.phase === "ready" && providerChartData.length === 0));
   const positive = snapshot ? snapshot.change >= 0 : true;
   const chartColor = positive ? "#22d3a7" : "#ff6b7d";
+  const displayedDemoDrivers =
+    locale === "zh-CN"
+      ? [
+          {
+            label: t("fixtureDriverOneLabel"),
+            explanation: t("fixtureDriverOneBody"),
+            direction: "positive" as const,
+          },
+          {
+            label: t("fixtureDriverTwoLabel"),
+            explanation: t("fixtureDriverTwoBody"),
+            direction: "mixed" as const,
+          },
+        ]
+      : selectedWorkspace?.view.drivers ?? [];
+  const displayedDemoUnknowns =
+    locale === "zh-CN"
+      ? [t("fixtureUnknownOne"), t("fixtureUnknownTwo")]
+      : selectedWorkspace?.view.unknowns ?? [];
 
   async function persistWatchlistMutation(
     operation: "add" | "remove",
@@ -1367,7 +1489,7 @@ export function MarketDashboard({
     if (!accountPersistenceEnabled || !accountWatchlist) return;
 
     setWatchlistSyncPhase("saving");
-    setWatchlistSyncMessage(null);
+    setWatchlistSyncMessageCode(null);
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), 10_000);
 
@@ -1394,14 +1516,10 @@ export function MarketDashboard({
         throw new Error(body?.error || `Watchlist save failed with ${response.status}.`);
       }
       setWatchlistSyncPhase("synced");
-    } catch (error) {
+    } catch {
       rollback();
       setWatchlistSyncPhase("error");
-      setWatchlistSyncMessage(
-        error instanceof Error
-          ? `${error.message} Your last change was rolled back.`
-          : "Watchlist sync failed. Your last change was rolled back.",
-      );
+      setWatchlistSyncMessageCode("save_failed");
     } finally {
       window.clearTimeout(timeout);
     }
@@ -1432,9 +1550,7 @@ export function MarketDashboard({
   function addStock(instrument: DashboardInstrument) {
     if (watchlistSyncPhase === "saving") return;
     if (session.isAuthenticated && !accountPersistenceEnabled) {
-      setWatchlistSyncMessage(
-        "Your account watchlist is unavailable, so this change was not applied.",
-      );
+      setWatchlistSyncMessageCode("account_unavailable");
       return;
     }
     const symbol = instrument.id;
@@ -1461,9 +1577,7 @@ export function MarketDashboard({
   function removeStock(symbol: CanonicalSymbol) {
     if (watchlistSyncPhase === "saving") return;
     if (session.isAuthenticated && !accountPersistenceEnabled) {
-      setWatchlistSyncMessage(
-        "Your account watchlist is unavailable, so this change was not applied.",
-      );
+      setWatchlistSyncMessageCode("account_unavailable");
       return;
     }
     preferencesTouchedRef.current = true;
@@ -1547,20 +1661,25 @@ export function MarketDashboard({
   }
 
   return (
-    <main ref={shellRef} className="omnigaze-shell" data-hydrated="false">
+    <main
+      className="omnigaze-shell"
+      data-hydrated={hydrated ? "true" : "false"}
+      data-locale={locale}
+      lang={locale}
+    >
       <header className="topbar">
-        <Link className="brand-lockup" href="/" aria-label="Omnigaze home">
+        <Link className="brand-lockup" href="/" aria-label={t("home")}>
           <BrandMark />
           <div>
             <span className="brand-name">OMNIGAZE</span>
-            <span className="brand-beta">ALPHA</span>
+            <span className="brand-beta">{t("alpha")}</span>
           </div>
         </Link>
 
         <button
           className="mobile-menu-button"
           type="button"
-          aria-label="Open watchlist"
+          aria-label={t("openWatchlist")}
           onClick={() => setShowMobileWatchlist(true)}
         >
           <Menu size={19} />
@@ -1571,30 +1690,30 @@ export function MarketDashboard({
           <input
             ref={searchInputRef}
             data-testid="stock-search-input"
-            aria-label="Search stocks"
+            aria-label={t("searchStocks")}
             value={query}
             onChange={(event) => {
               setQuery(event.target.value);
               setShowSearch(true);
             }}
             onFocus={() => setShowSearch(true)}
-            placeholder="Search a company or ticker"
+            placeholder={t("searchPlaceholder")}
           />
           <kbd>⌘ K</kbd>
 
           {showSearch && (
-            <div className="search-results" role="listbox" aria-label="Stock search results">
+            <div className="search-results" role="listbox" aria-label={t("searchResults")}>
               <div className="search-results-header">
                 <span>
                   {normalizedSearchQuery
                     ? catalogSearch.meta?.freshness.state === "stale" && catalogMatchesQuery
-                      ? "Stocks · cached catalog"
-                      : "Stocks · active US equities"
-                    : "Starter symbols · demo fixtures"}
+                      ? t("cachedCatalog")
+                      : t("activeEquities")
+                    : t("starterSymbols")}
                 </span>
                 <button
                   type="button"
-                  aria-label="Close search"
+                  aria-label={t("closeSearch")}
                   onClick={() => setShowSearch(false)}
                 >
                   <X size={15} />
@@ -1604,21 +1723,21 @@ export function MarketDashboard({
                 <div className="search-empty-state" role="status" aria-live="polite">
                   <RefreshCw className="sync-spinner" size={17} />
                   <div>
-                    <strong>Searching the active catalog</strong>
-                    <span>Checking symbols and company names…</span>
+                    <strong>{t("searchingCatalog")}</strong>
+                    <span>{t("checkingNames")}</span>
                   </div>
                 </div>
               ) : normalizedSearchQuery && activeSearchPhase === "error" ? (
                 <div className="search-empty-state search-error-state" role="status" aria-live="polite">
                   <WifiOff size={17} />
                   <div>
-                    <strong>Stock search is temporarily unavailable</strong>
-                    <span>{catalogSearch.error ?? "No catalog results are being substituted."}</span>
+                    <strong>{t("searchUnavailable")}</strong>
+                    <span>{t("noCatalogSubstitute")}</span>
                     <button
                       type="button"
                       onClick={() => setSearchGeneration((current) => current + 1)}
                     >
-                      Retry search
+                      {t("retrySearch")}
                     </button>
                   </div>
                 </div>
@@ -1626,7 +1745,7 @@ export function MarketDashboard({
                 <>
                   {normalizedSearchQuery && catalogSearch.meta?.freshness.state === "stale" && (
                     <div className="search-catalog-notice" role="status">
-                      <Clock3 size={13} /> Catalog refresh delayed; showing the last verified list ({formatFreshness(catalogSearch.meta.catalogAsOf, now)}).
+                      <Clock3 size={13} /> {t("catalogDelayed", { freshness: formatFreshness(catalogSearch.meta.catalogAsOf, now, locale, t) })}
                     </div>
                   )}
                   {searchResults.map((instrument) => {
@@ -1651,7 +1770,7 @@ export function MarketDashboard({
                           {normalizedSearchQuery
                             ? instrument.exchange
                             : fixture
-                              ? "DEMO"
+                              ? t("demo")
                               : instrument.exchange}
                         </span>
                         {alreadyWatched ? <Star size={14} fill="currentColor" /> : <Plus size={15} />}
@@ -1662,7 +1781,7 @@ export function MarketDashboard({
               ) : (
                 <div className="search-empty-state" role="status">
                   <Search size={17} />
-                  <div><strong>No matching stocks</strong><span>Try another active US ticker or company name.</span></div>
+                  <div><strong>{t("noMatchingStocks")}</strong><span>{t("tryAnotherStock")}</span></div>
                 </div>
               )}
             </div>
@@ -1670,27 +1789,43 @@ export function MarketDashboard({
         </div>
 
         <div className="topbar-actions">
+          <div className="dashboard-locale-toggle" role="group" aria-label={t("localeGroup")}>
+            <button
+              type="button"
+              aria-pressed={locale === "en"}
+              onClick={() => setLocale("en")}
+            >
+              {t("english")}
+            </button>
+            <button
+              type="button"
+              aria-pressed={locale === "zh-CN"}
+              onClick={() => setLocale("zh-CN")}
+            >
+              {t("chinese")}
+            </button>
+          </div>
           <div className="market-status">
             <span className={`status-dot ${sourceState}`} />
             <span>
               {sourceState === "empty"
-                ? "No symbols selected"
+                ? t("noSymbolsSelected")
                 : sourceState === "provider" && snapshot
-                ? sessionLabel(snapshot.session)
+                ? sessionLabel(snapshot.session, t)
                 : sourceState === "stale"
-                  ? "Last known provider quote"
+                  ? t("lastKnownQuote")
                 : sourceState === "unavailable"
-                  ? "Quote unavailable"
+                  ? t("quoteUnavailable")
                   : sourceState === "loading" && !selectedWorkspace
-                    ? "Loading market context"
-                    : "Demo market context"}
+                    ? t("loadingMarketContext")
+                    : t("demoMarketContext")}
             </span>
             <small>
               {sourceState === "empty"
-                ? "add a stock"
+                ? t("addAStockShort")
                 : sourceState === "provider" || sourceState === "stale"
                 ? freshness
-                : "not live"}
+                : t("notLive")}
             </small>
           </div>
           <button
@@ -1699,15 +1834,15 @@ export function MarketDashboard({
             data-testid="top-add-stock"
             onClick={openStockSearch}
           >
-            <Plus size={15} /><span>Add stock</span>
+            <Plus size={15} /><span>{t("addStock")}</span>
           </button>
           <button
             type="button"
             className="icon-button inbox-bell"
             aria-label={
               intelligenceInboxCounts.unread > 0
-                ? `Open intelligence inbox, ${intelligenceInboxCounts.unread} unread`
-                : "Open intelligence inbox"
+                ? t("openInboxUnread", { count: intelligenceInboxCounts.unread })
+                : t("openInbox")
             }
             aria-haspopup="dialog"
             aria-expanded={intelligenceInboxOpen}
@@ -1728,8 +1863,8 @@ export function MarketDashboard({
               className="profile-button"
               href={session.signOutPath}
               target="_top"
-              aria-label={`Sign out ${session.displayName}`}
-              title={`${session.displayName} · synced account`}
+              aria-label={t("signOut", { name: session.displayName })}
+              title={t("syncedAccount", { name: session.displayName })}
             >
               {session.initials}
             </a>
@@ -1739,7 +1874,7 @@ export function MarketDashboard({
               href={session.signInPath}
               target="_top"
             >
-              <LogIn size={14} /> Sign in to sync
+              <LogIn size={14} /> {t("signInToSync")}
             </a>
           )}
         </div>
@@ -1761,20 +1896,20 @@ export function MarketDashboard({
         )}
         <span>
           {sourceState === "empty"
-            ? "Add a stock to start provider-backed market and intelligence monitoring."
+            ? t("addStockMonitoring")
             : sourceState === "provider"
-            ? `${snapshot?.provider} · ${snapshot?.isDelayed ? `delayed ${Math.max(1, Math.ceil(snapshot.delaySeconds / 60))}m` : "provider-reported quote"} · ${freshness}`
+            ? `${snapshot?.provider} · ${snapshot?.isDelayed ? t("delayedMinutesShort", { minutes: Math.max(1, Math.ceil(snapshot.delaySeconds / 60)) }) : t("providerReportedQuote")} · ${freshness}`
             : sourceState === "stale"
-              ? `${snapshot?.provider ?? "Provider"} · last known quote · ${selectedSnapshotResource?.phase === "error" ? "refresh failed" : "provider marked stale or freshness is unknown"} · ${freshness}`
+              ? `${snapshot?.provider ?? t("provider")} · ${t("lastKnownQuoteShort")} · ${selectedSnapshotResource?.phase === "error" ? t("refreshFailed") : t("providerStaleUnknown")} · ${freshness}`
             : sourceState === "fallback"
-              ? "Provider API unavailable — bundled demo fixture shown. This is not live market data."
+              ? t("fallbackBanner")
               : sourceState === "unavailable"
-                ? `Live quote unavailable for ${selectedInstrument.ticker} — Omnigaze is not substituting another company's data.`
+                ? t("noCrossCompanyQuote", { ticker: selectedInstrument.ticker })
               : sourceState === "loading"
                 ? selectedWorkspace
-                  ? "Checking market data API — this symbol's bundled demo fixture is shown meanwhile. It is not live market data."
-                  : `Loading a provider quote for ${selectedInstrument.ticker}. No substitute quote is being shown.`
-                : "Demo fixture data — prices, chart history, and analysis are illustrative, not live."}
+                  ? t("checkingFixture")
+                  : t("loadingProviderQuote", { ticker: selectedInstrument.ticker })
+                : t("demoFixtureBanner")}
         </span>
         <button
           type="button"
@@ -1782,7 +1917,7 @@ export function MarketDashboard({
           aria-controls="data-status-panel"
           onClick={() => setShowDataStatus((current) => !current)}
         >
-          {showDataStatus ? "Hide data status" : "View data status"}
+          {showDataStatus ? t("hideDataStatus") : t("viewDataStatus")}
         </button>
       </div>
 
@@ -1790,75 +1925,79 @@ export function MarketDashboard({
         <section id="data-status-panel" className="data-status-panel" aria-labelledby="data-status-title">
           <div className="data-status-heading">
             <div>
-              <span className="eyebrow">DATA TRANSPARENCY</span>
-              <h2 id="data-status-title">Source and provider status</h2>
+              <span className="eyebrow">{t("dataTransparency")}</span>
+              <h2 id="data-status-title">{t("sourceProviderStatus")}</h2>
             </div>
             <button
               type="button"
               className="refresh-data-button"
-              aria-label="Refresh displayed data and status"
+              aria-label={t("refreshDisplayedData")}
               onClick={() => setRefreshGeneration((current) => current + 1)}
             >
-              <RefreshCw size={14} /> Refresh view
+              <RefreshCw size={14} /> {t("refreshView")}
             </button>
           </div>
 
           <dl className="data-status-grid">
             <div>
-              <dt>Displayed quote</dt>
+              <dt>{t("displayedQuote")}</dt>
               <dd><span className={`health-dot ${sourceState}`} />{sourceLabel}</dd>
               <small>
                 {sourceState === "empty"
-                  ? "No quote is displayed until a stock is selected."
+                  ? t("noQuoteUntilSelected")
                   : sourceState === "provider"
-                  ? `${freshness} · ${snapshot?.marketCoverage.replaceAll("-", " ")} coverage`
+                  ? t("coverage", { freshness, coverage: snapshot ? marketCoverageLabel(snapshot.marketCoverage, t) : t("unavailable") })
                   : sourceState === "stale"
-                    ? `${freshness} · retained for context after freshness degraded; this is not a current quote.`
+                    ? t("staleQuoteContext", { freshness })
                   : sourceState === "unavailable"
-                    ? `No quote is displayed for ${selectedInstrument.ticker}; another symbol's fixture is never substituted.`
-                    : "Fixture values are never presented as live."}
+                    ? t("noQuoteDisplayed", { ticker: selectedInstrument.ticker })
+                    : t("fixtureNeverLive")}
               </small>
             </div>
             <div>
-              <dt>Application API</dt>
+              <dt>{t("applicationApi")}</dt>
               <dd>
                 <span className={`health-dot ${applicationHealthDot}`} />
                 {healthResource.phase === "ready"
-                  ? `${healthResource.data?.service ?? "Omnigaze web"} · ${healthResource.data?.status ?? "responding"}`
+                  ? `${healthResource.data?.service ?? t("omnigazeWeb")} · ${applicationStatusLabel(healthResource.data?.status, t)}`
                   : healthResource.phase === "loading"
-                    ? "Checking"
-                    : "Unreachable"}
+                    ? t("checking")
+                    : t("unreachable")}
               </dd>
               <small>
-                {healthResource.error ??
-                  formatHealthTiming(
+                {healthResource.phase === "error"
+                  ? t("unreachable")
+                  : formatHealthTiming(
                     healthResource.data?.checkedAt,
                     healthResource.receivedAt,
                     now,
+                    locale,
+                    t,
                   )}
               </small>
             </div>
             <div>
-              <dt>Intelligence feed</dt>
+              <dt>{t("intelligenceFeed")}</dt>
               <dd>
                 <span className={`health-dot ${intelligencePhase}`} />
                 {intelligencePhase === "ready"
                   ? intelligenceResource.meta?.dataMode === "demo"
                     ? selectedWorkspace
-                      ? "Demo intelligence adapter"
-                      : "Awaiting provider evidence"
-                    : "API connected"
+                      ? t("demoIntelligenceAdapter")
+                      : t("awaitingProviderEvidence")
+                    : t("apiConnected")
                   : intelligencePhase === "loading"
-                    ? "Checking"
+                    ? t("checking")
                     : selectedWorkspace
-                      ? "Bundled fallback"
-                      : "Unavailable"}
+                      ? t("bundledFallback")
+                      : t("unavailable")}
               </dd>
               <small>
-                {(intelligenceMatchesSelection ? intelligenceResource.error : undefined) ??
-                  (intelligenceMatchesSelection &&
+                {intelligenceMatchesSelection && intelligenceResource.phase === "error"
+                  ? t("intelligenceUnavailable")
+                  : intelligenceMatchesSelection &&
                   intelligenceResource.meta?.freshness.state === "fixture"
-                    ? "Fixture timestamps are illustrative."
+                    ? t("fixtureTimestamps")
                     : formatEvidenceTiming(
                         intelligenceMatchesSelection
                           ? intelligenceResource.meta?.freshness.asOf
@@ -1867,11 +2006,13 @@ export function MarketDashboard({
                           ? intelligenceResource.receivedAt
                           : undefined,
                         now,
-                      ))}
+                        locale,
+                        t,
+                      )}
               </small>
             </div>
             <div data-testid="ingestion-status">
-              <dt>Evidence collection</dt>
+              <dt>{t("evidenceCollection")}</dt>
               <dd>
                 <span
                   aria-hidden="true"
@@ -1884,87 +2025,96 @@ export function MarketDashboard({
                   }`}
                 />
                 {healthResource.phase === "loading"
-                  ? "Checking"
+                  ? t("checking")
                   : ingestionReadiness
                     ? ingestionUnavailable
-                      ? "Status unavailable"
-                      : `${formatIngestionMode(ingestionReadiness.mode)} · ${formatIngestionStatus(ingestionReadiness.status)}`
-                    : "Status unavailable"}
+                      ? t("statusUnavailable")
+                      : `${formatIngestionMode(ingestionReadiness.mode, t)} · ${formatIngestionStatus(ingestionReadiness.status, t)}`
+                    : t("statusUnavailable")}
               </dd>
               {ingestionReadiness ? (
                 <small className="collection-status-details">
                   <span>
                     {ingestionUnavailable
-                      ? "Collection status could not be read."
-                      : ingestionStatusDescription(ingestionReadiness.status)}
+                      ? t("collectionUnreadable")
+                      : ingestionStatusDescription(ingestionReadiness.status, t)}
                   </span>
                   <span>
-                    <strong>Last success:</strong>{" "}
+                    <strong>{t("lastSuccess")}</strong>{" "}
                     {formatOperationalTimestamp(
                       ingestionReadiness.lastSuccessAt,
                       now,
                       ingestionUnavailable
-                        ? "Unavailable"
-                        : "No successful collection recorded",
+                        ? t("unavailable")
+                        : t("noSuccessfulCollection"),
+                      locale,
+                      t,
                     )}
                   </span>
                   <span>
-                    <strong>Latest evidence:</strong>{" "}
+                    <strong>{t("latestEvidence")}</strong>{" "}
                     {formatOperationalTimestamp(
                       ingestionReadiness.latestEvidenceAt,
                       now,
                       ingestionUnavailable
-                        ? "Unavailable"
-                        : "No collected evidence timestamp",
+                        ? t("unavailable")
+                        : t("noCollectedEvidence"),
+                      locale,
+                      t,
                     )}
                   </span>
                   <span>
-                    <strong>Expected cadence:</strong>{" "}
+                    <strong>{t("expectedCadence")}</strong>{" "}
                     {formatCadence(
                       ingestionReadiness.expectedCadenceSeconds,
                       ingestionReadiness.mode,
+                      t,
                     )}
                   </span>
                   <span>
-                    <strong>Status calculated:</strong>{" "}
+                    <strong>{t("statusCalculated")}</strong>{" "}
                     {formatOperationalTimestamp(
                       ingestionReadiness.generatedAt,
                       now,
-                      "Timestamp unavailable",
+                      t("timestampUnavailable"),
+                      locale,
+                      t,
                     )}
                   </span>
                 </small>
               ) : (
                 <small>
                   {healthResource.phase === "loading"
-                    ? "Waiting for collection status."
-                    : "This environment did not return collection status."}
+                    ? t("waitingCollection")
+                    : t("noCollectionStatus")}
                 </small>
               )}
             </div>
             <div>
-              <dt>Refresh policy</dt>
-              <dd><span className="health-dot policy" />Request-time while open</dd>
-              <small>Quotes refresh every 30s and intelligence every 60s while this tab is visible; requests time out safely. Alerts are in-app only.</small>
+              <dt>{t("refreshPolicy")}</dt>
+              <dd><span className="health-dot policy" />{t("requestTimeWhileOpen")}</dd>
+              <small>{t("refreshPolicyDetail")}</small>
             </div>
           </dl>
 
-          <div className="provider-health-list" aria-label="Configured providers">
+          <div className="provider-health-list" aria-label={t("configuredProviders")}>
             {healthProviders.length > 0 ? (
               healthProviders.map((provider) => (
                 <div key={provider.provider}>
                   <span className={`health-dot ${provider.status}`} />
                   <strong>{provider.provider}</strong>
-                  <span>{provider.status}</span>
+                  <span>{providerStatusLabel(provider.status, t)}</span>
                   <small>
-                    {provider.message ? `${provider.message} · ` : ""}
-                    {formatProviderTiming(provider, now)}
+                    {provider.message
+                      ? `${locale === "zh-CN" ? provider.status === "unconfigured" ? t("providerUnconfiguredDetail") : t("providerDegradedDetail") : provider.message} · `
+                      : ""}
+                    {formatProviderTiming(provider, now, locale, t)}
                   </small>
                 </div>
               ))
             ) : (
               <p>
-                <TriangleAlert size={14} /> Provider-level health is not exposed by this environment yet; source labels above reflect the responses actually received.
+                <TriangleAlert size={14} /> {t("providerHealthUnavailable")}
               </p>
             )}
           </div>
@@ -1974,10 +2124,10 @@ export function MarketDashboard({
       <div className={`dashboard-grid ${watchlist.length === 0 ? "empty" : ""}`}>
         <aside className={`watchlist-panel ${showMobileWatchlist ? "mobile-open" : ""}`}>
           <div className="mobile-panel-header">
-            <strong>Watchlist</strong>
+            <strong>{t("watchlist")}</strong>
             <button
               type="button"
-              aria-label="Close watchlist"
+              aria-label={t("closeWatchlist")}
               onClick={() => setShowMobileWatchlist(false)}
             >
               <X size={18} />
@@ -1986,13 +2136,13 @@ export function MarketDashboard({
 
           <div className="panel-heading">
             <div>
-              <span className="eyebrow">MY WATCHLIST</span>
+              <span className="eyebrow">{t("myWatchlist")}</span>
               <div className="watchlist-title">{watchlistName}</div>
             </div>
             <button
               type="button"
               className="subtle-icon-button"
-              aria-label="Add stock"
+              aria-label={t("addStockAria")}
               onClick={openStockSearch}
             >
               <Plus size={17} />
@@ -2014,34 +2164,38 @@ export function MarketDashboard({
             )}
             <span>
               {watchlistSyncPhase === "local"
-                ? "Saved on this device"
+                ? t("savedOnDevice")
                 : watchlistSyncPhase === "saving"
-                  ? "Saving to your account…"
+                  ? t("savingAccount")
                   : watchlistSyncPhase === "synced"
-                    ? "Synced across your devices"
+                    ? t("syncedDevices")
                     : watchlistSyncPhase === "error"
-                      ? watchlistSyncMessage ?? "Account sync failed; change rolled back."
-                      : watchlistSyncMessage ??
-                        "Account sync unavailable; local account data is not shown."}
+                       ? watchlistSyncMessageCode
+                         ? formatWatchlistSyncMessage(locale, watchlistSyncMessageCode)
+                         : t("syncFailedRollback")
+                       : watchlistSyncMessageCode
+                         ? formatWatchlistSyncMessage(locale, watchlistSyncMessageCode)
+                         :
+                        t("syncUnavailable")}
             </span>
             {!session.isAuthenticated && (
-              <a href={session.signInPath} target="_top">Sync across devices</a>
+              <a href={session.signInPath} target="_top">{t("syncAcrossDevices")}</a>
             )}
           </div>
 
           <div className="watchlist-columns" aria-hidden="true">
-            <span>Symbol</span>
-            <span>Last</span>
-            <span>Change</span>
+            <span>{t("symbol")}</span>
+            <span>{t("last")}</span>
+            <span>{t("change")}</span>
           </div>
 
           <div className="watchlist-rows">
             {watchedStocks.length === 0 && (
               <div className="watchlist-empty-state">
                 <span className="empty-icon"><Search size={17} /></span>
-                <strong>No stocks here yet</strong>
-                <p>Choose a company to start your personal market view.</p>
-                <button type="button" onClick={openStockSearch}>Choose stocks</button>
+                <strong>{t("noStocks")}</strong>
+                <p>{t("chooseCompany")}</p>
+                <button type="button" onClick={openStockSearch}>{t("chooseStocks")}</button>
               </div>
             )}
             {watchedStocks.map(({ instrument, workspace, holding }) => {
@@ -2056,10 +2210,10 @@ export function MarketDashboard({
                 (rowResource?.phase === "error" ||
                   rowResource?.meta?.freshness.state !== "fresh");
               const rowQuoteLabel = rowSnapshot
-                ? `${formatPrice(rowSnapshot.price)}, ${rowUsesFixture ? "demo fixture" : rowIsStale ? "last known provider quote, refresh failed or stale" : "provider quote"}`
+                ? `${formatPrice(rowSnapshot.price, locale)}, ${rowUsesFixture ? t("demoFixture") : rowIsStale ? t("staleQuoteLabel") : t("providerQuote")}`
                 : rowResource?.phase === "error"
-                  ? "quote unavailable"
-                  : "quote loading";
+                  ? t("quoteUnavailable")
+                  : t("quoteLoading");
 
               return (
                 <div
@@ -2081,18 +2235,18 @@ export function MarketDashboard({
                         <strong>{instrument.ticker}</strong>
                         <small>
                           {rowUsesFixture
-                            ? "DEMO"
+                            ? t("demo")
                             : rowIsStale
-                              ? "STALE"
+                              ? t("stale")
                             : rowSnapshot
                               ? instrument.exchange
                               : rowResource?.phase === "error"
-                                ? "NO QUOTE"
-                                : "LOADING"}
+                                ? t("noQuote")
+                                : t("loading")}
                         </small>
                         {holding && (
                           <span className="holding-badge">
-                            Owned · {holding.quantity}
+                            {t("ownedQuantity", { quantity: holding.quantity })}
                           </span>
                         )}
                       </span>
@@ -2107,14 +2261,14 @@ export function MarketDashboard({
                         {rowSnapshot.changePercent.toFixed(2)}%
                       </span>
                     ) : (
-                      <span className="market-awaiting">Awaiting</span>
+                      <span className="market-awaiting">{t("awaiting")}</span>
                     )}
                   </button>
                   {watchlistIds.has(instrument.id) && (
                     <button
                       type="button"
                       className="remove-stock"
-                      aria-label={`Remove ${instrument.ticker} from watchlist`}
+                      aria-label={t("removeFromWatchlist", { ticker: instrument.ticker })}
                       disabled={watchlistSyncPhase === "saving"}
                       onClick={() => removeStock(instrument.id)}
                     >
@@ -2127,42 +2281,42 @@ export function MarketDashboard({
           </div>
 
           <button className="add-symbol-button" type="button" onClick={openStockSearch}>
-            <Plus size={15} /> Add stock
+            <Plus size={15} /> {t("addStock")}
           </button>
 
           <div className="watchlist-summary">
             <div className="panel-heading compact">
-              <span className="eyebrow">TODAY ACROSS YOUR LIST</span>
+              <span className="eyebrow">{t("todayAcrossList")}</span>
               <Gauge size={15} />
             </div>
             <div className="summary-stat-grid">
-              <div><strong>{materialEventCount}</strong><span>material events</span></div>
-              <div><strong>{positiveMovers}</strong><span>positive movers</span></div>
-              <div><strong>{sourceState === "provider" ? "API" : sourceState === "stale" ? "STALE" : sourceState === "unavailable" || sourceState === "empty" ? "—" : "DEMO"}</strong><span>quote source</span></div>
-              <div><strong>{watchlist.length}</strong><span>tracked symbols</span></div>
+              <div><strong>{materialEventCount}</strong><span>{t("materialEvents")}</span></div>
+              <div><strong>{positiveMovers}</strong><span>{t("positiveMovers")}</span></div>
+              <div><strong>{sourceState === "provider" ? "API" : sourceState === "stale" ? t("stale") : sourceState === "unavailable" || sourceState === "empty" ? "—" : t("demo")}</strong><span>{t("quoteSource")}</span></div>
+              <div><strong>{watchlist.length}</strong><span>{t("trackedSymbols")}</span></div>
             </div>
           </div>
 
-          <nav className="side-nav" aria-label="Application">
-            <button type="button"><Layers3 size={16} /> Intelligence feed</button>
+          <nav className="side-nav" aria-label={t("application")}>
+            <button type="button"><Layers3 size={16} /> {t("intelligenceFeed")}</button>
             <button
               type="button"
               disabled={!hasMarketSelection}
               onClick={openLiveOmnigazeView}
             >
-              <MessageSquareText size={16} /> Ask Omnigaze
+              <MessageSquareText size={16} /> {t("askOmnigaze")}
             </button>
             <button
               type="button"
               disabled={!hasMarketSelection}
               onClick={() => openPortfolioWorkspace("research")}
             >
-              <Gauge size={16} /> Research scenarios
+              <Gauge size={16} /> {t("researchScenarios")}
             </button>
-            <Link href="/onboarding"><Settings2 size={16} /> Preferences</Link>
+            <Link href="/onboarding"><Settings2 size={16} /> {t("preferences")}</Link>
             {session.isAuthenticated && (
               <a href={session.signOutPath} target="_top">
-                <LogOut size={16} /> Sign out
+                <LogOut size={16} /> {t("signOutPlain")}
               </a>
             )}
           </nav>
@@ -2171,11 +2325,9 @@ export function MarketDashboard({
         <section className="market-workspace">
           <section className="dashboard-overview" aria-labelledby="market-overview-title" data-testid="market-overview">
             <div className="overview-copy">
-              <span className="eyebrow">YOUR PERSONAL MARKET</span>
-              <h1 id="market-overview-title">Your market at a glance</h1>
-              <p>
-                Track the companies you care about, see what changed, and inspect the evidence behind every Omnigaze view.
-              </p>
+              <span className="eyebrow">{t("personalMarket")}</span>
+              <h1 id="market-overview-title">{t("marketGlance")}</h1>
+              <p>{t("overviewDescription")}</p>
             </div>
             <div className="overview-actions">
               <button
@@ -2184,7 +2336,7 @@ export function MarketDashboard({
                 data-testid="overview-add-stock"
                 onClick={openStockSearch}
               >
-                <Plus size={16} /> Add a stock
+                <Plus size={16} /> {t("addAStock")}
               </button>
               <button
                 type="button"
@@ -2193,21 +2345,21 @@ export function MarketDashboard({
                 aria-controls="data-status-panel"
                 onClick={() => setShowDataStatus((current) => !current)}
               >
-                <ShieldCheck size={15} /> Data status
+                <ShieldCheck size={15} /> {t("dataStatus")}
               </button>
               <Link className="secondary-action" href="/onboarding">
-                <Settings2 size={15} /> Edit setup
+                <Settings2 size={15} /> {t("editSetup")}
               </Link>
             </div>
-            <div className="overview-metrics" aria-label="Watchlist overview">
-              <span><strong>{watchlist.length}</strong> tracked</span>
+            <div className="overview-metrics" aria-label={t("watchlistOverview")}>
+              <span><strong>{watchlist.length}</strong> {t("tracked")}</span>
               <span>
-                <strong>{portfolioAvailability === "unavailable" ? "—" : holdings.length}</strong> held
+                <strong>{portfolioAvailability === "unavailable" ? "—" : holdings.length}</strong> {t("held")}
               </span>
-              <span><strong>{materialEventCount}</strong> material events</span>
+              <span><strong>{materialEventCount}</strong> {t("materialEvents")}</span>
               <span className={`overview-source ${sourceState}`}><i />{dataModeLabel}</span>
               {session.isAuthenticated && portfolioAvailability === "unavailable" && (
-                <span><TriangleAlert size={11} /> Holdings sync unavailable</span>
+                <span><TriangleAlert size={11} /> {t("holdingsSyncUnavailable")}</span>
               )}
             </div>
           </section>
@@ -2217,15 +2369,13 @@ export function MarketDashboard({
           {visibleInstruments.length === 0 ? (
             <section className="dashboard-empty-state" aria-labelledby="empty-watchlist-title">
               <span className="empty-illustration" aria-hidden="true"><Layers3 size={25} /></span>
-              <span className="eyebrow">BUILD YOUR DASHBOARD</span>
-              <h2 id="empty-watchlist-title">Start your watchlist</h2>
-              <p>
-                Add your first company to unlock price context, relevant evidence, and an Omnigaze View in one workspace.
-              </p>
+              <span className="eyebrow">{t("buildDashboard")}</span>
+              <h2 id="empty-watchlist-title">{t("startWatchlist")}</h2>
+              <p>{t("emptyDescription")}</p>
               <button type="button" className="primary-action" onClick={openStockSearch}>
-                <Plus size={16} /> Add your first stock <ArrowRight size={15} />
+                <Plus size={16} /> {t("addFirstStock")} <ArrowRight size={15} />
               </button>
-              <small>Search any active US equity by ticker or company name.</small>
+              <small>{t("searchAnyEquity")}</small>
             </section>
           ) : (
           <>
@@ -2236,7 +2386,7 @@ export function MarketDashboard({
                 <div className="ticker-line">
                   <h2>{selectedInstrument.ticker}</h2>
                   <span>{selectedInstrument.exchange}</span>
-                  <button type="button" aria-label={`Favorite ${selectedInstrument.ticker}`}>
+                  <button type="button" aria-label={t("favoriteTicker", { ticker: selectedInstrument.ticker })}>
                     <Star size={16} />
                   </button>
                 </div>
@@ -2249,19 +2399,19 @@ export function MarketDashboard({
                   <Settings2 size={11} />
                   {selectedHolding ? (
                     <>
-                      Own {selectedHolding.quantity} shares
+                      {t("ownShares", { quantity: selectedHolding.quantity })}
                       {hasSelectedAverageCost
-                        ? ` · ${formatPrice(selectedAverageCost)} average cost`
+                        ? ` · ${t("averageCost", { price: formatPrice(selectedAverageCost, locale) })}`
                         : ""}
                     </>
                   ) : (
-                    <>Add position</>
+                    <>{t("addPosition")}</>
                   )}
                 </button>
               </div>
             </div>
             <div className="quote-block">
-              <strong>{snapshot ? formatPrice(snapshot.price) : "—"}</strong>
+              <strong>{snapshot ? formatPrice(snapshot.price, locale) : "—"}</strong>
               {snapshot ? (
                 <span className={movementClass(snapshot.change)}>
                   {snapshot.change >= 0 ? (
@@ -2275,45 +2425,45 @@ export function MarketDashboard({
               ) : (
                 <span className="market-awaiting">
                   {selectedSnapshotResource?.phase === "error"
-                    ? "Quote unavailable"
-                    : "Loading quote"}
+                    ? t("quoteUnavailable")
+                    : t("loadingQuote")}
                 </span>
               )}
               <small>
                 {sourceState === "provider" && snapshot
-                  ? `${snapshot.isDelayed ? `Delayed ${Math.max(1, Math.ceil(snapshot.delaySeconds / 60))} min` : "Provider timestamp"} · ${freshness}`
+                  ? `${snapshot.isDelayed ? t("delayedMinutes", { minutes: Math.max(1, Math.ceil(snapshot.delaySeconds / 60)) }) : t("providerTimestamp")} · ${freshness}`
                   : sourceState === "stale"
-                    ? `Last known provider quote · ${freshness} · not current`
+                    ? t("lastKnownNotCurrent", { freshness })
                   : sourceState === "unavailable"
-                    ? `No substitute data shown for ${selectedInstrument.ticker}`
-                  : `${sourceLabel} · not live`}
+                    ? t("noSubstituteTicker", { ticker: selectedInstrument.ticker })
+                    : `${sourceLabel} · ${t("notLive")}`}
               </small>
             </div>
           </div>
 
           <div className="metric-strip">
-            <div><span>Previous close</span><strong>{snapshot ? formatPrice(snapshot.previousClose) : "Unavailable"}</strong></div>
-            <div><span>Volume</span><strong>{snapshot ? formatCompact(snapshot.volume) : "Unavailable"}</strong></div>
-            <div><span>Market cap</span><strong>{snapshot?.marketCap ?? "Unavailable"}</strong></div>
-            <div><span>Sector</span><strong>{selectedInstrument.sector ?? "Unavailable"}</strong></div>
+            <div><span>{t("previousClose")}</span><strong>{snapshot ? formatPrice(snapshot.previousClose, locale) : t("unavailable")}</strong></div>
+            <div><span>{t("volume")}</span><strong>{snapshot ? formatCompact(snapshot.volume, locale) : t("unavailable")}</strong></div>
+            <div><span>{t("marketCap")}</span><strong>{snapshot?.marketCap ?? t("unavailable")}</strong></div>
+            <div><span>{t("sector")}</span><strong>{selectedInstrument.sector ?? t("unavailable")}</strong></div>
           </div>
 
           <section className="chart-panel" aria-labelledby="price-chart-title">
             <div className="chart-toolbar">
               <div>
-                <span className="eyebrow">PRICE</span>
-                <h2 id="price-chart-title">Market movement</h2>
+                <span className="eyebrow">{t("price")}</span>
+                <h2 id="price-chart-title">{t("marketMovement")}</h2>
                 <small className="chart-source-note">
                   {chartUsesProvider
-                    ? `${chartResource?.data?.provider} · ${chartIsStale ? "last known history; refresh failed" : "corporate-action adjusted"} · ${formatFreshness(chartResource?.data?.asOf ?? undefined, now)}`
+                    ? `${chartResource?.data?.provider} · ${chartIsStale ? t("staleHistory") : t("adjustedHistory")} · ${formatFreshness(chartResource?.data?.asOf ?? undefined, now, locale, t)}`
                     : !chartResource || chartResource.phase === "loading"
-                      ? "Loading provider history…"
+                      ? t("loadingHistory")
                       : chartUsesFixture
-                        ? "Provider history unavailable · this symbol's illustrative fixture history is shown"
-                        : `History unavailable for ${selectedInstrument.ticker} · no substitute series is shown`}
+                        ? t("fixtureHistory")
+                        : t("historyUnavailableTicker", { ticker: selectedInstrument.ticker })}
                 </small>
               </div>
-              <div className="timeframe-control" aria-label="Chart timeframe">
+              <div className="timeframe-control" aria-label={t("chartTimeframe")}>
                 {timeframes.map((range) => (
                   <button
                     key={range}
@@ -2328,14 +2478,14 @@ export function MarketDashboard({
               </div>
             </div>
 
-            <div className="chart-wrap" aria-label={`${selectedInstrument.ticker} ${timeframe} price chart`}>
+            <div className="chart-wrap" aria-label={t("priceChart", { ticker: selectedInstrument.ticker, timeframe })}>
               {chartData.length > 0 ? (
                 <Suspense
                   fallback={
                     <div className="chart-unavailable-state" role="status">
                       <Clock3 size={20} />
-                      <strong>Rendering price history</strong>
-                      <span>Preparing the interactive chart.</span>
+                      <strong>{t("renderingHistory")}</strong>
+                      <span>{t("preparingChart")}</span>
                     </div>
                   }
                 >
@@ -2345,12 +2495,12 @@ export function MarketDashboard({
                 <div className="chart-unavailable-state" role="status">
                   {chartUnavailable ? <WifiOff size={20} /> : <Clock3 size={20} />}
                   <strong>
-                    {chartUnavailable ? "Historical data unavailable" : "Loading price history"}
+                    {chartUnavailable ? t("historicalUnavailable") : t("loadingPriceHistory")}
                   </strong>
                   <span>
                     {chartUnavailable
-                      ? `No substitute series is shown for ${selectedInstrument.ticker}.`
-                      : `Checking the provider for ${selectedInstrument.ticker}.`}
+                      ? t("noSubstituteSeries", { ticker: selectedInstrument.ticker })
+                      : t("checkingProviderTicker", { ticker: selectedInstrument.ticker })}
                   </span>
                 </div>
               )}
@@ -2358,9 +2508,9 @@ export function MarketDashboard({
 
             <table className="sr-only">
               <caption>
-                {selectedInstrument.ticker} price observations · {chartUsesProvider ? chartIsStale ? "last known provider history; refresh failed" : "provider history" : chartUsesFixture ? "illustrative fixture" : "unavailable"}
+                {selectedInstrument.ticker} · {chartUsesProvider ? chartIsStale ? t("staleHistory") : t("providerHistory") : chartUsesFixture ? t("illustrativeFixture") : t("unavailable")}
               </caption>
-              <thead><tr><th>Time</th><th>Price</th><th>Volume</th></tr></thead>
+              <thead><tr><th>{t("time")}</th><th>{t("price")}</th><th>{t("volume")}</th></tr></thead>
               <tbody>
                 {chartData.map((point) => (
                   <tr key={`${point.timestamp}-${point.label}`}>
@@ -2374,14 +2524,14 @@ export function MarketDashboard({
           <section className="event-section" aria-labelledby="event-heading">
             <div className="section-heading-row">
               <div>
-                <span className="eyebrow">INTELLIGENCE TIMELINE</span>
-                <h2 id="event-heading">What changed</h2>
+                <span className="eyebrow">{t("intelligenceTimeline")}</span>
+                <h2 id="event-heading">{t("whatChanged")}</h2>
               </div>
               <button
                 type="button"
                 onClick={() => openIntelligenceInbox("inbox")}
               >
-                View all events <ChevronRight size={15} />
+                {t("viewAllEvents")} <ChevronRight size={15} />
               </button>
             </div>
 
@@ -2399,11 +2549,11 @@ export function MarketDashboard({
                       <div className="event-body">
                         <div className="event-meta">
                           <span className={`materiality ${event.materiality}`}>
-                            {materialityLabel(event.materiality)} impact
+                            {t("impact", { materiality: materialityLabel(event.materiality, t) })}
                           </span>
-                          <span>{formatTime(event.occurredAt)}</span>
+                          <span>{formatTime(event.occurredAt, locale)}</span>
                           <span className={`source-chip ${eventIsLive ? "live" : "fixture"}`}>
-                            {eventIsLive ? feedItem?.source ?? "Provider" : "Demo fixture"}
+                            {eventIsLive ? feedItem?.source ?? t("provider") : t("demoFixtureSource")}
                           </span>
                         </div>
                         <h3>{event.headline}</h3>
@@ -2411,16 +2561,16 @@ export function MarketDashboard({
                         <div className="event-actions">
                           {feedItem?.sourceUrl ? (
                             <a href={feedItem.sourceUrl} target="_blank" rel="noreferrer">
-                              Open source
+                              {t("openSource")}
                             </a>
                           ) : (
-                            <button type="button">Inspect demo evidence</button>
+                            <button type="button">{t("inspectDemoEvidence")}</button>
                           )}
                           <button
                             type="button"
                             onClick={() => saveTimelineEvent(event.id)}
                           >
-                            Save for thesis
+                            {t("saveForThesis")}
                           </button>
                         </div>
                       </div>
@@ -2434,17 +2584,17 @@ export function MarketDashboard({
                   <div>
                     <strong>
                       {intelligencePhase === "loading"
-                        ? "Checking for relevant evidence"
+                        ? t("checkingEvidence")
                         : intelligencePhase === "error"
-                          ? "Intelligence temporarily unavailable"
+                          ? t("intelligenceUnavailable")
                           : !selectedWorkspace && intelligenceResource.meta?.dataMode === "demo"
-                            ? "Awaiting verified provider evidence"
-                            : "No recent provider events"}
+                            ? t("awaitingVerifiedEvidence")
+                            : t("noRecentEvents")}
                     </strong>
                     <span>
                       {!selectedWorkspace
-                        ? `No fixture events are substituted for ${selectedInstrument.ticker}.`
-                        : "Omnigaze will keep checking this symbol."}
+                        ? t("noFixtureEvents", { ticker: selectedInstrument.ticker })
+                        : t("keepChecking")}
                     </span>
                   </div>
                 </div>
@@ -2459,24 +2609,27 @@ export function MarketDashboard({
           <div className="intelligence-heading">
             <div className="ai-orb"><Bot size={20} /></div>
             <div>
-              <span className="eyebrow">OMNIGAZE VIEW</span>
+              <span className="eyebrow">{t("omnigazeView")}</span>
               <strong>
                 {selectedWorkspace
-                  ? "Illustrative foundation analysis"
-                  : "Awaiting evidence-backed analysis"}
+                  ? t("illustrativeAnalysis")
+                  : t("awaitingAnalysis")}
               </strong>
             </div>
-            <button type="button" aria-label="About Omnigaze views"><CircleHelp size={16} /></button>
+            <button type="button" aria-label={t("aboutViews")}><CircleHelp size={16} /></button>
           </div>
 
           <div className="view-source-note">
             {selectedWorkspace ? <Sparkles size={13} /> : <Clock3 size={13} />}
             {selectedWorkspace
-              ? "Demo fixture analysis · not generated from the current provider feed"
-              : `No Omnigaze View yet for ${selectedInstrument.ticker} · no fixture analysis substituted`}
+              ? t("fixtureAnalysisNote")
+              : t("noViewYet", { ticker: selectedInstrument.ticker })}
           </div>
+          {locale === "zh-CN" && (
+            <div className="view-source-note">{t("sourceOriginalLanguage")}</div>
+          )}
 
-          <div className="insight-tabs" role="tablist" aria-label="Omnigaze analysis">
+          <div className="insight-tabs" role="tablist" aria-label={t("analysisTabs")}>
             <button
               type="button"
               role="tab"
@@ -2484,7 +2637,7 @@ export function MarketDashboard({
               className={insightTab === "view" ? "active" : ""}
               onClick={() => setInsightTab("view")}
             >
-              Current view
+              {t("currentView")}
             </button>
             <button
               type="button"
@@ -2493,7 +2646,7 @@ export function MarketDashboard({
               className={insightTab === "evidence" ? "active" : ""}
               onClick={() => setInsightTab("evidence")}
             >
-              Evidence ({selectedWorkspace?.evidence.length ?? 0})
+              {t("evidenceCount", { count: selectedWorkspace?.evidence.length ?? 0 })}
             </button>
           </div>
 
@@ -2502,22 +2655,22 @@ export function MarketDashboard({
               <span className="empty-icon"><Clock3 size={19} /></span>
               <strong>
                 {insightTab === "view"
-                  ? "Omnigaze View awaiting evidence"
-                  : "No verified evidence collected yet"}
+                  ? t("viewAwaitingEvidence")
+                  : t("noVerifiedEvidence")}
               </strong>
               <p>
                 {insightTab === "view"
-                  ? `A view for ${selectedInstrument.ticker} will appear after provider evidence is available for analysis.`
-                  : `Omnigaze is still collecting attributable sources for ${selectedInstrument.ticker}.`}
+                  ? t("viewAfterEvidence", { ticker: selectedInstrument.ticker })
+                  : t("collectingSources", { ticker: selectedInstrument.ticker })}
               </p>
-              <small>No analysis or evidence from another company is substituted.</small>
+              <small>{t("noCrossCompanyAnalysis")}</small>
               {insightTab === "view" && (
                 <button
                   type="button"
                   className="ask-button"
                   onClick={openLiveOmnigazeView}
                 >
-                  <Sparkles size={16} /> Generate live view for {selectedInstrument.ticker}
+                  <Sparkles size={16} /> {t("generateLiveView", { ticker: selectedInstrument.ticker })}
                 </button>
               )}
             </div>
@@ -2525,30 +2678,30 @@ export function MarketDashboard({
             <div className="view-content">
               <div className="stance-row">
                 <div>
-                  <span>Near-term stance</span>
+                  <span>{t("nearTermStance")}</span>
                   <strong className={`stance ${selectedWorkspace.view.stance}`}>
-                    {selectedWorkspace.view.stance}
+                    {stanceLabel(selectedWorkspace.view.stance, t)}
                   </strong>
                 </div>
                 <div className="confidence-ring" style={{ "--confidence": `${selectedWorkspace.view.confidence * 100}%` } as React.CSSProperties}>
                   <span>{Math.round(selectedWorkspace.view.confidence * 100)}%</span>
-                  <small>confidence</small>
+                  <small>{t("confidence")}</small>
                 </div>
               </div>
 
               <div className="view-summary">
-                <h2>{viewHeadline}</h2>
-                <p>{selectedWorkspace.view.summary}</p>
+                <h2>{displayedViewHeadline}</h2>
+                <p>{locale === "zh-CN" ? t("fixtureViewBody") : selectedWorkspace.view.summary}</p>
               </div>
 
               <div className="why-now-card">
-                <div><Clock3 size={15} /><span>Why now</span></div>
-                <p>{selectedWorkspace.view.whyNow}</p>
+                <div><Clock3 size={15} /><span>{t("whyNow")}</span></div>
+                <p>{locale === "zh-CN" ? t("fixtureWhyNowBody") : selectedWorkspace.view.whyNow}</p>
               </div>
 
               <div className="driver-list">
-                <div className="mini-heading"><span>Key drivers</span><small>2 signals</small></div>
-                {selectedWorkspace.view.drivers.map((driver) => (
+                <div className="mini-heading"><span>{t("keyDrivers")}</span><small>{t("twoSignals")}</small></div>
+                {displayedDemoDrivers.map((driver) => (
                   <div className="driver-row" key={driver.label}>
                     <span className={`driver-dot ${driver.direction}`} />
                     <div><strong>{driver.label}</strong><p>{driver.explanation}</p></div>
@@ -2557,8 +2710,8 @@ export function MarketDashboard({
               </div>
 
               <div className="unknowns">
-                <div className="mini-heading"><span>What remains unknown</span></div>
-                {selectedWorkspace.view.unknowns.map((unknown) => (
+                <div className="mini-heading"><span>{t("remainsUnknown")}</span></div>
+                {displayedDemoUnknowns.map((unknown) => (
                   <p key={unknown}><span>?</span>{unknown}</p>
                 ))}
               </div>
@@ -2568,7 +2721,7 @@ export function MarketDashboard({
                 className="ask-button"
                 onClick={openLiveOmnigazeView}
               >
-                <Sparkles size={16} /> Generate live view for {selectedInstrument.ticker}
+                <Sparkles size={16} /> {t("generateLiveView", { ticker: selectedInstrument.ticker })}
               </button>
             </div>
           ) : (
@@ -2577,14 +2730,14 @@ export function MarketDashboard({
                 <article key={evidence.id} className="evidence-card">
                   <div className="evidence-card-top">
                     <span className={`evidence-type ${evidence.classification}`}>
-                      {evidenceLabel(evidence.classification)}
+                      {evidenceLabel(evidence.classification, t)}
                     </span>
-                    <span>{formatTime(evidence.publishedAt)}</span>
+                    <span>{formatTime(evidence.publishedAt, locale)}</span>
                   </div>
                   <h3>{evidence.title}</h3>
                   <p>{evidence.publisher}{evidence.locator ? ` · ${evidence.locator}` : ""}</p>
                   {evidence.excerpt && <blockquote>{evidence.excerpt}</blockquote>}
-                  <button type="button">Open source <ChevronRight size={14} /></button>
+                  <button type="button">{t("openSource")} <ChevronRight size={14} /></button>
                 </article>
               ))}
             </div>
@@ -2592,7 +2745,7 @@ export function MarketDashboard({
 
           <div className="view-footer">
             <ShieldCheck size={15} />
-            <span>Research support only · Not investment advice</span>
+            <span>{t("researchOnly")}</span>
           </div>
         </aside>
       </div>
@@ -2602,13 +2755,13 @@ export function MarketDashboard({
           <div className="ai-orb"><Bot size={18} /></div>
           <div>
             <span className="eyebrow">
-              {selectedWorkspace ? "OMNIGAZE VIEW · DEMO" : "OMNIGAZE VIEW · AWAITING EVIDENCE"}
+              {selectedWorkspace ? t("viewDemo") : t("viewAwaiting")}
             </span>
-            <strong>{viewHeadline}</strong>
+            <strong>{displayedViewHeadline}</strong>
           </div>
           <button
             type="button"
-            aria-label={`Generate a live Omnigaze View for ${selectedInstrument.ticker}`}
+            aria-label={t("generateViewAria", { ticker: selectedInstrument.ticker })}
             onClick={openLiveOmnigazeView}
           >
             <ChevronRight size={18} />
@@ -2616,8 +2769,8 @@ export function MarketDashboard({
         </section>
       )}
 
-      <footer className="market-ticker" aria-label="Market summary">
-        <span className="ticker-status"><span className="status-dot fixture" /> DEMO CONTEXT</span>
+      <footer className="market-ticker" aria-label={t("marketSummary")}>
+        <span className="ticker-status"><span className="status-dot fixture" /> {t("demoContext")}</span>
         {[
           ["S&P 500", "7,141.20", "+0.82%"],
           ["NASDAQ", "25,418.60", "+1.14%"],
@@ -2629,7 +2782,7 @@ export function MarketDashboard({
             <strong>{name}</strong><span>{value}</span><small className={change.startsWith("+") ? "market-positive" : "market-negative"}>{change}</small>
           </span>
         ))}
-        <span className="ticker-time">Illustrative index fixture · not live</span>
+        <span className="ticker-time">{t("illustrativeIndex")}</span>
       </footer>
 
       {hasMarketSelection && (
@@ -2699,7 +2852,7 @@ export function MarketDashboard({
       {showMobileWatchlist && (
         <button
           className="mobile-scrim"
-          aria-label="Close watchlist"
+          aria-label={t("closeWatchlist")}
           onClick={() => setShowMobileWatchlist(false)}
         />
       )}

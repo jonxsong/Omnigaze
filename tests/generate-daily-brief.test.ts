@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { dailyBriefAnalysisSchema } from "@/lib/ai/daily-brief-contract";
+import {
+  dailyBriefAnalysisSchema,
+  type DailyBriefAnalysis,
+} from "@/lib/ai/daily-brief-contract";
 import {
   DAILY_BRIEF_MODEL_INSTRUCTIONS,
+  assertDailyBriefAnalysisLocale,
+  dailyBriefModelInstructions,
+  dailyBriefPromptVersion,
   generateDailyBriefAnalysis,
   validateDailyBriefAnalysis,
 } from "@/lib/ai/generate-daily-brief";
@@ -35,7 +41,7 @@ const modelEvidence: DailyBriefEvidenceItem[] = evidence.map((item, index) => ({
   isControversial: false,
 }));
 
-function output() {
+function output(): DailyBriefAnalysis {
   return {
     headline: "Two tracked companies changed today",
     summary: "Fresh evidence changed the watchlist context.",
@@ -53,6 +59,23 @@ function output() {
   };
 }
 
+function chineseOutput(): DailyBriefAnalysis {
+  return {
+    ...output(),
+    headline: "两家自选公司今日出现新变化",
+    summary: "最新证据改变了当前自选股背景。",
+    developments: [
+      {
+        ...output().developments[0],
+        title: "公司更新改变了现有证据集",
+        whyItMatters: "这些更新可能改变近期市场预期。",
+      },
+    ],
+    watchNext: ["关注公司的后续确认。"],
+    unknowns: ["市场反应能否持续仍不明确。"],
+  };
+}
+
 describe("Daily Brief model output gate", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -66,6 +89,26 @@ describe("Daily Brief model output gate", () => {
     expect(DAILY_BRIEF_MODEL_INSTRUCTIONS).toContain(
       "eligible evidence may exist outside the selection limit",
     );
+  });
+
+  it("uses locale-specific prompt versions and explicit output-language rules", () => {
+    expect(dailyBriefPromptVersion("en")).toBe("2026-11-12.2.en");
+    expect(dailyBriefPromptVersion("zh-CN")).toBe("2026-11-12.2.zh-CN");
+    expect(dailyBriefModelInstructions("zh-CN")).toContain(
+      "natural Simplified Chinese (zh-CN)",
+    );
+    expect(dailyBriefModelInstructions("zh-CN")).toContain(
+      "Preserve tickers, canonical symbol IDs, company names, proper nouns, evidence IDs",
+    );
+  });
+
+  it("rejects an English narrative for a Chinese Daily Brief", () => {
+    expect(() => assertDailyBriefAnalysisLocale(output(), "zh-CN")).toThrow(
+      "daily_brief_locale_mismatch",
+    );
+    expect(() =>
+      assertDailyBriefAnalysisLocale(chineseOutput(), "zh-CN"),
+    ).not.toThrow();
   });
 
   it("accepts only a strictly grounded synthesis", () => {
@@ -182,6 +225,39 @@ describe("Daily Brief model output gate", () => {
     ).toBe(summary);
   });
 
+  it.each([
+    { field: "headline", text: "你应该立即买入 NVDA。" },
+    { field: "summary", text: "NVDA 的目标价为 250 美元。" },
+    { field: "whyItMatters", text: "卖出 10 股 NVDA 可以锁定收益。" },
+    { field: "watchNext", text: "建议仓位设为投资组合的 25%。" },
+    { field: "headline", text: "建议买入 NVDA。" },
+    { field: "summary", text: "推荐卖出 NVDA。" },
+    { field: "watchNext", text: "可以考虑买入 NVDA。" },
+    { field: "unknowns", text: "NVDA 必然会上涨。" },
+    { field: "summary", text: "该投资组合整体是看涨。" },
+    { field: "watchNext", text: "保证 20% 收益。" },
+  ] as const)("rejects Chinese trade guidance or certainty in $field", ({ field, text }) => {
+    const candidate = output();
+    if (field === "headline" || field === "summary") candidate[field] = text;
+    if (field === "whyItMatters") candidate.developments[0].whyItMatters = text;
+    if (field === "watchNext" || field === "unknowns") candidate[field] = [text];
+
+    expect(() => validateDailyBriefAnalysis(candidate, evidence)).toThrow(
+      "prohibited_trade_guidance",
+    );
+  });
+
+  it.each([
+    "无法保证收益，且不存在无风险结果。",
+    "报道显示，分析师维持“买入”评级。",
+    "NVDA 是否上涨仍不确定。",
+    "该投资组合并非整体看涨。",
+  ])("accepts neutral Chinese research framing: %s", (summary) => {
+    expect(
+      validateDailyBriefAnalysis({ ...output(), summary }, evidence).summary,
+    ).toBe(summary);
+  });
+
   it("rejects invented citations and tickers absent from cited evidence", () => {
     const base = output();
     expect(() =>
@@ -214,10 +290,11 @@ describe("Daily Brief model output gate", () => {
 
   it("runs the strict model adapter for one turn and revalidates its output", async () => {
     vi.stubEnv("OPENAI_API_KEY", "test-key");
-    agents.run.mockResolvedValueOnce({ finalOutput: output() });
+    agents.run.mockResolvedValueOnce({ finalOutput: chineseOutput() });
 
     await expect(
       generateDailyBriefAnalysis({
+        locale: "zh-CN",
         briefDate: "2026-11-12",
         window: {
           since: "2026-11-11T18:00:00.000Z",
@@ -226,19 +303,25 @@ describe("Daily Brief model output gate", () => {
         trackedSymbols: ["NASDAQ:NVDA", "NASDAQ:MSFT"],
         evidence: modelEvidence,
       }),
-    ).resolves.toMatchObject({ headline: output().headline });
+    ).resolves.toMatchObject({ headline: chineseOutput().headline });
 
     expect(agents.Agent).toHaveBeenCalledWith(
       expect.objectContaining({
         name: "Omnigaze Daily Brief analyst",
-        instructions: DAILY_BRIEF_MODEL_INSTRUCTIONS,
+        instructions: dailyBriefModelInstructions("zh-CN"),
         outputType: dailyBriefAnalysisSchema,
       }),
     );
     expect(agents.run).toHaveBeenCalledWith(
       expect.anything(),
-      expect.stringContaining('"trackedSymbols":["NASDAQ:NVDA","NASDAQ:MSFT"]'),
+      expect.stringContaining('"outputLanguage":"zh-CN"'),
       { maxTurns: 1 },
+    );
+    expect(agents.run.mock.calls[0][1]).toContain(
+      '"trackedSymbols":["NASDAQ:NVDA","NASDAQ:MSFT"]',
+    );
+    expect(agents.run.mock.calls[0][1]).toContain(
+      "仅使用所提供的证据，以简体中文生成今日自选股简报。",
     );
   });
 });

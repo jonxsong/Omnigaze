@@ -30,6 +30,7 @@ const requestSchema = z
       .max(128)
       .regex(/^[A-Za-z0-9._:-]+$/)
       .optional(),
+    locale: z.enum(["en", "zh-CN"]).optional().default("en"),
   })
   .strict();
 
@@ -59,6 +60,7 @@ async function postAnalysis(request: Request) {
     const result = await generateOmnigazeView(symbolId, {
       ownerId: user.userId,
       requestId: parsed.data.request_id,
+      locale: parsed.data.locale,
     });
     return Response.json(result, {
       headers: {

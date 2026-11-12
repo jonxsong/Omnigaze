@@ -1,4 +1,5 @@
 import type { CanonicalSymbol } from "@/lib/market-types";
+import type { AppLocale } from "@/lib/app-locale";
 import {
   assertGroundedDailyBrief,
   dailyBriefAnalysisSchema,
@@ -6,9 +7,25 @@ import {
 } from "@/lib/ai/daily-brief-contract";
 import type { DailyBriefEvidenceItem } from "@/lib/services/personal-today-evidence";
 
-export const DAILY_BRIEF_PROMPT_VERSION = "2026-11-12.1";
+export const DAILY_BRIEF_PROMPT_VERSION = "2026-11-12.2";
+
+const outputLanguageInstructions: Record<AppLocale, string> = {
+  en: "Write every model-authored narrative field in English.",
+  "zh-CN":
+    "Write every model-authored narrative field in natural Simplified Chinese (zh-CN).",
+};
+
+const localizedTasks: Record<AppLocale, string> = {
+  en: "Synthesize today's evidence-backed watchlist brief in English.",
+  "zh-CN": "仅使用所提供的证据，以简体中文生成今日自选股简报。",
+};
+
+export function dailyBriefPromptVersion(locale: AppLocale) {
+  return `${DAILY_BRIEF_PROMPT_VERSION}.${locale}`;
+}
 
 export interface GenerateDailyBriefAnalysisInput {
+  locale: AppLocale;
   briefDate: string;
   window: { since: string; through: string };
   trackedSymbols: readonly CanonicalSymbol[];
@@ -32,6 +49,15 @@ Rules:
 - Do not provide target prices, buy/sell/hold instructions, trade sizes, share quantities, portfolio allocation, or personalized financial advice.
 - Do not produce an aggregate bullish or bearish portfolio stance.
 - Keep the brief useful for a daily dashboard and clearly bounded by the evidence window.`;
+
+export function dailyBriefModelInstructions(locale: AppLocale) {
+  return `${DAILY_BRIEF_MODEL_INSTRUCTIONS}
+
+Output language:
+- ${outputLanguageInstructions[locale]}
+- Preserve tickers, canonical symbol IDs, company names, proper nouns, evidence IDs, and direct source quotations exactly as supplied.
+- Do not translate, rewrite, or fabricate source and citation text.`;
+}
 
 const prohibitedTradeGuidancePatterns = [
   /\b(?:price\s+target|target\s+price)\s*(?:(?:is|of|at|:|-)\s*)?(?:[$€£¥]\s*)?\d[\d,.]*/i,
@@ -67,17 +93,40 @@ const prohibitedTradeGuidancePatterns = [
   /\b(?:the|your|this|our)\s+(?:portfolio|watchlist)\s+(?:is|looks|appears|remains|seems)\s+(?:overall\s+)?(?:bullish|bearish)\b/i,
   /(?:^|[\n.!?]\s*)(?:expect|forecast|project|predict)\s+(?:a\s+)?\d+(?:\.\d+)?\s*%\s+(?:return|gain|loss)\b/i,
   /\b(?:will|must|is\s+(?:likely|expected|forecast|projected|poised|set)\s+to)\s+(?:return|gain|lose)\s+\d+(?:\.\d+)?\s*%\b/i,
+  /(?:建议|推荐|可以考虑|不妨|最好|应该|应当)(?:你|您)?\s*(?:买入|卖出|持有|增持|减持|加仓|减仓|清仓|做多|做空)/,
+  /(?:目标价|目标价格|价格目标)\s*(?:(?:为|是|设为|定为|定在|上调至|下调至|达到|：|:|-)\s*)?(?:[$¥￥]\s*)?\d[\d,.]*/,
+  /(?:买入|卖出|增持|减持|加仓|减仓|持有|做多|做空)\s*(?:约|大约|至少|至多)?\s*\d[\d,.]*\s*(?:股|份|手|张)/,
+  /(?:你|您)(?:现在|今日|目前)?(?:应|应该|应当|需要|必须|可以考虑|不妨|最好).{0,18}(?:买入|卖出|持有|增持|减持|加仓|减仓|清仓|做多|做空)/,
+  /(?:^|[\n。！？]\s*)(?:请|现在|立即|今日)?\s*(?:买入|卖出|持有|增持|减持|加仓|减仓|清仓|做多|做空)(?:\s|[A-Z]|该|这|股票|股份|仓位|持仓)/,
+  /(?:你的|您的|该)(?:交易|投资)?(?:仓位|头寸|持仓|配置)(?:规模)?(?:应|应该|需要|必须|建议|可考虑|设为|调整为|控制在|增加至|降低至).{0,24}(?:\d[\d,.]*\s*(?:%|％|股|份|手)|[一二三四五六七八九十]+成)/,
+  /(?:建议|推荐).{0,6}(?:仓位|头寸|持仓|配置)(?:规模)?.{0,10}(?:\d[\d,.]*\s*(?:%|％|股|份|手)|[一二三四五六七八九十]+成)/,
+  /(?:将|把)(?:你的|您的).{0,12}(?:资金|资本|投资组合).{0,16}(?:配置|分配|投入).{0,8}\d+(?:\.\d+)?\s*(?:%|％)/,
+  /(?:股价|股票|该股|市场|指数|组合|持仓|[A-Z]{1,6}(?:[.-][A-Z0-9]+)?)(?:将|一定会|必然会|肯定会|必须会).{0,12}(?:上涨|下跌|涨|跌|走高|走低|跑赢|跑输|获得|实现|回报|收益)/,
+  /(?:你的|您的|该|整个|整体)?(?:投资组合|自选股|持仓)(?:整体)?(?:是|看起来|显得|仍然|保持)(?:偏多|看涨|偏空|看跌|牛市|熊市)/,
+  /(?:预计|预测|预期|保证|确保).{0,12}\d+(?:\.\d+)?\s*(?:%|％).{0,8}(?:收益|回报|上涨|下跌|涨幅|跌幅)/,
 ] as const;
 
 const certaintyLanguagePattern =
   /\b(?:guaranteed?|risk[-\s]?free|can(?:not|'t)\s+lose|sure[-\s]?fire)\b/i;
 const negatedCertaintyPattern =
   /\b(?:no|not|never|without)\b[^\n.!?]{0,80}?\b(?:guaranteed?|risk[-\s]?free|sure[-\s]?fire)\b/gi;
+const chineseCertaintyLanguagePattern =
+  /(?:保证|确保).{0,8}(?:收益|回报|盈利)|稳赚|无风险|不会亏|必赚|(?:肯定|必然)(?:会)?(?:上涨|下跌|获利|盈利)/;
+const negatedChineseCertaintyPattern =
+  /(?:(?:不|并不|不能|无法|未能|并非|没有)(?:能|会)?(?:保证|确保).{0,8}(?:收益|回报|盈利)|(?:并非|不是|没有|不存在)(?:无风险|稳赚|必赚)|(?:不|并不|未必)(?:会)?(?:肯定|必然).{0,8}(?:上涨|下跌|获利|盈利))/g;
 
 function hasProhibitedCertaintyLanguage(text: string) {
-  return text.split(/[\n.!?]+/).some((clause) =>
-    certaintyLanguagePattern.test(clause.replaceAll(negatedCertaintyPattern, "")),
-  );
+  return text.split(/[\n.!?。！？]+/).some((clause) => {
+    const withoutEnglishNegation = clause.replaceAll(negatedCertaintyPattern, "");
+    const withoutNegation = withoutEnglishNegation.replaceAll(
+      negatedChineseCertaintyPattern,
+      "",
+    );
+    return (
+      certaintyLanguagePattern.test(withoutNegation) ||
+      chineseCertaintyLanguagePattern.test(withoutNegation)
+    );
+  });
 }
 
 export class DailyBriefPolicyError extends Error {
@@ -106,6 +155,26 @@ export function assertDailyBriefAnalysisPolicy(output: DailyBriefAnalysis) {
   }
 }
 
+export function assertDailyBriefAnalysisLocale(
+  output: DailyBriefAnalysis,
+  locale: AppLocale,
+) {
+  if (locale !== "zh-CN") return;
+  const modelAuthoredFields = [
+    output.headline,
+    output.summary,
+    ...output.developments.flatMap((development) => [
+      development.title,
+      development.whyItMatters,
+    ]),
+    ...output.watchNext,
+    ...output.unknowns,
+  ];
+  if (modelAuthoredFields.some((value) => !/[\u3400-\u9fff]/u.test(value))) {
+    throw new Error("daily_brief_locale_mismatch");
+  }
+}
+
 export function validateDailyBriefAnalysis(
   value: unknown,
   evidence: readonly {
@@ -129,14 +198,15 @@ export async function generateDailyBriefAnalysis(
   const { Agent, run } = await import("@openai/agents");
   const agent = new Agent({
     name: "Omnigaze Daily Brief analyst",
-    instructions: DAILY_BRIEF_MODEL_INSTRUCTIONS,
+    instructions: dailyBriefModelInstructions(input.locale),
     outputType: dailyBriefAnalysisSchema,
     ...(process.env.OPENAI_MODEL ? { model: process.env.OPENAI_MODEL } : {}),
   });
   const result = await run(
     agent,
     JSON.stringify({
-      task: "Synthesize today's evidence-backed watchlist brief.",
+      task: localizedTasks[input.locale],
+      outputLanguage: input.locale,
       briefDate: input.briefDate,
       window: input.window,
       trackedSymbols: input.trackedSymbols,
@@ -144,5 +214,7 @@ export async function generateDailyBriefAnalysis(
     }),
     { maxTurns: 1 },
   );
-  return validateDailyBriefAnalysis(result.finalOutput, input.evidence);
+  const output = validateDailyBriefAnalysis(result.finalOutput, input.evidence);
+  assertDailyBriefAnalysisLocale(output, input.locale);
+  return output;
 }

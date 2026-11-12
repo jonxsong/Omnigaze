@@ -17,6 +17,11 @@ import {
   parseDailyBriefEnvelope,
   type DailyBriefEnvelope,
 } from "@/lib/ai/daily-brief-contract";
+import { useAppLocale } from "@/components/app-locale";
+import {
+  dailyBriefCopy,
+  dailyBriefErrorMessage,
+} from "@/components/daily-brief-copy";
 import styles from "./daily-brief-card.module.css";
 
 export type DailyBriefCardSession =
@@ -29,27 +34,28 @@ interface DailyBriefCardProps {
 
 type DailyBriefResource =
   | { phase: "idle" | "loading"; data?: undefined; error?: undefined }
-  | { phase: "ready"; data: DailyBriefEnvelope; error?: undefined }
+  | {
+      phase: "ready";
+      locale: "en" | "zh-CN";
+      data: DailyBriefEnvelope;
+      error?: undefined;
+    }
   | {
       phase: "error";
       data?: undefined;
-      error: string;
       code: string | null;
       retryMode: "new_request" | "same_request";
       retryAt: string | null;
       retryBlocked: boolean;
     };
 
-const directionLabel = {
-  positive: "Positive",
-  negative: "Negative",
-  mixed: "Mixed",
-  unclear: "Unclear",
-} as const;
-
-function formatTimestamp(value: string) {
-  if (!Number.isFinite(Date.parse(value))) return "Time unavailable";
-  return new Intl.DateTimeFormat("en-US", {
+function formatTimestamp(
+  value: string,
+  dateLocale: string,
+  unavailable: string,
+) {
+  if (!Number.isFinite(Date.parse(value))) return unavailable;
+  return new Intl.DateTimeFormat(dateLocale, {
     month: "short",
     day: "numeric",
     hour: "numeric",
@@ -80,7 +86,6 @@ function retryTimestampFromSeconds(value: unknown) {
 }
 
 function responseError(value: unknown, response: Response) {
-  const fallback = "Your Daily Brief is temporarily unavailable.";
   const headerRetryAt = validTimestamp(
     response.headers.get("X-Omnigaze-AI-Budget-Retry-At"),
   );
@@ -89,7 +94,6 @@ function responseError(value: unknown, response: Response) {
   );
   if (!value || typeof value !== "object") {
     return {
-      message: fallback,
       code: null,
       retryAt: headerRetryAt ?? headerRetryAfter,
     };
@@ -102,10 +106,6 @@ function responseError(value: unknown, response: Response) {
     retryAfterSeconds?: unknown;
   };
   return {
-    message:
-      typeof candidate.error === "string" && candidate.error.trim()
-        ? candidate.error
-        : fallback,
     code: typeof candidate.code === "string" ? candidate.code : null,
     retryAt:
       headerRetryAt ??
@@ -117,6 +117,8 @@ function responseError(value: unknown, response: Response) {
 }
 
 export function DailyBriefCard({ session }: DailyBriefCardProps) {
+  const { locale } = useAppLocale();
+  const copy = dailyBriefCopy[locale];
   const [resource, setResource] = useState<DailyBriefResource>({ phase: "idle" });
   const controllerRef = useRef<AbortController | null>(null);
   const requestNonceRef = useRef(0);
@@ -162,7 +164,7 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
             Accept: "application/json",
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ request_id: requestId }),
+          body: JSON.stringify({ request_id: requestId, locale }),
           signal: controller.signal,
         });
 
@@ -181,7 +183,6 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
           uncertainRequestIdRef.current = null;
           setResource({
             phase: "error",
-            error: failure.message,
             code: failure.code,
             retryMode: "new_request",
             retryAt: failure.retryAt,
@@ -195,13 +196,11 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
         try {
           parsed = parseDailyBriefEnvelope(body);
         } catch {
-          throw new Error(
-            "The Daily Brief response failed its integrity checks. Please try again.",
-          );
+          throw new Error("response_invalid");
         }
         uncertainRequestIdRef.current = null;
-        setResource({ phase: "ready", data: parsed });
-      } catch (error) {
+        setResource({ phase: "ready", locale, data: parsed });
+      } catch {
         if (requestNonce !== requestNonceRef.current) return;
         if (controller.signal.aborted && !timedOut) return;
 
@@ -209,15 +208,14 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
         uncertainRequestIdRef.current = uncertainOutcome ? requestId : null;
         setResource({
           phase: "error",
-          code: timedOut ? "request_timeout" : null,
+          code: timedOut
+            ? "request_timeout"
+            : receivedResponse
+              ? "response_invalid"
+              : "network_error",
           retryMode: uncertainOutcome ? "same_request" : "new_request",
           retryAt: null,
           retryBlocked: false,
-          error: timedOut
-            ? "The brief timed out before a verified result was ready."
-            : error instanceof Error
-              ? error.message
-              : "Your Daily Brief is temporarily unavailable.",
         });
       } finally {
         window.clearTimeout(timeout);
@@ -227,7 +225,7 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
         }
       }
     },
-    [session.isAuthenticated],
+    [locale, session.isAuthenticated],
   );
 
   useEffect(() => () => cancelRequest(), [cancelRequest]);
@@ -236,7 +234,7 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
     cancelRequest();
     const reset = window.setTimeout(() => setResource({ phase: "idle" }), 0);
     return () => window.clearTimeout(reset);
-  }, [cancelRequest, session.isAuthenticated]);
+  }, [cancelRequest, locale, session.isAuthenticated]);
 
   const blockedRetryAt =
     resource.phase === "error" && resource.retryBlocked ? resource.retryAt : null;
@@ -257,7 +255,10 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
     return () => window.clearTimeout(timer);
   }, [blockedRetryAt]);
 
-  const ready = resource.phase === "ready" ? resource.data : null;
+  const ready =
+    resource.phase === "ready" && resource.locale === locale
+      ? resource.data
+      : null;
   const citationsById = useMemo(
     () => new Map(ready?.meta.citations.map((citation) => [citation.id, citation]) ?? []),
     [ready],
@@ -275,13 +276,13 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
             <BookOpenText size={18} />
           </span>
           <div>
-            <span className={styles.eyebrow}>PERSONAL MARKET INTELLIGENCE</span>
-            <h2 id="daily-brief-title">Daily Brief</h2>
-            <p>One cited read across the companies you track.</p>
+            <span className={styles.eyebrow}>{copy.eyebrow}</span>
+            <h2 id="daily-brief-title">{copy.title}</h2>
+            <p>{copy.subtitle}</p>
           </div>
         </div>
         <div className={styles.manualBadge}>
-          <ShieldCheck size={13} /> Manual only
+          <ShieldCheck size={13} /> {copy.manualOnly}
         </div>
       </header>
 
@@ -290,60 +291,58 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
           <section className={styles.gate}>
             <div className={styles.stateIcon}><ShieldCheck size={21} /></div>
             <div>
-              <strong>Sign in to brief your watchlist</strong>
-              <p>
-                Your brief uses only your saved symbols and fresh, cited market
-                evidence. It never runs in the background.
-              </p>
+              <strong>{copy.gateTitle}</strong>
+              <p>{copy.gateBody}</p>
             </div>
             <a href={session.signInPath} target="_top">
-              Sign in for Daily Brief <ArrowRight size={14} />
+              {copy.gateAction} <ArrowRight size={14} />
             </a>
           </section>
         ) : resource.phase === "idle" ? (
           <section className={styles.idle}>
             <div>
-              <span className={styles.kicker}><Sparkles size={13} /> Ready when you are</span>
-              <strong>Turn today’s evidence into a clear market read.</strong>
-              <p>
-                Omnigaze checks fresh evidence across your tracked companies,
-                explains the important developments, and links every included
-                development to its evidence.
-              </p>
+              <span className={styles.kicker}><Sparkles size={13} /> {copy.readyKicker}</span>
+              <strong>{copy.readyTitle}</strong>
+              <p>{copy.readyBody}</p>
             </div>
             <button type="button" onClick={() => void loadBrief("new_request")}>
-              <Sparkles size={15} /> Build my Daily Brief
+              <Sparkles size={15} /> {copy.buildAction}
             </button>
-            <small>Starts one explicit AI request. No scheduled or background generation.</small>
+            <small>{copy.manualRequestNote}</small>
           </section>
         ) : resource.phase === "loading" ? (
           <section className={styles.loading} role="status">
             <LoaderCircle className={styles.spinner} size={24} />
             <div>
-              <strong>Building your evidence-backed brief</strong>
-              <p>Checking watchlist coverage, freshness, and citation integrity.</p>
+              <strong>{copy.loadingTitle}</strong>
+              <p>{copy.loadingBody}</p>
             </div>
           </section>
         ) : resource.phase === "error" ? (
           <section className={styles.error} role="alert">
             <div className={styles.errorIcon}><AlertTriangle size={21} /></div>
             <div>
-              <strong>Daily Brief unavailable</strong>
-              <p>{resource.error}</p>
+              <strong>{copy.unavailableTitle}</strong>
+              <p>{dailyBriefErrorMessage(locale, resource.code)}</p>
               {resource.code === "ai_rate_limited" && (
                 <p className={styles.rateLimitCopy}>
-                  AI usage is temporarily at its limit. This budget manages model
-                  requests—it is not investment confidence or a market signal.
+                  {copy.rateLimitExplanation}
                 </p>
               )}
               {resource.retryAt && (
                 <small className={styles.retryNotice}>
-                  New model requests reset around {formatTimestamp(resource.retryAt)}.
+                  {copy.retryAt(
+                    formatTimestamp(
+                      resource.retryAt,
+                      copy.dateLocale,
+                      copy.timeUnavailable,
+                    ),
+                  )}
                 </small>
               )}
               {resource.code === "auth_required" ? (
                 <a href="/signin-with-chatgpt?return_to=%2Fdashboard" target="_top">
-                  Sign in again <ArrowRight size={14} />
+                  {copy.signInAgain} <ArrowRight size={14} />
                 </a>
               ) : (
                 <button
@@ -353,8 +352,8 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
                 >
                   <RefreshCw size={14} />
                   {resource.retryMode === "same_request"
-                    ? "Resume brief safely"
-                    : "Try a new brief"}
+                    ? copy.resumeSafely
+                    : copy.tryNew}
                 </button>
               )}
             </div>
@@ -364,43 +363,47 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
             <section className={styles.hero}>
               <div className={styles.heroCopy}>
                 <div className={styles.asOf}>
-                  <span><CheckCircle2 size={12} /> Live evidence</span>
-                  <span><Clock3 size={12} /> As of {formatTimestamp(ready.meta.freshness.asOf)}</span>
+                  <span><CheckCircle2 size={12} /> {copy.liveEvidence}</span>
+                  <span><Clock3 size={12} /> {copy.asOf(formatTimestamp(ready.meta.freshness.asOf, copy.dateLocale, copy.timeUnavailable))}</span>
                 </div>
                 <h3>{ready.data.headline}</h3>
                 <p>{ready.data.summary}</p>
               </div>
               <div className={styles.coverageScore}>
                 <strong>{Math.round(ready.meta.evidenceCoverage.score * 100)}%</strong>
-                <span>evidence coverage</span>
-                <small>{ready.meta.evidenceCoverage.label} · not investment confidence</small>
+                <span>{copy.evidenceCoverage}</span>
+                <small>{copy.coverage[ready.meta.evidenceCoverage.label]} · {copy.notInvestmentConfidence}</small>
               </div>
             </section>
 
-            <section className={styles.truthStrip} aria-label="Brief provenance and usage">
+            <section className={styles.truthStrip} aria-label={copy.provenanceLabel}>
               <div>
-                <span>WATCHLIST COVERAGE</span>
-                <strong>{ready.meta.includedSymbolCount} of {ready.meta.trackedSymbolCount} symbols</strong>
-                <small>{ready.meta.omittedSymbolCount} not represented in this bounded brief</small>
+                <span>{copy.watchlistCoverage}</span>
+                <strong>{copy.symbolCoverage(ready.meta.includedSymbolCount, ready.meta.trackedSymbolCount)}</strong>
+                <small>{copy.omittedSymbols(ready.meta.omittedSymbolCount)}</small>
               </div>
               <div>
-                <span>EVIDENCE</span>
-                <strong>{ready.meta.evidenceCount} citations · {ready.meta.sourceCount} sources</strong>
-                <small>{ready.meta.providerCoverage} provider coverage</small>
+                <span>{copy.evidence}</span>
+                <strong>{copy.evidenceSummary(ready.meta.evidenceCount, ready.meta.sourceCount)}</strong>
+                <small>{copy.providerCoverageSummary(copy.providerCoverage[ready.meta.providerCoverage])}</small>
               </div>
               <div>
-                <span>AI REQUEST</span>
+                <span>{copy.aiRequest}</span>
                 <strong>
                   {ready.meta.cache.state === "generated"
-                    ? "New analysis generated"
+                    ? copy.cacheGenerated
                     : ready.meta.cache.state === "deduplicated"
-                      ? "Joined an in-progress request"
-                      : "Verified cached brief reused"}
+                      ? copy.cacheDeduplicated
+                      : copy.cacheHit}
                 </strong>
                 <small>
                   {ready.meta.budget.consumed
-                    ? `${ready.meta.budget.remaining} of ${ready.meta.budget.limit} requests remain until ${formatTimestamp(ready.meta.budget.resetsAt)}`
-                    : "No additional model request used"}
+                    ? copy.requestsRemain(
+                        ready.meta.budget.remaining,
+                        ready.meta.budget.limit,
+                        formatTimestamp(ready.meta.budget.resetsAt, copy.dateLocale, copy.timeUnavailable),
+                      )
+                    : copy.noAdditionalRequest}
                 </small>
               </div>
             </section>
@@ -408,10 +411,10 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
             <section className={styles.section} aria-labelledby="daily-developments-title">
               <div className={styles.sectionHeading}>
                 <div>
-                  <span>TODAY’S DEVELOPMENTS</span>
-                  <h3 id="daily-developments-title">What changed across your watchlist</h3>
+                  <span>{copy.developmentsEyebrow}</span>
+                  <h3 id="daily-developments-title">{copy.developmentsTitle}</h3>
                 </div>
-                <small>{ready.data.developments.length} cited themes</small>
+                <small>{copy.citedThemes(ready.data.developments.length)}</small>
               </div>
               <div className={styles.developmentGrid}>
                 {ready.data.developments.map((development) => (
@@ -423,12 +426,12 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
                         ))}
                       </div>
                       <span className={`${styles.direction} ${styles[development.direction]}`}>
-                        {directionLabel[development.direction]}
+                        {copy.direction[development.direction]}
                       </span>
                     </div>
                     <h4>{development.title}</h4>
                     <p>{development.whyItMatters}</p>
-                    <ul className={styles.evidenceLinks} aria-label={`Sources for ${development.title}`}>
+                    <ul className={styles.evidenceLinks} aria-label={copy.sourcesFor(development.title)}>
                       {development.evidenceIds.map((evidenceId) => {
                         const citation = citationsById.get(evidenceId);
                         return (
@@ -438,7 +441,7 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
                                 {citation.publisher} <ExternalLink size={11} />
                               </a>
                             ) : (
-                              <span>{citation?.publisher ?? "Verified evidence"}</span>
+                              <span>{citation?.publisher ?? copy.verifiedEvidence}</span>
                             )}
                           </li>
                         );
@@ -451,29 +454,29 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
 
             <div className={styles.followUpGrid}>
               <section>
-                <span>WATCH NEXT</span>
+                <span>{copy.watchNext}</span>
                 <ul>{ready.data.watchNext.map((item) => <li key={item}>{item}</li>)}</ul>
               </section>
               <section>
-                <span>WHAT REMAINS UNKNOWN</span>
+                <span>{copy.unknowns}</span>
                 <ul>{ready.data.unknowns.map((item) => <li key={item}>{item}</li>)}</ul>
               </section>
             </div>
 
             <details className={styles.sources}>
               <summary>
-                Inspect {ready.meta.evidenceCount} cited sources
-                <span>{ready.meta.omittedSymbolCount} tracked symbol{ready.meta.omittedSymbolCount === 1 ? "" : "s"} omitted</span>
+                {copy.inspectSources(ready.meta.evidenceCount)}
+                <span>{copy.omittedTrackedSymbols(ready.meta.omittedSymbolCount)}</span>
               </summary>
               <ul>
                 {ready.meta.citations.map((citation) => (
                   <li key={citation.id}>
                     <div>
                       <strong>{citation.title}</strong>
-                      <span>{citation.publisher} · {formatTimestamp(citation.publishedAt)}</span>
+                      <span>{citation.publisher} · {formatTimestamp(citation.publishedAt, copy.dateLocale, copy.timeUnavailable)}</span>
                     </div>
                     {citation.url && (
-                      <a href={citation.url} target="_blank" rel="noreferrer" aria-label={`Open source: ${citation.title}`}>
+                      <a href={citation.url} target="_blank" rel="noreferrer" aria-label={copy.openSource(citation.title)}>
                         <ExternalLink size={14} />
                       </a>
                     )}
@@ -485,14 +488,13 @@ export function DailyBriefCard({ session }: DailyBriefCardProps) {
             <footer className={styles.footer}>
               <div>
                 <ShieldCheck size={14} />
-                <p>{ready.meta.disclaimer}</p>
+                <p>{copy.disclaimer}</p>
               </div>
               <p>
-                Evidence synthesis is not a return probability, recommendation, or
-                substitute for your own research.
+                {copy.synthesisBoundary}
               </p>
               <button type="button" onClick={() => void loadBrief("new_request")}>
-                <RefreshCw size={13} /> Refresh brief
+                <RefreshCw size={13} /> {copy.refresh}
               </button>
             </footer>
           </div>

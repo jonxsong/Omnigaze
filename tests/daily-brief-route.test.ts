@@ -99,6 +99,7 @@ describe("Daily Brief HTTP route", () => {
   it("rejects malformed or expansive input with no service work", async () => {
     for (const body of [
       { request_id: "bad key" },
+      { request_id: "valid-request-1", locale: "zh" },
       { request_id: "valid-request-1", symbol_id: "NASDAQ:NVDA" },
       null,
     ]) {
@@ -116,7 +117,7 @@ describe("Daily Brief HTTP route", () => {
     expect(response.status).toBe(200);
     expect(mocks.generatePersonalDailyBrief).toHaveBeenCalledWith(
       "owner-route-1",
-      { requestId: "valid-request-1" },
+      { requestId: "valid-request-1", locale: "en" },
     );
     expect(await response.json()).toMatchObject({
       data: { headline: "Tracked companies changed today" },
@@ -127,6 +128,18 @@ describe("Daily Brief HTTP route", () => {
     expect(response.headers.get("x-omnigaze-ai-deduplicated")).toBe("false");
     expect(response.headers.get("x-omnigaze-ai-budget-charged")).toBe("true");
     expect(response.headers.get("x-omnigaze-ai-budget-remaining")).toBe("18");
+  });
+
+  it("passes an explicitly requested Chinese locale to generation", async () => {
+    const response = await POST(
+      request({ request_id: "valid-request-zh", locale: "zh-CN" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.generatePersonalDailyBrief).toHaveBeenCalledWith(
+      "owner-route-1",
+      { requestId: "valid-request-zh", locale: "zh-CN" },
+    );
   });
 
   it("labels durable hits and in-flight deduplication without budget headers", async () => {

@@ -18,6 +18,11 @@ import {
   parseOmnigazeViewEnvelope,
   type OmnigazeViewEnvelope,
 } from "@/lib/ai/omnigaze-view-client-contract";
+import { useAppLocale } from "@/components/app-locale";
+import {
+  omnigazeViewCopy,
+  omnigazeViewErrorMessage,
+} from "@/components/omnigaze-view-copy";
 import styles from "./omnigaze-view-dialog.module.css";
 
 export interface OmnigazeViewDialogInstrument {
@@ -44,23 +49,19 @@ type ViewResource =
       phase: "error";
       key: string;
       data?: undefined;
-      error: string;
       code: string | null;
       retryMode: "new_request" | "same_request";
       retryAt: string | null;
       retryBlocked: boolean;
     };
 
-const stanceLabel = {
-  bullish: "Constructive",
-  bearish: "Cautious",
-  mixed: "Mixed",
-  neutral: "Neutral",
-} as const;
-
-function formatTimestamp(value: string) {
-  if (!Number.isFinite(Date.parse(value))) return "Time unavailable";
-  return new Intl.DateTimeFormat("en-US", {
+function formatTimestamp(
+  value: string,
+  dateLocale: string,
+  unavailable: string,
+) {
+  if (!Number.isFinite(Date.parse(value))) return unavailable;
+  return new Intl.DateTimeFormat(dateLocale, {
     month: "short",
     day: "numeric",
     hour: "numeric",
@@ -68,10 +69,9 @@ function formatTimestamp(value: string) {
   }).format(new Date(value));
 }
 
-function responseError(value: unknown, fallback: string, response: Response) {
+function responseError(value: unknown, response: Response) {
   if (!value || typeof value !== "object") {
     return {
-      message: fallback,
       code: null,
       retryAt: validTimestamp(
         response.headers.get("X-Omnigaze-AI-Budget-Retry-At"),
@@ -85,10 +85,6 @@ function responseError(value: unknown, fallback: string, response: Response) {
     retry_at?: unknown;
   };
   return {
-    message:
-      typeof candidate.error === "string" && candidate.error.trim()
-        ? candidate.error
-        : fallback,
     code: typeof candidate.code === "string" ? candidate.code : null,
     retryAt:
       validTimestamp(response.headers.get("X-Omnigaze-AI-Budget-Retry-At")) ??
@@ -109,7 +105,9 @@ export function OmnigazeViewDialog({
   instrument,
   session,
 }: OmnigazeViewDialogProps) {
-  const resourceKey = instrument.id;
+  const { locale } = useAppLocale();
+  const copy = omnigazeViewCopy[locale];
+  const resourceKey = `${instrument.id}:${locale}`;
   const [resource, setResource] = useState<ViewResource>({
     phase: "idle",
     key: resourceKey,
@@ -135,7 +133,7 @@ export function OmnigazeViewDialog({
     const controller = new AbortController();
     controllerRef.current = controller;
     const requestNonce = ++requestNonceRef.current;
-    const key = instrument.id;
+    const key = resourceKey;
     const requestId =
       attemptMode === "same_request" && uncertainRequestIdRef.current
         ? uncertainRequestIdRef.current
@@ -161,6 +159,7 @@ export function OmnigazeViewDialog({
         body: JSON.stringify({
           symbol_id: instrument.id,
           request_id: requestId,
+          locale,
         }),
         signal: controller.signal,
       });
@@ -174,16 +173,11 @@ export function OmnigazeViewDialog({
       receivedResponse = true;
       if (requestNonce !== requestNonceRef.current) return;
       if (!response.ok) {
-        const failure = responseError(
-          body,
-          "The Omnigaze View is temporarily unavailable.",
-          response,
-        );
+        const failure = responseError(body, response);
         uncertainRequestIdRef.current = null;
         setResource({
           phase: "error",
           key,
-          error: failure.message,
           code: failure.code,
           retryMode: "new_request",
           retryAt: failure.retryAt,
@@ -194,11 +188,11 @@ export function OmnigazeViewDialog({
       }
       const parsed = parseOmnigazeViewEnvelope(body);
       if (parsed.meta.symbolId !== instrument.id) {
-        throw new Error("The returned analysis did not match this stock.");
+        throw new Error("response_invalid");
       }
       uncertainRequestIdRef.current = null;
       setResource({ phase: "ready", key, data: parsed });
-    } catch (error) {
+    } catch {
       if (requestNonce !== requestNonceRef.current) {
         return;
       }
@@ -208,15 +202,14 @@ export function OmnigazeViewDialog({
       setResource({
         phase: "error",
         key,
-        code: timedOut ? "request_timeout" : null,
+        code: timedOut
+          ? "request_timeout"
+          : receivedResponse
+            ? "response_invalid"
+            : "network_error",
         retryMode: uncertainOutcome ? "same_request" : "new_request",
         retryAt: null,
         retryBlocked: false,
-        error: timedOut
-          ? "Analysis timed out before a verified view was ready. Try again."
-          : error instanceof Error
-            ? error.message
-            : "The Omnigaze View is temporarily unavailable.",
       });
     } finally {
       window.clearTimeout(timeout);
@@ -225,7 +218,7 @@ export function OmnigazeViewDialog({
         inFlightRef.current = false;
       }
     }
-  }, [instrument.id, session.isAuthenticated]);
+  }, [instrument.id, locale, resourceKey, session.isAuthenticated]);
 
   useEffect(() => {
     if (open) return;
@@ -306,16 +299,16 @@ export function OmnigazeViewDialog({
             <div className={styles.identity}>
               <span aria-hidden="true">{instrument.ticker[0]}</span>
               <div>
-                <small>LIVE OMNIGAZE VIEW</small>
+                <small>{copy.eyebrow}</small>
                 <DialogPrimitive.Title>
-                  {instrument.ticker} intelligence
+                  {instrument.ticker} {copy.intelligenceSuffix}
                 </DialogPrimitive.Title>
                 <p id="omnigaze-view-description">{instrument.name}</p>
               </div>
             </div>
             <DialogPrimitive.Close className={styles.closeButton}>
               <X size={18} />
-              <span className="sr-only">Close Omnigaze View</span>
+              <span className="sr-only">{copy.close}</span>
             </DialogPrimitive.Close>
           </header>
 
@@ -324,52 +317,51 @@ export function OmnigazeViewDialog({
               <section className={styles.gateCard}>
                 <ShieldCheck size={25} />
                 <div>
-                  <strong>Sign in for a live evidence-backed view</strong>
-                  <p>
-                    Omnigaze verifies the stock, evidence freshness, and citation set
-                    before asking the model to interpret anything.
-                  </p>
+                  <strong>{copy.gateTitle}</strong>
+                  <p>{copy.gateBody}</p>
                   <a href={session.signInPath} target="_top">
-                    Sign in to analyze <ArrowRight size={14} />
+                    {copy.gateAction} <ArrowRight size={14} />
                   </a>
                 </div>
               </section>
             ) : visibleResource.phase === "idle" ? (
               <section className={styles.idleState}>
                 <Sparkles size={27} />
-                <strong>Generate a fresh Omnigaze View</strong>
-                <p>
-                  This starts one AI analysis using only currently verified, fresh
-                  provider evidence. It will not run until you ask.
-                </p>
+                <strong>{copy.idleTitle}</strong>
+                <p>{copy.idleBody}</p>
                 <button
                   type="button"
                   onClick={() => void loadView("new_request")}
                 >
-                  <Sparkles size={14} /> Analyze live evidence
+                  <Sparkles size={14} /> {copy.analyzeAction}
                 </button>
               </section>
             ) : visibleResource.phase === "loading" ? (
               <section className={styles.loadingState} role="status">
                 <LoaderCircle className={styles.spinner} size={28} />
-                <strong>Building a grounded view</strong>
-                <p>Verifying live evidence, freshness, and citation integrity.</p>
+                <strong>{copy.loadingTitle}</strong>
+                <p>{copy.loadingBody}</p>
               </section>
             ) : visibleResource.phase === "error" ? (
               <section className={styles.errorState} role="alert">
                 <AlertTriangle size={24} />
                 <div>
-                  <strong>View unavailable</strong>
-                  <p>{visibleResource.error}</p>
+                  <strong>{copy.unavailableTitle}</strong>
+                  <p>{omnigazeViewErrorMessage(locale, visibleResource.code)}</p>
                   {visibleResource.retryAt && (
                     <small className={styles.retryNotice}>
-                      Usage becomes available again around {formatTimestamp(visibleResource.retryAt)}.
-                      This limit controls model requests, not investment confidence.
+                      {copy.retryAt(
+                        formatTimestamp(
+                          visibleResource.retryAt,
+                          copy.dateLocale,
+                          copy.timeUnavailable,
+                        ),
+                      )}
                     </small>
                   )}
                   {visibleResource.code === "auth_required" ? (
                     <a href="/dashboard" target="_top">
-                      Sign in again <ArrowRight size={14} />
+                      {copy.signInAgain} <ArrowRight size={14} />
                     </a>
                   ) : (
                     <button
@@ -379,8 +371,8 @@ export function OmnigazeViewDialog({
                     >
                       <RefreshCw size={14} />
                       {visibleResource.retryMode === "same_request"
-                        ? "Resume request safely"
-                        : "Try a new analysis"}
+                        ? copy.resumeSafely
+                        : copy.tryNew}
                     </button>
                   )}
                 </div>
@@ -390,12 +382,12 @@ export function OmnigazeViewDialog({
                 <section className={styles.hero}>
                   <div>
                     <span className={`${styles.stance} ${styles[ready.data.stance]}`}>
-                      {stanceLabel[ready.data.stance]}
+                      {copy.stance[ready.data.stance]}
                     </span>
                     <small>
                       <Clock3 size={12} />
-                      {ready.meta.ai?.source === "cache" ? "Cached view from" : "Generated"}{" "}
-                      {formatTimestamp(ready.meta.generatedAt)}
+                      {ready.meta.ai?.source === "cache" ? copy.cachedFrom : copy.generated}{" "}
+                      {formatTimestamp(ready.meta.generatedAt, copy.dateLocale, copy.timeUnavailable)}
                     </small>
                     <h2>{ready.data.headline}</h2>
                     <p>{ready.data.summary}</p>
@@ -403,13 +395,13 @@ export function OmnigazeViewDialog({
                   <div className={styles.confidenceGrid}>
                     <div>
                       <strong>{Math.round(ready.data.confidence * 100)}%</strong>
-                      <span>interpretation confidence</span>
-                      <small>not a return probability</small>
+                      <span>{copy.interpretationConfidence}</span>
+                      <small>{copy.notReturnProbability}</small>
                     </div>
                     <div>
                       <strong>{Math.round(ready.meta.evidenceCoverage.score * 100)}%</strong>
-                      <span>evidence coverage</span>
-                      <small>{ready.meta.evidenceCoverage.label}</small>
+                      <span>{copy.evidenceCoverage}</span>
+                      <small>{copy.coverage[ready.meta.evidenceCoverage.label]}</small>
                     </div>
                   </div>
                 </section>
@@ -420,33 +412,36 @@ export function OmnigazeViewDialog({
                       <ShieldCheck size={16} />
                       <strong>
                         {ready.meta.ai.source === "cache"
-                          ? "Verified analysis cache reused"
+                          ? copy.cacheReused
                           : ready.meta.ai.deduplicated
-                            ? "Joined an analysis already in progress"
-                            : "Fresh model analysis generated"}
+                            ? copy.requestJoined
+                            : copy.freshAnalysis}
                       </strong>
                     </div>
                     <p>
                       {ready.meta.ai.budget.charged
-                        ? `One model request used · ${ready.meta.ai.budget.remaining} of ${ready.meta.ai.budget.limit} remain until ${formatTimestamp(ready.meta.ai.budget.resetAt)}.`
-                        : "No additional model request was charged for this view."}
+                        ? copy.budgetUsed(
+                            ready.meta.ai.budget.remaining,
+                            ready.meta.ai.budget.limit,
+                            formatTimestamp(ready.meta.ai.budget.resetAt, copy.dateLocale, copy.timeUnavailable),
+                          )
+                        : copy.noAdditionalRequest}
                     </p>
                     <small>
-                      Usage controls manage AI cost and abuse. They are not a market signal,
-                      recommendation, or confidence score.
+                      {copy.usageBoundary}
                     </small>
                   </section>
                 )}
 
                 <section className={styles.whyNow}>
-                  <span>WHY NOW</span>
+                  <span>{copy.whyNow}</span>
                   <p>{ready.data.whyNow}</p>
                 </section>
 
                 <section className={styles.section}>
                   <div className={styles.sectionHeading}>
-                    <span>KEY DRIVERS</span>
-                    <small>{ready.data.drivers.length} grounded signals</small>
+                    <span>{copy.keyDrivers}</span>
+                    <small>{copy.driverCount(ready.data.drivers.length)}</small>
                   </div>
                   <div className={styles.driverGrid}>
                     {ready.data.drivers.map((driver) => (
@@ -454,7 +449,7 @@ export function OmnigazeViewDialog({
                         <div>
                           <i className={styles[driver.direction]} />
                           <strong>{driver.label}</strong>
-                          <small>{driver.direction}</small>
+                          <small>{copy.direction[driver.direction]}</small>
                         </div>
                         <p>{driver.explanation}</p>
                         <ul>
@@ -467,7 +462,7 @@ export function OmnigazeViewDialog({
                                     {citation.publisher} <ExternalLink size={11} />
                                   </a>
                                 ) : (
-                                  <span>{citation?.publisher ?? "Verified evidence"}</span>
+                                  <span>{citation?.publisher ?? copy.verifiedEvidence}</span>
                                 )}
                               </li>
                             );
@@ -480,8 +475,8 @@ export function OmnigazeViewDialog({
 
                 <section className={styles.section}>
                   <div className={styles.sectionHeading}>
-                    <span>IMPORTANT UNKNOWNS</span>
-                    <small>What the evidence cannot establish</small>
+                    <span>{copy.importantUnknowns}</span>
+                    <small>{copy.unknownsDescription}</small>
                   </div>
                   <ul className={styles.unknowns}>
                     {ready.data.unknowns.map((unknown) => (
@@ -492,9 +487,9 @@ export function OmnigazeViewDialog({
 
                 <section className={styles.section}>
                   <div className={styles.sectionHeading}>
-                    <span>CITED EVIDENCE</span>
+                    <span>{copy.citedEvidence}</span>
                     <small>
-                      {ready.meta.evidenceCount} items · {ready.meta.evidenceCoverage.sourceCount} sources
+                      {copy.evidenceCount(ready.meta.evidenceCount, ready.meta.evidenceCoverage.sourceCount)}
                     </small>
                   </div>
                   <ul className={styles.citations}>
@@ -503,7 +498,7 @@ export function OmnigazeViewDialog({
                         <div>
                           <strong>{citation.title}</strong>
                           <span>
-                            {citation.publisher} · {formatTimestamp(citation.publishedAt)}
+                            {citation.publisher} · {formatTimestamp(citation.publishedAt, copy.dateLocale, copy.timeUnavailable)}
                           </span>
                         </div>
                         {citation.url && (
@@ -511,7 +506,7 @@ export function OmnigazeViewDialog({
                             href={citation.url}
                             target="_blank"
                             rel="noreferrer"
-                            aria-label={`Open source: ${citation.title}`}
+                            aria-label={copy.openSource(citation.title)}
                           >
                             <ExternalLink size={14} />
                           </a>
@@ -525,15 +520,18 @@ export function OmnigazeViewDialog({
                   <div>
                     <Sparkles size={14} />
                     <span>
-                      Live · {ready.meta.providerCoverage} coverage · evidence as of {formatTimestamp(ready.meta.freshness.asOf)}
+                      {copy.footerSummary(
+                        copy.providerCoverage[ready.meta.providerCoverage],
+                        formatTimestamp(ready.meta.freshness.asOf, copy.dateLocale, copy.timeUnavailable),
+                      )}
                     </span>
                   </div>
-                  <p>{ready.meta.disclaimer}</p>
+                  <p>{copy.disclaimer}</p>
                   <button
                     type="button"
                     onClick={() => void loadView("new_request")}
                   >
-                    <RefreshCw size={13} /> Refresh view
+                    <RefreshCw size={13} /> {copy.refresh}
                   </button>
                 </footer>
               </>

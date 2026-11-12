@@ -15,6 +15,7 @@ export const dynamic = "force-dynamic";
 const noStore = { "Cache-Control": "no-store" };
 const requestSchema = z
   .object({
+    locale: z.enum(["en", "zh-CN"]).optional(),
     request_id: z
       .string()
       .trim()
@@ -64,6 +65,7 @@ async function postDailyBrief(request: Request) {
   try {
     const result = await generatePersonalDailyBrief(user.userId, {
       requestId: parsed.data.request_id,
+      locale: parsed.data.locale ?? "en",
     });
     return Response.json(result, { headers: resultHeaders(result) });
   } catch (error) {
