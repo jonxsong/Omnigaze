@@ -9,6 +9,7 @@ import {
   ProviderCursorRejectedError,
 } from "@/lib/providers/contracts";
 import { SecEdgarProvider } from "@/lib/providers/sec-edgar";
+import type { SecFairAccessCoordinator } from "@/lib/providers/sec-fair-access";
 import type { CanonicalSymbol } from "@/lib/market-types";
 
 afterEach(() => {
@@ -477,6 +478,21 @@ type SecTestFiling = {
 };
 
 const SEC_USER_AGENT = "Omnigaze tests test@example.com";
+const READY_SEC_COORDINATOR = {
+  acquire: async () => undefined,
+  imposeCooldown: async () => undefined,
+  getStatus: async () => ({ status: "ready" as const, retryAfterSeconds: null }),
+} satisfies SecFairAccessCoordinator;
+
+function secProvider(
+  config: ConstructorParameters<typeof SecEdgarProvider>[0],
+) {
+  return new SecEdgarProvider({
+    enabled: true,
+    coordinator: READY_SEC_COORDINATOR,
+    ...config,
+  });
+}
 
 function secSubmissions(rows: SecTestFiling[] = []) {
   return {
@@ -506,11 +522,11 @@ function secFiling(
 }
 
 describe("SEC EDGAR provider activation readiness", () => {
-  it("fails closed before fetching when the integration gate is disabled", async () => {
+  it("fails closed until the production activation gate is explicitly enabled", async () => {
     const fetchMock = vi.fn();
     const provider = new SecEdgarProvider({
-      enabled: false,
       userAgent: SEC_USER_AGENT,
+      coordinator: READY_SEC_COORDINATOR,
       cikByTicker: { NVDA: "1045810" },
       fetcher: fetchMock,
     });
@@ -518,7 +534,7 @@ describe("SEC EDGAR provider activation readiness", () => {
     await expect(provider.getHealth()).resolves.toMatchObject({
       provider: "sec-edgar",
       status: "unconfigured",
-      message: "SEC requests are disabled pending a distributed Fair Access coordinator.",
+      message: "SEC requests are disabled until explicit production activation.",
     });
     await expect(
       provider.getLatestEvents({
@@ -527,14 +543,14 @@ describe("SEC EDGAR provider activation readiness", () => {
         limit: 10,
       }),
     ).rejects.toThrow(
-      "SEC requests are disabled pending a distributed Fair Access coordinator.",
+      "SEC requests are disabled until explicit production activation.",
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("reports a missing or non-contact user agent as unconfigured without fetching", async () => {
     const fetchMock = vi.fn();
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: "Omnigaze",
       cikByTicker: { NVDA: "1045810" },
       fetcher: fetchMock,
@@ -555,7 +571,150 @@ describe("SEC EDGAR provider activation readiness", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("requires the distributed coordinator before any SEC request", async () => {
+    const fetchMock = vi.fn();
+    const provider = new SecEdgarProvider({
+      enabled: true,
+      userAgent: SEC_USER_AGENT,
+      cikByTicker: { NVDA: "1045810" },
+      fetcher: fetchMock,
+    });
+
+    await expect(provider.getHealth()).resolves.toMatchObject({
+      provider: "sec-edgar",
+      status: "unconfigured",
+      message: "SEC requests require the distributed Fair Access coordinator.",
+    });
+    await expect(
+      provider.getLatestEvents({
+        symbols: ["NASDAQ:NVDA"],
+        since: "2026-11-01T00:00:00.000Z",
+        limit: 10,
+      }),
+    ).rejects.toThrow(
+      "SEC requests require the distributed Fair Access coordinator.",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      state: { status: "cooldown" as const, retryAfterSeconds: 600 },
+      message: "SEC Fair Access cooldown is active.",
+    },
+    {
+      state: { status: "unavailable" as const, retryAfterSeconds: null },
+      message: "SEC Fair Access coordinator is unavailable.",
+    },
+  ])("reports coordinator state $state.status without probing SEC", async ({ state, message }) => {
+    const fetchMock = vi.fn();
+    const provider = secProvider({
+      userAgent: SEC_USER_AGENT,
+      coordinator: {
+        ...READY_SEC_COORDINATOR,
+        getStatus: async () => state,
+      },
+      cikByTicker: { NVDA: "1045810" },
+      fetcher: fetchMock,
+    });
+
+    await expect(provider.getHealth()).resolves.toMatchObject({
+      provider: "sec-edgar",
+      status: "degraded",
+      message,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reports healthy coordinator readiness without probing SEC", async () => {
+    const fetchMock = vi.fn();
+    const provider = secProvider({
+      userAgent: SEC_USER_AGENT,
+      cikByTicker: { NVDA: "1045810" },
+      fetcher: fetchMock,
+    });
+
+    await expect(provider.getHealth()).resolves.toMatchObject({
+      provider: "sec-edgar",
+      status: "healthy",
+      latestObservedAt: null,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when distributed admission cannot be acquired", async () => {
+    const fetchMock = vi.fn();
+    const provider = secProvider({
+      userAgent: SEC_USER_AGENT,
+      coordinator: {
+        ...READY_SEC_COORDINATOR,
+        acquire: async () => {
+          throw new Error("SEC Fair Access admission unavailable.");
+        },
+      },
+      cikByTicker: { NVDA: "1045810" },
+      fetcher: fetchMock,
+    });
+
+    await expect(
+      provider.getLatestEvents({
+        symbols: ["NASDAQ:NVDA"],
+        since: "2026-11-01T00:00:00.000Z",
+        limit: 10,
+      }),
+    ).rejects.toThrow("SEC Fair Access admission unavailable.");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: 403, retryAfter: null, expectedCooldown: 600 },
+    { status: 429, retryAfter: "900", expectedCooldown: 900 },
+    {
+      status: 429,
+      retryAfter: "999999999999999999999999",
+      expectedCooldown: 86_400,
+    },
+  ])(
+    "applies a global policy cooldown after SEC HTTP $status",
+    async ({ status, retryAfter, expectedCooldown }) => {
+      const order: string[] = [];
+      const imposeCooldown = vi.fn(async () => undefined);
+      const coordinator: SecFairAccessCoordinator = {
+        acquire: async () => {
+          order.push("admit");
+        },
+        imposeCooldown,
+        getStatus: async () => ({ status: "ready", retryAfterSeconds: null }),
+      };
+      const fetchMock = vi.fn(async () => {
+        order.push("fetch");
+        return new Response(null, {
+          status,
+          headers: retryAfter ? { "Retry-After": retryAfter } : undefined,
+        });
+      });
+      const provider = secProvider({
+        userAgent: SEC_USER_AGENT,
+        coordinator,
+        cikByTicker: { NVDA: "1045810" },
+        fetcher: fetchMock,
+      });
+
+      await expect(
+        provider.getLatestEvents({
+          symbols: ["NASDAQ:NVDA"],
+          since: "2026-11-01T00:00:00.000Z",
+          limit: 10,
+        }),
+      ).rejects.toThrow(`SEC submissions failed with ${status}`);
+      expect(order).toEqual(["admit", "fetch"]);
+      expect(imposeCooldown).toHaveBeenCalledExactlyOnceWith(expectedCooldown);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
   it("resolves an arbitrary ticker through the official SEC ticker catalog", async () => {
+    const acquire = vi.fn(async () => undefined);
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -576,8 +735,9 @@ describe("SEC EDGAR provider activation readiness", () => {
           },
         }),
       );
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
+      coordinator: { ...READY_SEC_COORDINATOR, acquire },
       cikByTicker: {},
       fetcher: fetchMock,
     });
@@ -598,6 +758,13 @@ describe("SEC EDGAR provider activation readiness", () => {
       }),
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(acquire).toHaveBeenCalledTimes(2);
+    expect(acquire.mock.invocationCallOrder[0]).toBeLessThan(
+      fetchMock.mock.invocationCallOrder[0],
+    );
+    expect(acquire.mock.invocationCallOrder[1]).toBeLessThan(
+      fetchMock.mock.invocationCallOrder[1],
+    );
     expect(String(fetchMock.mock.calls[0][0])).toBe(
       "https://www.sec.gov/files/company_tickers.json",
     );
@@ -619,7 +786,7 @@ describe("SEC EDGAR provider activation readiness", () => {
             ]),
           ),
     );
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: {},
       fetcher: fetchMock,
@@ -656,7 +823,7 @@ describe("SEC EDGAR provider activation readiness", () => {
       requestedUrls.push(String(input));
       return Response.json(secSubmissions());
     });
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: { "ACME.B": "1", "ACME-B": "2" },
       fetcher: fetchMock,
@@ -685,7 +852,7 @@ describe("SEC EDGAR provider activation readiness", () => {
           })
         : Response.json(secSubmissions());
     });
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: { "ACME.B": "1" },
       fetcher: fetchMock,
@@ -725,7 +892,7 @@ describe("SEC EDGAR provider activation readiness", () => {
         ]),
       );
     });
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: { AAA: "1", BBB: "2" },
       fetcher: fetchMock,
@@ -758,7 +925,7 @@ describe("SEC EDGAR provider activation readiness", () => {
         ]),
       ),
     );
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: { NVDA: "1045810" },
       fetcher: fetchMock,
@@ -786,7 +953,7 @@ describe("SEC EDGAR provider activation readiness", () => {
       `T${String(index).padStart(2, "0")}`,
     );
     const fetchMock = vi.fn(async () => Response.json(secSubmissions()));
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: Object.fromEntries(
         tickers.map((ticker, index) => [ticker, String(index + 1)]),
@@ -830,7 +997,7 @@ describe("SEC EDGAR provider activation readiness", () => {
       starts.push(clock);
       return Response.json(secSubmissions());
     });
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker,
       fetcher: fetchMock,
@@ -873,7 +1040,7 @@ describe("SEC EDGAR provider activation readiness", () => {
           )
         : new Response(null, { status: 503 }),
     );
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: { AAA: "1", BBB: "2" },
       fetcher: fetchMock,
@@ -896,7 +1063,7 @@ describe("SEC EDGAR provider activation readiness", () => {
       Array.from({ length: 25_001 }, (_, index) => [String(index), {}]),
     );
     const fetchMock = vi.fn().mockResolvedValue(Response.json(oversizedCatalog));
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: {},
       fetcher: fetchMock,
@@ -917,7 +1084,7 @@ describe("SEC EDGAR provider activation readiness", () => {
       headers: { "Content-Length": String(8 * 1024 * 1024 + 1) },
     });
     const fetchMock = vi.fn().mockResolvedValue(response);
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: {},
       fetcher: fetchMock,
@@ -946,7 +1113,7 @@ describe("SEC EDGAR provider activation readiness", () => {
         controller.enqueue(chunk);
       },
     });
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: { NVDA: "1045810" },
       fetcher: vi.fn().mockResolvedValue(new Response(body)),
@@ -1004,7 +1171,7 @@ describe("SEC EDGAR provider activation readiness", () => {
       ),
     },
   ])("rejects $name with a stable bounded-response error", async ({ payload }) => {
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: { NVDA: "1045810" },
       fetcher: vi.fn().mockResolvedValue(Response.json(payload)),
@@ -1021,7 +1188,7 @@ describe("SEC EDGAR provider activation readiness", () => {
 
   it("rejects acceptance timestamps beyond the documented clock-skew allowance", async () => {
     const now = Date.parse("2026-11-12T00:00:00.000Z");
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: { NVDA: "1045810" },
       now: () => now,
@@ -1045,7 +1212,7 @@ describe("SEC EDGAR provider activation readiness", () => {
 
   it("rejects oversized or malformed requests before network access", async () => {
     const fetchMock = vi.fn();
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: { NVDA: "1045810" },
       fetcher: fetchMock,
@@ -1084,7 +1251,7 @@ describe("SEC EDGAR provider activation readiness", () => {
       "fetch",
       vi.fn().mockResolvedValue(new Response("temporarily unavailable", { status: 503 })),
     );
-    const provider = new SecEdgarProvider({
+    const provider = secProvider({
       userAgent: SEC_USER_AGENT,
       cikByTicker: { NVDA: "1045810" },
       fetcher: fetch,

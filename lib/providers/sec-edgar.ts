@@ -4,10 +4,12 @@ import type {
   IntelligenceSourceProvider,
   IntelligenceSourceResult,
 } from "./contracts";
+import type { SecFairAccessCoordinator } from "./sec-fair-access";
 
 type SecEdgarConfig = {
   enabled?: boolean;
   userAgent?: string;
+  coordinator?: SecFairAccessCoordinator;
   cikByTicker?: Record<string, string>;
   fetcher?: typeof fetch;
   now?: () => number;
@@ -25,11 +27,18 @@ const MAX_REQUEST_SYMBOLS = 100;
 const MAX_RESULT_LIMIT = 100;
 const MAX_TICKER_CATALOG_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_SUBMISSIONS_RESPONSE_BYTES = 8 * 1024 * 1024;
+const MIN_POLICY_COOLDOWN_SECONDS = 10 * 60;
+const MAX_POLICY_COOLDOWN_SECONDS = 24 * 60 * 60;
 // SEC timestamps should not lead the Worker clock beyond ordinary edge-clock drift.
 const MAX_ACCEPTANCE_CLOCK_SKEW_MS = 5 * 60 * 1_000;
 const TICKER_CATALOG_URL = "https://www.sec.gov/files/company_tickers.json";
 const SEC_DORMANT_MESSAGE =
-  "SEC requests are disabled pending a distributed Fair Access coordinator.";
+  "SEC requests are disabled until explicit production activation.";
+const SEC_COORDINATOR_REQUIRED_MESSAGE =
+  "SEC requests require the distributed Fair Access coordinator.";
+const SEC_COORDINATOR_UNAVAILABLE_MESSAGE =
+  "SEC Fair Access coordinator is unavailable.";
+const SEC_COOLDOWN_MESSAGE = "SEC Fair Access cooldown is active.";
 const canonicalSymbolPattern = /^[A-Z0-9._-]{1,32}:[A-Z0-9._-]{1,32}$/;
 const tickerPattern = /^[A-Z0-9._-]{1,32}$/;
 const cikPattern = /^[1-9]\d{0,9}$/;
@@ -40,6 +49,26 @@ const primaryDocumentPattern = /^[A-Za-z0-9._-]{1,256}$/;
 
 function wait(milliseconds: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function policyCooldownSeconds(response: Response, now: number) {
+  const raw = response.headers.get("retry-after")?.trim() ?? "";
+  let requested = Number.NaN;
+  if (/^\d+$/.test(raw)) {
+    requested = Number(raw);
+  } else if (raw) {
+    const retryAt = Date.parse(raw);
+    if (Number.isFinite(retryAt) && Number.isFinite(now)) {
+      requested = Math.ceil((retryAt - now) / 1_000);
+    }
+  }
+  const bounded = Number.isFinite(requested)
+    ? Math.min(
+        Math.max(Math.ceil(requested), 0),
+        MAX_POLICY_COOLDOWN_SECONDS,
+      )
+    : MIN_POLICY_COOLDOWN_SECONDS;
+  return Math.max(MIN_POLICY_COOLDOWN_SECONDS, bounded);
 }
 
 type TickerCatalog = {
@@ -323,14 +352,16 @@ export class SecEdgarProvider implements IntelligenceSourceProvider {
   private readonly sleep: (milliseconds: number) => Promise<void>;
   private readonly enabled: boolean;
   private readonly userAgent: string | null;
+  private readonly coordinator: SecFairAccessCoordinator | null;
   private readonly configuredCatalog: TickerCatalog;
 
   constructor(config: SecEdgarConfig) {
     this.fetcher = config.fetcher ?? fetch;
     this.now = config.now ?? Date.now;
     this.sleep = config.sleep ?? wait;
-    this.enabled = config.enabled ?? true;
+    this.enabled = config.enabled === true;
     this.userAgent = normalizedUserAgent(config.userAgent);
+    this.coordinator = config.coordinator ?? null;
     this.configuredCatalog = createTickerCatalog(
       Object.entries(config.cikByTicker ?? {}),
       true,
@@ -343,6 +374,9 @@ export class SecEdgarProvider implements IntelligenceSourceProvider {
     }
     if (!this.userAgent) {
       throw new Error("SEC_USER_AGENT must identify the Omnigaze application and operator.");
+    }
+    if (!this.coordinator) {
+      throw new Error(SEC_COORDINATOR_REQUIRED_MESSAGE);
     }
     return { "User-Agent": this.userAgent, Accept: "application/json" };
   }
@@ -380,11 +414,19 @@ export class SecEdgarProvider implements IntelligenceSourceProvider {
   }
 
   private async request(url: string) {
+    const headers = this.headers();
     await this.acquireRequestSlot();
-    return this.fetcher(url, {
-      headers: this.headers(),
+    await this.coordinator!.acquire();
+    const response = await this.fetcher(url, {
+      headers,
       signal: AbortSignal.timeout(10_000),
     });
+    if (response.status === 403 || response.status === 429) {
+      await this.coordinator!.imposeCooldown(
+        policyCooldownSeconds(response, this.now()),
+      );
+    }
+    return response;
   }
 
   private async loadTickerCatalog() {
@@ -619,17 +661,62 @@ export class SecEdgarProvider implements IntelligenceSourceProvider {
   }
 
   async getHealth(): Promise<ProviderHealth> {
-    const isConfigured = this.enabled && Boolean(this.userAgent);
-    return {
-      provider: this.name,
-      status: isConfigured ? "healthy" : "unconfigured",
-      checkedAt: new Date(this.now()).toISOString(),
-      latestObservedAt: null,
-      message: !this.enabled
-        ? SEC_DORMANT_MESSAGE
-        : this.userAgent
-          ? undefined
-          : "SEC_USER_AGENT is not configured.",
-    };
+    const checkedAt = new Date(this.now()).toISOString();
+    if (!this.enabled) {
+      return {
+        provider: this.name,
+        status: "unconfigured",
+        checkedAt,
+        latestObservedAt: null,
+        message: SEC_DORMANT_MESSAGE,
+      };
+    }
+    if (!this.userAgent) {
+      return {
+        provider: this.name,
+        status: "unconfigured",
+        checkedAt,
+        latestObservedAt: null,
+        message: "SEC_USER_AGENT is not configured.",
+      };
+    }
+    if (!this.coordinator) {
+      return {
+        provider: this.name,
+        status: "unconfigured",
+        checkedAt,
+        latestObservedAt: null,
+        message: SEC_COORDINATOR_REQUIRED_MESSAGE,
+      };
+    }
+    try {
+      const state = await this.coordinator.getStatus();
+      if (state.status === "ready") {
+        return {
+          provider: this.name,
+          status: "healthy",
+          checkedAt,
+          latestObservedAt: null,
+        };
+      }
+      return {
+        provider: this.name,
+        status: "degraded",
+        checkedAt,
+        latestObservedAt: null,
+        message:
+          state.status === "cooldown"
+            ? SEC_COOLDOWN_MESSAGE
+            : SEC_COORDINATOR_UNAVAILABLE_MESSAGE,
+      };
+    } catch {
+      return {
+        provider: this.name,
+        status: "degraded",
+        checkedAt,
+        latestObservedAt: null,
+        message: SEC_COORDINATOR_UNAVAILABLE_MESSAGE,
+      };
+    }
   }
 }

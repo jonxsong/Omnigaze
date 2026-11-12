@@ -18,6 +18,10 @@ import type {
 } from "@/lib/providers/contracts";
 import { SecEdgarProvider } from "@/lib/providers/sec-edgar";
 import {
+  createSecFairAccessCoordinator,
+  type SecFairAccessCoordinator,
+} from "@/lib/providers/sec-fair-access";
+import {
   getIntelligenceFeed as getDemoIntelligenceFeed,
   getMarketSnapshot as getDemoMarketSnapshot,
 } from "@/lib/services/market-intelligence";
@@ -737,6 +741,9 @@ export class LiveMarketDataOrchestrator {
 
 export function createLiveMarketDataOrchestrator(
   environment: Record<string, string | undefined> = process.env,
+  dependencies: {
+    createSecFairAccessCoordinator?: () => SecFairAccessCoordinator;
+  } = {},
 ) {
   const alpaca = new AlpacaProvider({
     keyId: environment.ALPACA_API_KEY_ID,
@@ -748,12 +755,12 @@ export function createLiveMarketDataOrchestrator(
         : "iex",
   });
   const sec = new SecEdgarProvider({
-    // A truthful user agent is necessary but not sufficient for activation.
-    // Keep production egress fail-closed until requests use a distributed
-    // Fair Access coordinator shared by every Worker isolate.
-    enabled: false,
+    enabled: environment.SEC_EDGAR_ENABLED === "true",
     userAgent: environment.SEC_USER_AGENT,
     cikByTicker: SEC_CIK_BY_TICKER,
+    coordinator:
+      dependencies.createSecFairAccessCoordinator?.() ??
+      createSecFairAccessCoordinator(),
   });
 
   return new LiveMarketDataOrchestrator({

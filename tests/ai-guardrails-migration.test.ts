@@ -69,7 +69,7 @@ describe("AI guardrail migration artifacts", () => {
     }>("drizzle/meta/_journal.json");
 
     expect(current.prevId).toBe(previous.id);
-    expect(journal.entries.at(-1)).toEqual({
+    expect(journal.entries.find((entry) => entry.idx === 6)).toEqual({
       idx: 6,
       tag: "0006_daily_brief_guardrails_v1",
       version: "6",

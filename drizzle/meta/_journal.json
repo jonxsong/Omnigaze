@@ -50,6 +50,13 @@
       "when": 1794489248833,
       "tag": "0006_daily_brief_guardrails_v1",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1794499746347,
+      "tag": "0007_sec_fair_access_v1",
+      "breakpoints": true
     }
   ]
 }

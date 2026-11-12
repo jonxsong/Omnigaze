@@ -125,7 +125,7 @@ describe("browser API response contracts", () => {
       checkDatabaseReadiness: async () => ({
         status: "ready",
         checkedAt: "2026-11-12T08:00:00.000Z",
-        schema: "daily-brief-guardrails-v1",
+        schema: "sec-fair-access-v1",
       }),
       getIngestionReadiness: async () => ({
         mode: "request_time",
@@ -158,12 +158,14 @@ describe("browser API response contracts", () => {
       version: "0.1.0",
     });
     expect(body.capabilities).toContain("mcp-2026-07-28");
+    expect(body.capabilities).toContain("market-news-intelligence");
+    expect(body.capabilities).not.toContain("sec-filing-intelligence");
     expect(body.capabilities).toContain("durable-intelligence-inbox");
     expect(body.capabilities).toContain("in-app-alert-rules");
     expect(body.readiness.database).toEqual({
       status: "ready",
       checkedAt: "2026-11-12T08:00:00.000Z",
-      schema: "daily-brief-guardrails-v1",
+      schema: "sec-fair-access-v1",
     });
     expect(body.readiness.ingestion).toMatchObject({
       mode: "request_time",
@@ -183,7 +185,7 @@ describe("browser API response contracts", () => {
       checkDatabaseReadiness: async () => ({
         status: "unavailable",
         checkedAt: "2026-11-12T08:00:00.000Z",
-        schema: "daily-brief-guardrails-v1",
+        schema: "sec-fair-access-v1",
       }),
       getIngestionReadiness: async () => ({
         mode: "unavailable",
@@ -206,7 +208,7 @@ describe("browser API response contracts", () => {
       readiness: {
         database: {
           status: "unavailable",
-          schema: "daily-brief-guardrails-v1",
+          schema: "sec-fair-access-v1",
         },
       },
     });

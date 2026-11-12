@@ -2,12 +2,12 @@
 
 Omnigaze is a personalized market-intelligence workspace. Users search the active U.S. equity universe, track the companies they care about, record holdings, keep a durable intelligence inbox, generate a cited cross-watchlist **Daily Brief**, and inspect an evidence-backed **Omnigaze View** that separates facts, derived observations, and AI inference.
 
-The public alpha uses provider-backed quotes, chart history, and licensed news whenever those capabilities are configured. The SEC adapter is staged but production egress remains fail-closed until a distributed Fair Access coordinator is in place. Every surface carries source, freshness, delay, and fallback metadata; illustrative fixtures are never labeled as live.
+The public alpha uses provider-backed quotes, chart history, and licensed news whenever those capabilities are configured. The SEC adapter now has a distributed D1 Fair Access coordinator, but production egress remains fail-closed until an operator supplies a truthful monitored contact identity and explicitly sets `SEC_EDGAR_ENABLED=true`. Every surface carries source, freshness, delay, and fallback metadata; illustrative fixtures are never labeled as live.
 
 ## Product loop
 
 1. A user completes a local-first onboarding flow, searches the current asset catalog, and creates a personalized watchlist.
-2. Provider adapters ingest market data and licensed news; the staged SEC adapter remains dormant in production.
+2. Provider adapters ingest market data and licensed news; the guarded SEC adapter remains dormant unless its explicit activation and contact-identity requirements are both satisfied.
 3. The pipeline normalizes, timestamps, hashes, and deduplicates every source event.
 4. Deterministic code calculates market changes and freshness.
 5. A fail-closed D1 guard checks owner-safe, model-aware evidence caches and atomically reserves the authenticated owner’s shared generation budget.
@@ -100,7 +100,8 @@ Copy `.env.example` for local development. Never commit `.env` files or API keys
 | `ALPACA_TRADING_API_BASE_URL` | Allowlisted paper/live Trading API host for asset search |
 | `ALPACA_DATA_FEED` | `iex` for development or licensed `sip` where entitled |
 | `OMNIGAZE_TELEMETRY_SUCCESS_SAMPLE_RATE` | Server-only `0`–`1` sampling rate for ordinary successful HTTP API completion logs; MCP, errors, and slow requests always emit |
-| `SEC_USER_AGENT` | Staged SEC-compliant application/contact identifier; it does not activate production SEC egress |
+| `SEC_EDGAR_ENABLED` | Exact `true` opt-in for request-time SEC egress; remains inert without the D1 coordinator and a valid contact-bearing identity |
+| `SEC_USER_AGENT` | Truthful SEC-compliant application/contact identifier; it never activates production egress by itself |
 
 ## Data integrity rules
 
@@ -142,7 +143,7 @@ Use `server/discover`, `tools/list`, and `tools/call` with MCP version `2026-07-
 
 - Alpaca currently uses resilient REST polling; long-lived streaming transport is a later infrastructure slice.
 - A request-time news reconciliation still caps interactive reads at 100 events. The separate durable cursor engine processes exactly one frozen-window page per operator tick; continuous collection requires a linked hosted schedule, a current authenticated Omnigaze app connection, and at least one verified successful tick before the UI may claim scheduled collection.
-- The SEC adapter is covered by tests but production request-time egress remains disabled even when `SEC_USER_AGENT` is set. Activation requires a distributed Fair Access coordinator with bounded admission, followed by a truthful application/contact identity and durable scheduled ingestion.
+- The SEC adapter and distributed Fair Access coordinator are covered by tests, but production request-time egress remains disabled until a truthful monitored application/contact identity is configured and `SEC_EDGAR_ENABLED` is set to exact `true`. Durable SEC cursor ingestion, historical backfill, and correction/removal reconciliation remain separate milestones.
 - Alert rules currently deliver only inside the Omnigaze inbox during request-time refreshes. Email, SMS, push, browser notifications, and a continuously running background delivery worker are not enabled.
 - Brokerage import and order execution are intentionally not part of this alpha.
 - AI analysis requires an authenticated user, runs only after an explicit user request, and returns `503 ai_unconfigured` when the server secret is absent. Daily Brief generation is manual rather than scheduled; it fails closed when the watchlist has no eligible fresh live evidence.

@@ -5,7 +5,7 @@ export type DatabaseReadinessStatus = "ready" | "unavailable";
 export interface DatabaseReadiness {
   status: DatabaseReadinessStatus;
   checkedAt: string;
-  schema: "daily-brief-guardrails-v1";
+  schema: "sec-fair-access-v1";
 }
 
 export interface ReadinessDatabase {
@@ -18,7 +18,7 @@ export type ReadinessDatabaseFactory =
 const REQUIRED_COLUMN_COUNTS = [
   3, 2, 2, 2, 3, 3, 4,
   15, 12, 5, 2, 9, 10, 12,
-  12, 12, 1,
+  12, 12, 1, 4,
 ] as const;
 
 async function runtimeDatabaseFactory(): Promise<ReadinessDatabase> {
@@ -95,7 +95,11 @@ export async function checkDatabaseReadiness(
         (SELECT COUNT(*) FROM sqlite_master
           WHERE type = 'table'
             AND name = 'ai_model_budget_reservations'
-            AND sql LIKE '%daily_brief%')
+            AND sql LIKE '%daily_brief%'),
+        (SELECT COUNT(*) FROM pragma_table_info('sec_fair_access_control')
+          WHERE name IN (
+            'provider', 'next_admission_at_ms', 'cooldown_until_ms', 'updated_at'
+          ))
     `)) as number[][];
     const row = rows[0];
     const ready =
@@ -105,13 +109,13 @@ export async function checkDatabaseReadiness(
     return {
       status: ready ? "ready" : "unavailable",
       checkedAt,
-      schema: "daily-brief-guardrails-v1",
+      schema: "sec-fair-access-v1",
     };
   } catch {
     return {
       status: "unavailable",
       checkedAt,
-      schema: "daily-brief-guardrails-v1",
+      schema: "sec-fair-access-v1",
     };
   }
 }

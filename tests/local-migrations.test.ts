@@ -61,6 +61,7 @@ describe("local D1 migration reconciliation", () => {
       "0004_ingestion_control_plane_v1.sql",
       "0005_ai_guardrails_v1.sql",
       "0006_daily_brief_guardrails_v1.sql",
+      "0007_sec_fair_access_v1.sql",
     ]);
     expect(result.sql).toContain("CREATE TABLE IF NOT EXISTS `inbox_sync_gates`");
     expect(result.sql).toContain(
@@ -74,6 +75,9 @@ describe("local D1 migration reconciliation", () => {
     );
     expect(result.sql).toContain(
       "CREATE TABLE IF NOT EXISTS `ai_daily_brief_cache_entries`",
+    );
+    expect(result.sql).toContain(
+      "CREATE TABLE IF NOT EXISTS `sec_fair_access_control`",
     );
     expect(result.sql).not.toContain("CREATE TABLE `portfolio_holdings`");
   });
@@ -160,13 +164,14 @@ describe("local D1 migration reconciliation", () => {
         "0004_ingestion_control_plane_v1.sql",
         "0005_ai_guardrails_v1.sql",
         "0006_daily_brief_guardrails_v1.sql",
+        "0007_sec_fair_access_v1.sql",
       ]);
     } finally {
       sqlite.close();
     }
   });
 
-  it("applies only the audited 0006 rebuild and preserves deployed reservations", async () => {
+  it("applies the audited 0006 rebuild plus later additive migrations and preserves deployed reservations", async () => {
     const sqlite = new DatabaseSync(":memory:");
     const appliedNames = [
       "0000_damp_robbie_robertson.sql",
@@ -206,6 +211,7 @@ describe("local D1 migration reconciliation", () => {
       const pending = await buildPendingMigrationSql(new Set(appliedNames));
       expect(pending.pendingNames).toEqual([
         "0006_daily_brief_guardrails_v1.sql",
+        "0007_sec_fair_access_v1.sql",
       ]);
       sqlite.exec(pending.sql);
 

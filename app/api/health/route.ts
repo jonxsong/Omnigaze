@@ -53,7 +53,10 @@ export function createHealthHandler(
           "active-us-equity-search",
           "market-snapshots",
           "historical-bars",
-          "news-and-sec-intelligence",
+          "market-news-intelligence",
+          ...(providerStatus.liveCapabilities.includes("sec-filings")
+            ? ["sec-filing-intelligence"]
+            : []),
           "evidence-grounded-ai",
           "portfolio-v1",
           "deterministic-decision-scenarios",

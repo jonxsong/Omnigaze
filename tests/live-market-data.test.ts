@@ -100,7 +100,7 @@ function orchestrator(options: {
 }
 
 describe("live market data orchestration", () => {
-  it("keeps production SEC egress dormant even with a valid user agent", async () => {
+  it("keeps production SEC egress dormant when only a valid user agent is present", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const service = createLiveMarketDataOrchestrator({
@@ -110,7 +110,6 @@ describe("live market data orchestration", () => {
     const status = await service.getProviderStatus();
     expect(status.providers.find((report) => report.provider === "sec-edgar")).toMatchObject({
       status: "unconfigured",
-      message: "SEC requests are disabled pending a distributed Fair Access coordinator.",
     });
 
     await service.getIntelligenceFeed({
@@ -119,6 +118,47 @@ describe("live market data orchestration", () => {
       limit: 5,
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("requires the exact SEC activation flag and a ready distributed coordinator", async () => {
+    const coordinator = {
+      acquire: vi.fn(async () => undefined),
+      imposeCooldown: vi.fn(async () => undefined),
+      getStatus: vi.fn(async () => ({
+        status: "ready" as const,
+        retryAfterSeconds: null,
+      })),
+    };
+    const dependencies = {
+      createSecFairAccessCoordinator: () => coordinator,
+    };
+
+    const caseVariant = createLiveMarketDataOrchestrator(
+      {
+        SEC_EDGAR_ENABLED: "TRUE",
+        SEC_USER_AGENT: "Omnigaze tests test@example.com",
+      },
+      dependencies,
+    );
+    const disabledStatus = await caseVariant.getProviderStatus();
+    expect(
+      disabledStatus.providers.find((report) => report.provider === "sec-edgar"),
+    ).toMatchObject({ status: "unconfigured" });
+    expect(coordinator.getStatus).not.toHaveBeenCalled();
+
+    const activated = createLiveMarketDataOrchestrator(
+      {
+        SEC_EDGAR_ENABLED: "true",
+        SEC_USER_AGENT: "Omnigaze tests test@example.com",
+      },
+      dependencies,
+    );
+    const activeStatus = await activated.getProviderStatus();
+    expect(
+      activeStatus.providers.find((report) => report.provider === "sec-edgar"),
+    ).toMatchObject({ status: "healthy" });
+    expect(activeStatus.liveCapabilities).toContain("sec-filings");
+    expect(coordinator.getStatus).toHaveBeenCalledOnce();
   });
 
   it("uses a successful live snapshot and reports IEX-style limited coverage", async () => {

@@ -28,7 +28,8 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Request-time inbox reconciliation that projects collected global receipts into owner-scoped state.
 - [ ] Verify the hosted hourly operator tick after refreshing the Omnigaze app connection; keep collection labeled `request_time` until the first successful checkpoint.
 - [x] Dormant SEC adapter with official ticker-catalog resolution, collision-safe class-share aliases, per-CIK request deduplication, bounded short-lived caching, global accession ordering, explicit partial-coverage reporting, and a production fail-closed activation gate.
-- [ ] Add a distributed Fair Access coordinator with bounded admission, then configure a truthful application/contact user agent and explicitly activate production SEC egress. `SEC_USER_AGENT` alone cannot enable requests.
+- [x] Add a D1-backed distributed SEC Fair Access coordinator with bounded admission, fail-closed deadlines, and application-wide cooldown handling.
+- [ ] Configure a truthful monitored application/contact user agent and explicitly set `SEC_EDGAR_ENABLED=true`; `SEC_USER_AGENT` alone cannot enable production SEC egress.
 - [ ] Add durable scheduled SEC ingestion, historical backfill, and correction/removal reconciliation; the current adapter reads recent submissions on demand only.
 - [ ] Add sub-minute streaming infrastructure for true push updates; the alpha intentionally uses resilient REST polling.
 

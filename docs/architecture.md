@@ -7,7 +7,7 @@ flowchart LR
   subgraph Sources
     Alpaca[Alpaca market data + news]
     Assets[Alpaca active asset catalog]
-    SEC[SEC EDGAR filings]
+    SEC[SEC EDGAR filings — guarded]
     Future[Future macro + company sources]
   end
 
@@ -66,6 +66,7 @@ flowchart LR
 - Anonymous onboarding is versioned and device-local. Authenticated holdings use owner-scoped D1 rows with optimistic version checks; a sign-in merge must never silently overwrite positions.
 - Authenticated inbox and alert-rule writes are owner-scoped and compare both user-state versions and event revisions. Exact retries return the current state; conflicting stale writes do not overwrite newer data.
 - The durable collection ledger retains a minimal, redacted provider envelope plus content digests and revision timestamps; it never stores credentials, request headers, cursor tokens, or article bodies. Corrected events preserve stable provider identity and revision history rather than silently replacing user state.
+- Automated SEC traffic is fail-closed behind an exact activation flag, a validated contact-bearing user agent, and one D1 Fair Access coordinator shared by every Worker isolate. Identity values and SEC response bodies never enter coordinator state or health output.
 
 ## Failure model
 
@@ -77,6 +78,8 @@ The intelligence inbox also degrades independently. If a provider fails or retur
 
 AI analysis also degrades independently. Cache and budget reads fail closed before model invocation; cache hits and same-isolate followers spend no additional model budget. A single-stock cache lifetime is the earlier of five minutes or the evidence-freshness boundary. A Daily Brief is recomputed whenever its watchlist or selected evidence identity changes and otherwise expires after at most six hours or at the evidence-freshness boundary. Both operations share one atomic owner budget. The durable ledger stores hashed request and operation keys rather than raw model inputs, and bounded cleanup removes expired cache rows plus old reservation history.
 
+SEC filing reads also fail closed independently. Before every `www.sec.gov` or `data.sec.gov` request, the adapter obtains an atomic admission from the D1 coordinator using the database clock. Admissions are globally spaced below the SEC ceiling and bounded by a short queue deadline; a missing migration, unavailable database, exhausted deadline, absent coordinator, invalid identity, or disabled activation flag produces zero SEC egress. Rate-related `403` and `429` responses establish a shared cooldown of at least ten minutes. The existing per-isolate cache, singleflight, timeout, and limiter remain defense in depth, not the application-wide policy boundary.
+
 ## Bilingual application boundary
 
 One client locale provider carries a persisted English/Chinese preference from the landing page through onboarding and the authenticated or anonymous dashboard. The first server render stays deterministic, then hydration applies the saved preference, updates the document language and title, and exposes the same in-product language switch throughout the journey.
@@ -85,7 +88,7 @@ Typed, surface-scoped copy dictionaries cover controls, status labels, accessibi
 
 Explicit Daily Brief and Omnigaze View requests carry a strict locale through the browser, HTTP API, service, model prompt, and optional MCP argument. Locale-specific prompt versions isolate durable cache entries, in-flight deduplication, and budget operation identities, so an English result cannot satisfy a Chinese request. Model-authored Chinese fields are checked for Chinese output, grounding, and bilingual non-prescriptive policy both before a cache write and after a cache read; citations and source text remain verbatim.
 
-`GET /api/health` remains a liveness response but reports `status: degraded` unless both provider checks and the required D1 inbox, ingestion, single-stock AI, and Daily Brief guardrail schema markers are ready. The schema probe reads metadata only, exposes no rows or binding details, and catches a missing migration before authenticated traffic reaches a stateful workflow.
+`GET /api/health` remains a liveness response but reports `status: degraded` unless both provider checks and the required D1 inbox, ingestion, single-stock AI, Daily Brief guardrail, and SEC Fair Access schema markers are ready. The schema probe reads metadata only, exposes no rows or binding details, and catches a missing migration before authenticated traffic reaches a stateful workflow.
 
 ### Production telemetry boundary
 

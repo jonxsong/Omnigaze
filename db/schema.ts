@@ -739,6 +739,33 @@ export const providerIngestionRunErrors = sqliteTable(
 );
 
 /**
+ * One global row gates every automated SEC request across Worker isolates.
+ * D1's clock is authoritative; no owner, symbol, URL, or contact identity is
+ * retained in this operational control plane.
+ */
+export const secFairAccessControl = sqliteTable(
+  "sec_fair_access_control",
+  {
+    provider: text("provider").primaryKey(),
+    nextAdmissionAtMs: integer("next_admission_at_ms").notNull().default(0),
+    cooldownUntilMs: integer("cooldown_until_ms").notNull().default(0),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  () => [
+    check(
+      "sec_fair_access_control_provider_check",
+      sql.raw("provider = 'sec-edgar'"),
+    ),
+    check(
+      "sec_fair_access_control_time_check",
+      sql.raw(
+        "next_admission_at_ms >= 0 AND cooldown_until_ms >= 0 AND julianday(updated_at) IS NOT NULL",
+      ),
+    ),
+  ],
+);
+
+/**
  * `source_events.symbol_id` predates multi-symbol provider events. Keep that
  * column untouched and add a monotonic many-to-many mapping for new ingestion.
  */
