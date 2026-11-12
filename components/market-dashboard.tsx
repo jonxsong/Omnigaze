@@ -55,6 +55,7 @@ import type {
   Materiality,
 } from "@/lib/market-types";
 import type { IngestionReadiness } from "@/lib/services/ingestion-health";
+import type { IntelligenceReadPlaneMeta } from "@/lib/services/intelligence-read-plane";
 import type {
   IntelligenceFeedItem,
   OrchestrationMeta,
@@ -340,7 +341,7 @@ interface SnapshotBatchResponse {
 interface IntelligenceResource {
   symbolId?: CanonicalSymbol;
   data: IntelligenceFeedItem[];
-  meta?: OrchestrationMeta;
+  meta?: OrchestrationMeta & { readPlane?: IntelligenceReadPlaneMeta };
   phase: FetchPhase;
   receivedAt?: string;
   error?: string;
@@ -1421,6 +1422,34 @@ export function MarketDashboard({
           localizeDemoIntelligenceEvent(locale, event),
         ) ?? [];
   const feedItemById = new Map(feedItems.map((item) => [item.id, item]));
+  const intelligenceReadPlane = intelligenceMatchesSelection
+    ? intelligenceResource.meta?.readPlane
+    : undefined;
+  const intelligenceReadPlaneNotice = intelligenceReadPlane?.requestTimeFailed
+    ? intelligenceReadPlane.origins.durable.selectedCount > 0
+      ? {
+          tone: "retained",
+          title: t("retainedEvidenceTitle"),
+          detail: t("retainedEvidenceDetail"),
+        }
+      : {
+          tone: "unavailable",
+          title: t("currentEvidenceUnavailableTitle"),
+          detail: t("currentEvidenceUnavailableDetail"),
+        }
+    : intelligenceReadPlane?.collectedReadFailed
+      ? {
+          tone: "live-only",
+          title: t("liveOnlyEvidenceTitle"),
+          detail: t("liveOnlyEvidenceDetail"),
+        }
+      : intelligenceReadPlane?.collectedTruncated
+        ? {
+            tone: "limited",
+            title: t("retainedHistoryLimitedTitle"),
+            detail: t("retainedHistoryLimitedDetail"),
+          }
+        : null;
   const viewHeadline =
     selectedWorkspace?.events[0]?.headline ??
     t("awaitingHeadline", { ticker: selectedInstrument.ticker });
@@ -2646,6 +2675,20 @@ export function MarketDashboard({
                 {t("viewAllEvents")} <ChevronRight size={15} />
               </button>
             </div>
+
+            {intelligenceReadPlaneNotice && (
+              <div
+                className={`intelligence-provenance-note ${intelligenceReadPlaneNotice.tone}`}
+                role="status"
+                data-testid="intelligence-read-plane-notice"
+              >
+                <TriangleAlert size={15} />
+                <div>
+                  <strong>{intelligenceReadPlaneNotice.title}</strong>
+                  <span>{intelligenceReadPlaneNotice.detail}</span>
+                </div>
+              </div>
+            )}
 
             <div className="event-list">
               {events.length > 0 ? (

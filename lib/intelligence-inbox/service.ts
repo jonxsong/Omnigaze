@@ -321,6 +321,7 @@ export async function getIntelligenceInbox(
             ownerId,
             merged,
             checkedAt,
+            { globalCursorDrained: false },
           );
           hasMoreCandidates = result.hasMoreCandidates;
           sync = { ...sync, ...result, hasMoreCandidates };

@@ -437,6 +437,11 @@ describe("durable intelligence inbox repository", () => {
       .run("NASDAQ:MSFT", "MSFT", "NASDAQ", "Microsoft", "Technology", "USD", "active");
     sqlite
       .prepare(
+        "INSERT INTO instruments (id, ticker, exchange, name, sector, currency, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run("NASDAQ:AAPL", "AAPL", "NASDAQ", "Apple", "Technology", "USD", "active");
+    sqlite
+      .prepare(
         "INSERT INTO watchlist_items (watchlist_id, symbol_id, added_at) VALUES (?, ?, ?)",
       )
       .run(
@@ -455,10 +460,22 @@ describe("durable intelligence inbox repository", () => {
       [
         liveItem("alpaca:multi-symbol", {
           symbolIds: ["NASDAQ:MSFT"],
-          receivedAt: "2026-11-12T08:01:00.000Z",
+          receivedAt: "2026-11-12T08:00:01.000Z",
+          providerUpdatedAt: "2026-11-12T08:00:01.000Z",
         }),
       ],
       "2026-11-12T08:01:00.000Z",
+    );
+    await repository.syncLiveItems(
+      "owner-a",
+      [
+        liveItem("alpaca:multi-symbol", {
+          symbolIds: ["NASDAQ:AAPL"],
+          receivedAt: "2026-11-12T08:00:00.000Z",
+          providerUpdatedAt: "2026-11-12T08:00:01.000Z",
+        }),
+      ],
+      "2026-11-12T08:02:00.000Z",
     );
 
     const itemForOwnerA = (await repository.listInbox("owner-a", "all", 50))
@@ -615,6 +632,36 @@ describe("durable intelligence inbox repository", () => {
     const inbox = await repository.listInbox("owner-a", "all", 100);
     expect(inbox.counts).toEqual({ all: 8, unread: 0, saved: 0, alerts: 0 });
     expect(inbox.items.every((entry) => entry.state.read)).toBe(true);
+  });
+
+  it("defers baseline completion until the durable owner cursor is drained", async () => {
+    await repository.syncLiveItems(
+      "owner-a",
+      [],
+      "2026-11-12T08:00:00.000Z",
+      { globalCursorDrained: false },
+    );
+    expect(
+      sqlite
+        .prepare(
+          "SELECT baseline_completed_at FROM inbox_profiles WHERE owner_id = ?",
+        )
+        .get("owner-a"),
+    ).toEqual({ baseline_completed_at: null });
+
+    await repository.syncLiveItems(
+      "owner-a",
+      [],
+      "2026-11-12T08:01:00.000Z",
+      { globalCursorDrained: true },
+    );
+    expect(
+      sqlite
+        .prepare(
+          "SELECT baseline_completed_at FROM inbox_profiles WHERE owner_id = ?",
+        )
+        .get("owner-a"),
+    ).toEqual({ baseline_completed_at: "2026-11-12T08:01:00.000Z" });
   });
 
   it("reserves activation before ingestion so a failed first sync cannot swallow later news", async () => {
@@ -1091,6 +1138,103 @@ describe("durable intelligence inbox repository", () => {
     expect(
       (await repository.listInbox("owner-b", "alerts", 50)).items[0].alert,
     ).toMatchObject({ deliveryCount: 1 });
+  });
+
+  it("uses current global symbols when a lagging owner processes an older projection", async () => {
+    sqlite
+      .prepare(
+        "INSERT INTO instruments (id, ticker, exchange, name, sector, currency, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "NASDAQ:AAPL",
+        "AAPL",
+        "NASDAQ",
+        "Apple",
+        "Technology",
+        "USD",
+        "active",
+      );
+    sqlite
+      .prepare(
+        "INSERT INTO watchlist_items (watchlist_id, symbol_id, added_at) VALUES (?, ?, ?)",
+      )
+      .run(
+        "watchlist-owner-b",
+        "NASDAQ:AAPL",
+        "2026-11-12T07:00:00.000Z",
+      );
+    for (const symbolId of ["NASDAQ:NVDA", "NASDAQ:AAPL"] as const) {
+      await repository.putAlertRule(
+        "owner-b",
+        symbolId,
+        {
+          enabled: true,
+          minimum_materiality: "high",
+          include_controversy: false,
+          expected_version: 0,
+        },
+        "2026-11-12T07:30:00.000Z",
+      );
+    }
+    for (const ownerId of ["owner-a", "owner-b"]) {
+      await repository.syncLiveItems(
+        ownerId,
+        [],
+        "2026-11-12T08:00:00.000Z",
+      );
+    }
+
+    const original = liveItem("alpaca:symbol-expansion-lag", {
+      headline: "Version A",
+      symbolIds: ["NASDAQ:NVDA"],
+      publishedAt: "2026-11-12T08:01:00.000Z",
+      receivedAt: "2026-11-12T08:01:00.000Z",
+      providerUpdatedAt: "2026-11-12T08:01:00.000Z",
+    });
+    const corrected = liveItem("alpaca:symbol-expansion-lag", {
+      headline: "Version B adds Apple",
+      claimStatus: "corrected",
+      symbolIds: ["NASDAQ:NVDA", "NASDAQ:AAPL"],
+      publishedAt: "2026-11-12T08:01:00.000Z",
+      receivedAt: "2026-11-12T08:02:00.000Z",
+      providerUpdatedAt: "2026-11-12T08:02:00.000Z",
+    });
+    await repository.syncLiveItems(
+      "owner-a",
+      [original],
+      "2026-11-12T08:01:00.000Z",
+    );
+    await repository.syncLiveItems(
+      "owner-a",
+      [corrected],
+      "2026-11-12T08:02:00.000Z",
+    );
+
+    const lagging = await repository.syncLiveItems(
+      "owner-b",
+      [original],
+      "2026-11-12T09:00:00.000Z",
+    );
+    const currentRetry = await repository.syncLiveItems(
+      "owner-b",
+      [corrected],
+      "2026-11-12T09:01:00.000Z",
+    );
+
+    expect(lagging).toMatchObject({ newItemCount: 1, newDeliveryCount: 2 });
+    expect(currentRetry).toMatchObject({
+      newItemCount: 0,
+      newDeliveryCount: 0,
+    });
+    const item = (await repository.listInbox("owner-b", "alerts", 50)).items[0];
+    expect(item).toMatchObject({
+      event: { headline: "Version B adds Apple", eventRevision: 2 },
+      alert: { deliveryCount: 2 },
+    });
+    expect(item.alert.matchedRuleSymbols.sort()).toEqual([
+      "NASDAQ:AAPL",
+      "NASDAQ:NVDA",
+    ]);
   });
 
   it("rejects a late provider revision without reverting global content or duplicating delivery", async () => {

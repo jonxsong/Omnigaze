@@ -11,10 +11,17 @@ const mocks = vi.hoisted(() => {
       this.name = "IngestionTickError";
     }
   }
+  class MockProjectionTickError extends Error {
+    readonly code = "intelligence_projection_failed";
+    readonly stage = "owner_projection";
+    readonly retryable = true;
+  }
   return {
     runIntelligenceIngestionTick: vi.fn(),
     runSecFilingIngestionTick: vi.fn(),
+    runIntelligenceProjectionTick: vi.fn(),
     IngestionTickError: MockIngestionTickError,
+    IntelligenceProjectionTickError: MockProjectionTickError,
   };
 });
 
@@ -29,6 +36,11 @@ vi.mock("@/lib/services/sec-filing-ingestion", () => ({
 
 vi.mock("@/lib/services/bounded-provider-ingestion", () => ({
   IngestionTickError: mocks.IngestionTickError,
+}));
+
+vi.mock("@/lib/services/intelligence-projection", () => ({
+  runIntelligenceProjectionTick: mocks.runIntelligenceProjectionTick,
+  IntelligenceProjectionTickError: mocks.IntelligenceProjectionTickError,
 }));
 
 import { POST } from "@/app/mcp/route";
@@ -83,6 +95,22 @@ async function callSecTick(args: Record<string, unknown>, userId?: string) {
   };
 }
 
+async function callProjectionTick(
+  args: Record<string, unknown>,
+  userId?: string,
+) {
+  const response = await rpc(
+    "tools/call",
+    { name: "run_intelligence_projection_tick", arguments: args },
+    userId,
+  );
+  const result = response.result!;
+  return {
+    result,
+    content: JSON.parse(result.content[0].text) as Record<string, unknown>,
+  };
+}
+
 describe("operator ingestion MCP tool", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -108,6 +136,14 @@ describe("operator ingestion MCP tool", () => {
       (candidate) => candidate.name === "run_sec_filing_ingestion_tick",
     );
     expect(secTool?.inputSchema).toEqual({
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    });
+    const projectionTool = response.result?.tools?.find(
+      (candidate) => candidate.name === "run_intelligence_projection_tick",
+    );
+    expect(projectionTool?.inputSchema).toEqual({
       type: "object",
       properties: {},
       additionalProperties: false,
@@ -253,6 +289,71 @@ describe("operator ingestion MCP tool", () => {
         details: {
           code: "sec_fair_access_unavailable",
           stage: "claim",
+          retryable: true,
+        },
+      },
+    });
+  });
+
+  it("keeps durable owner projection behind the same closed operator boundary", async () => {
+    await expect(callProjectionTick({})).resolves.toMatchObject({
+      result: { isError: true },
+      content: { details: { code: "auth_required" } },
+    });
+    await expect(
+      callProjectionTick({}, "ordinary-user"),
+    ).resolves.toMatchObject({
+      result: { isError: true },
+      content: { details: { code: "operator_required" } },
+    });
+    await expect(
+      callProjectionTick({ owner_id: "owner-a" }, "operator-user"),
+    ).resolves.toMatchObject({
+      result: { isError: true },
+      content: { error: "Invalid tool arguments." },
+    });
+    expect(mocks.runIntelligenceProjectionTick).not.toHaveBeenCalled();
+
+    mocks.runIntelligenceProjectionTick.mockResolvedValue({
+      status: "processed",
+      scannedChangeCount: 4,
+      projectedItemCount: 2,
+      newItemCount: 2,
+      newDeliveryCount: 1,
+      hasMore: true,
+    });
+    const response = await callProjectionTick({}, "operator-user");
+    expect(response).toMatchObject({
+      content: {
+        data: {
+          status: "processed",
+          scannedChangeCount: 4,
+          newDeliveryCount: 1,
+          hasMore: true,
+        },
+        meta: {
+          scope: "operator",
+          boundedOwnerPages: 1,
+          tradeExecutionAllowed: false,
+        },
+      },
+    });
+    expect(JSON.stringify(response)).not.toContain("owner-a");
+    expect(JSON.stringify(response)).not.toContain("operator-user");
+  });
+
+  it("returns only safe owner projection failure fields", async () => {
+    mocks.runIntelligenceProjectionTick.mockRejectedValue(
+      new mocks.IntelligenceProjectionTickError(),
+    );
+    const response = await callProjectionTick({}, "operator-user");
+    expect(response).toMatchObject({
+      result: { isError: true },
+      content: {
+        error: "Intelligence projection tick failed.",
+        details: {
+          code: "intelligence_projection_failed",
+          stage: "owner_projection",
           retryable: true,
         },
       },

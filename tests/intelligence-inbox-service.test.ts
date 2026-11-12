@@ -156,6 +156,7 @@ describe("intelligence inbox orchestration", () => {
       "owner-a",
       [expect.objectContaining({ id: "alpaca:event-1", isLive: true })],
       generatedAt,
+      { globalCursorDrained: false },
     );
     expect(result.meta.sync).toMatchObject({
       status: "live",
@@ -264,6 +265,7 @@ describe("intelligence inbox orchestration", () => {
         }),
       ],
       generatedAt,
+      { globalCursorDrained: false },
     );
     expect(result.meta.sync).toMatchObject({
       status: "live",
@@ -321,6 +323,7 @@ describe("intelligence inbox orchestration", () => {
         }),
       ],
       generatedAt,
+      { globalCursorDrained: false },
     );
     expect(result.meta.sync).toMatchObject({
       status: "live",
@@ -513,6 +516,7 @@ describe("intelligence inbox orchestration", () => {
           "owner-a",
           [],
           generatedAt,
+          { globalCursorDrained: false },
         );
       } else {
         expect(repo.syncLiveItems).not.toHaveBeenCalled();
@@ -551,7 +555,12 @@ describe("intelligence inbox orchestration", () => {
       dependencies(repo, feed("live", "unknown", [])),
     );
 
-    expect(repo.syncLiveItems).toHaveBeenCalledWith("owner-a", [], generatedAt);
+    expect(repo.syncLiveItems).toHaveBeenCalledWith(
+      "owner-a",
+      [],
+      generatedAt,
+      { globalCursorDrained: false },
+    );
     expect(result.meta.sync).toMatchObject({
       status: "live",
       freshness: "unknown",

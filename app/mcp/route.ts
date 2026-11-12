@@ -179,6 +179,16 @@ const tools = [
     },
   },
   {
+    name: "run_intelligence_projection_tick",
+    description:
+      "Run one bounded, operator-only owner projection page from durable provider receipts. It materializes opted-in inbox state and in-app alert deliveries without accepting an owner ID or placing trades.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_intelligence_inbox",
     description:
       "Return the authenticated user's durable intelligence inbox. A fresh live read may materialize newly observed events; demo or stale provider output is never persisted.",
@@ -832,6 +842,48 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         } catch (failure) {
           if (failure instanceof IngestionTickError) {
             return toolError("SEC filing ingestion tick failed.", {
+              code: failure.code,
+              stage: failure.stage,
+              retryable: failure.retryable,
+            });
+          }
+          throw failure;
+        }
+      }
+      case "run_intelligence_projection_tick": {
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const operatorId = process.env.INGESTION_OPERATOR_USER_ID?.trim();
+        if (!operatorId) {
+          return toolError("Ingestion operator is not configured.", {
+            code: "ingestion_operator_unconfigured",
+          });
+        }
+        if (userId !== operatorId) {
+          return toolError("Operator authorization required.", {
+            code: "operator_required",
+          });
+        }
+        const parsed = z.object({}).strict().safeParse(args);
+        if (!parsed.success) return validationError(parsed.error);
+        const {
+          IntelligenceProjectionTickError,
+          runIntelligenceProjectionTick,
+        } = await import("@/lib/services/intelligence-projection");
+        try {
+          const result = await runIntelligenceProjectionTick();
+          return toolContent(result, {
+            scope: "operator",
+            persistence: "server",
+            boundedOwnerPages: 1,
+            tradeExecutionAllowed: false,
+            generatedAt: new Date().toISOString(),
+          });
+        } catch (failure) {
+          if (failure instanceof IntelligenceProjectionTickError) {
+            return toolError("Intelligence projection tick failed.", {
               code: failure.code,
               stage: failure.stage,
               retryable: failure.retryable,

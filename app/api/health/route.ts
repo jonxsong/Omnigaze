@@ -64,6 +64,7 @@ export function createHealthHandler(
           "deterministic-decision-scenarios",
           "durable-intelligence-inbox",
           "bounded-cursor-ingestion",
+          "durable-owner-projection-cursor-v1",
           "in-app-alert-rules",
           ...(ingestionReadiness.mode === "scheduled"
             ? ["scheduled-cursor-ingestion"]

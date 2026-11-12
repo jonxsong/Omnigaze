@@ -4,9 +4,9 @@ import { checkDatabaseReadiness } from "@/lib/services/database-readiness";
 const NOW = new Date("2026-11-12T08:00:00.000Z");
 
 describe("database readiness", () => {
-  it("reports ready only when inbox, ingestion, AI guardrail, and SEC admission schema markers exist", async () => {
+  it("reports ready only when inbox, ingestion, AI guardrail, SEC, and owner projection markers exist", async () => {
     const values = vi.fn(async () => [
-      [3, 2, 2, 2, 3, 3, 4, 15, 12, 5, 2, 9, 10, 12, 12, 12, 1, 4],
+      [3, 2, 2, 2, 3, 3, 4, 15, 12, 5, 2, 9, 10, 12, 12, 12, 1, 4, 7, 10],
     ]);
 
     await expect(
@@ -14,7 +14,7 @@ describe("database readiness", () => {
     ).resolves.toEqual({
       status: "ready",
       checkedAt: NOW.toISOString(),
-      schema: "sec-fair-access-v1",
+      schema: "owner-projection-cursor-v1",
     });
     expect(values).toHaveBeenCalledTimes(1);
   });
@@ -32,7 +32,7 @@ describe("database readiness", () => {
     expect(result).toEqual({
       status: "unavailable",
       checkedAt: NOW.toISOString(),
-      schema: "sec-fair-access-v1",
+      schema: "owner-projection-cursor-v1",
     });
     expect(JSON.stringify(result)).not.toMatch(/table|column|sqlite|query/i);
   });
@@ -46,7 +46,7 @@ describe("database readiness", () => {
     expect(result).toEqual({
       status: "unavailable",
       checkedAt: NOW.toISOString(),
-      schema: "sec-fair-access-v1",
+      schema: "owner-projection-cursor-v1",
     });
   });
 
@@ -63,7 +63,7 @@ describe("database readiness", () => {
     expect(result).toEqual({
       status: "unavailable",
       checkedAt: NOW.toISOString(),
-      schema: "sec-fair-access-v1",
+      schema: "owner-projection-cursor-v1",
     });
   });
 
@@ -78,7 +78,7 @@ describe("database readiness", () => {
     );
 
     expect(result.status).toBe("unavailable");
-    expect(result.schema).toBe("sec-fair-access-v1");
+    expect(result.schema).toBe("owner-projection-cursor-v1");
   });
 
   it("rejects the complete pre-0007 schema without SEC admission control", async () => {
@@ -94,7 +94,24 @@ describe("database readiness", () => {
     expect(result).toEqual({
       status: "unavailable",
       checkedAt: NOW.toISOString(),
-      schema: "sec-fair-access-v1",
+      schema: "owner-projection-cursor-v1",
+    });
+  });
+
+  it("rejects a projection cursor table missing any runtime lease column", async () => {
+    const result = await checkDatabaseReadiness(
+      () => ({
+        values: async () => [
+          [3, 2, 2, 2, 3, 3, 4, 15, 12, 5, 2, 9, 10, 12, 12, 12, 1, 4, 7, 9],
+        ],
+      }),
+      () => NOW,
+    );
+
+    expect(result).toEqual({
+      status: "unavailable",
+      checkedAt: NOW.toISOString(),
+      schema: "owner-projection-cursor-v1",
     });
   });
 

@@ -30,6 +30,15 @@ describe("market dashboard localization", () => {
     ).toContain("NVDA");
   });
 
+  it("explains degraded intelligence provenance in both locales", () => {
+    expect(formatMarketDashboardCopy("en", "retainedEvidenceTitle")).toBe(
+      "Showing retained provider evidence",
+    );
+    expect(
+      formatMarketDashboardCopy("zh-CN", "liveOnlyEvidenceDetail"),
+    ).toContain("已保存的证据");
+  });
+
   it("localizes only known application-owned demo intelligence", () => {
     const fixture = {
       id: "demo:NVDA-event-governance-scrutiny",

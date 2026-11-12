@@ -187,3 +187,21 @@ export interface CollectedEventPage {
   hasMore: boolean;
   nextBefore: CollectedEventCursor | null;
 }
+
+export interface ProjectionChange {
+  sequence: number;
+  /** Durable ingestion observation used to order equal provider revisions. */
+  changedAt: string;
+  event: CollectedSourceEvent;
+}
+
+export interface ProjectionChangePage {
+  items: ProjectionChange[];
+  hasMore: boolean;
+}
+
+export interface ListProjectionChangesInput {
+  /** Exclusive monotonic cursor from the owner projection row. */
+  afterSequence: number;
+  limit: number;
+}

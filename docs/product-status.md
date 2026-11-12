@@ -27,6 +27,8 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Cloudflare D1 persistence with append-only Drizzle migrations.
 - [x] Lease-protected, cursor-based news ingestion with frozen windows, idempotent page replay, bounded retention, and safe aggregate health.
 - [x] Request-time inbox reconciliation that projects collected global receipts into owner-scoped state.
+- [x] Monotonic logical-event projection ledger plus leased per-owner cursor and bounded operator tick. Consecutive repeats coalesce, A→B→A transitions remain replayable, equal revisions use durable observation order, and cursor advancement stops before any unmaterialized eligible event.
+- [ ] Link and verify a hosted `run_intelligence_projection_tick` schedule (or explicitly update and verify the existing ingestion schedule prompt) before claiming offline in-app alert materialization is operational.
 - [x] Unified intelligence reads across the public timeline, personalized Today feed, Daily Brief, Omnigaze View, portfolio decision support, and MCP, with deterministic correction merging and durable-evidence outage fallback.
 - [ ] Verify the hosted hourly operator tick after refreshing the Omnigaze app connection; keep collection labeled `request_time` until the first successful checkpoint.
 - [x] Dormant SEC adapter with official ticker-catalog resolution, collision-safe class-share aliases, per-CIK request deduplication, bounded short-lived caching, global accession ordering, explicit partial-coverage reporting, and a production fail-closed activation gate.

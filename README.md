@@ -147,6 +147,7 @@ The initial stateless tool surface includes:
 - `get_provider_status`
 - `run_intelligence_ingestion_tick` (closed operator tool; one provider page per call)
 - `run_sec_filing_ingestion_tick` (closed operator tool; one recent-filing page per call, independently fail-closed)
+- `run_intelligence_projection_tick` (closed operator tool; one leased durable owner page, no owner input)
 
 Use `server/discover`, `tools/list`, and `tools/call` with MCP version `2026-07-28`.
 
@@ -154,9 +155,9 @@ Use `server/discover`, `tools/list`, and `tools/call` with MCP version `2026-07-
 
 - Alpaca currently uses resilient REST polling; long-lived streaming transport is a later infrastructure slice.
 - A request-time news reconciliation still caps interactive reads at 100 events. The separate durable cursor engine processes exactly one frozen-window page per operator tick; continuous collection requires a linked hosted schedule, a current authenticated Omnigaze app connection, and at least one verified successful tick before the UI may claim scheduled collection.
-- The unified read plane makes fresh durable receipts available to the timeline, Today, AI, portfolio research, and MCP during a request-time provider outage. Owner inbox projection still has a 100-event global-page cap and requires a future per-owner projection cursor for complete offline catch-up.
+- The unified read plane makes fresh durable receipts available to the timeline, Today, AI, portfolio research, and MCP during a request-time provider outage. A monotonic logical-event ledger and leased per-owner cursor now make bounded offline inbox/alert materialization schedulable. Consecutive identical observations coalesce, revisions and reversions remain ordered by durable observation time, and baseline closes only after the owner cursor drains. The projection tick still needs a separate verified hosted schedule (or an explicitly updated existing schedule prompt) before that behavior is operational.
 - The SEC adapter, distributed Fair Access coordinator, and durable recent-filing cursor engine are covered by tests, but production egress remains disabled until a truthful monitored application/contact identity is configured and `SEC_EDGAR_ENABLED` is set to exact `true`. Any durable tick additionally requires `SEC_DURABLE_INGESTION_ENABLED=true`; continuous collection requires a verified operator schedule. Historical shard backfill and authoritative correction/removal reconciliation remain separate milestones.
-- Alert rules currently deliver only inside the Omnigaze inbox during request-time refreshes. Email, SMS, push, browser notifications, and a continuously running background delivery worker are not enabled.
+- Alert rules deliver only inside the Omnigaze inbox. Request-time refresh works now; background materialization remains inactive until the operator projection schedule is verified. The owner cursor is global rather than per symbol, so a symbol added after catch-up does not rewind older ledger history for that symbol; interactive newest-100 reconciliation may cover recent events. Email, SMS, push, and browser notifications are not enabled.
 - Brokerage import and order execution are intentionally not part of this alpha.
 - AI analysis requires an authenticated user, runs only after an explicit user request, and returns `503 ai_unconfigured` when the server secret is absent. Daily Brief generation is manual rather than scheduled; it fails closed when the watchlist has no eligible fresh live evidence.
 - Omnigaze provides research support, not investment advice or autonomous trading.

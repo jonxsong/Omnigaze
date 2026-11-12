@@ -29,6 +29,7 @@ function createTestDatabase() {
     "0002_portfolio_v1.sql",
     "0003_intelligence_inbox_v1.sql",
     "0004_ingestion_control_plane_v1.sql",
+    "0008_inbox_projection_cursor_v1.sql",
   ]) {
     sqlite.exec(migrationSql(migration));
   }
@@ -322,6 +323,34 @@ describe("global ingestion repository", () => {
       seen_count: 1,
       payload_policy: "minimal_redacted_v1",
     });
+    expect(
+      sqlite
+        .prepare("SELECT COUNT(*) AS count FROM inbox_projection_changes")
+        .get(),
+    ).toMatchObject({ count: 1 });
+
+    const projectionPage = await repository.listProjectionChanges({
+      afterSequence: 0,
+      limit: 1,
+    });
+    expect(projectionPage).toMatchObject({
+      hasMore: false,
+      items: [
+        {
+          sequence: 1,
+          event: {
+            provider: "alpaca",
+            sourceEventId: "news-1",
+            symbolIds: ["NASDAQ:NVDA"],
+            providerRevisionAt: news.providerRevisionAt,
+            envelope: { headline: "A material update" },
+          },
+        },
+      ],
+    });
+    await expect(
+      repository.listProjectionChanges({ afterSequence: 1, limit: 20 }),
+    ).resolves.toEqual({ items: [], hasMore: false });
 
     const status = await repository.getAggregateStatus({
       now: "2026-11-12T08:00:03.000Z",
@@ -433,6 +462,96 @@ describe("global ingestion repository", () => {
         }),
       ],
     });
+  });
+
+  it("coalesces cross-run repeats while retaining A-to-B-to-A reversions", async () => {
+    sqlite
+      .prepare(
+        "INSERT INTO instruments (id, ticker, exchange, name, currency, status) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .run("NASDAQ:NVDA", "NVDA", "NASDAQ", "NVIDIA", "USD", "active");
+    const original = await receipt();
+    const correctedPayload = JSON.stringify({
+      schema: "omnigaze.provider-receipt.v1",
+      sourceKind: "licensed_news",
+      sourceEventId: "news-1",
+      publishedAt: "2026-11-12T07:45:00.000Z",
+      providerRevisionAt: "2026-11-12T07:45:30.000Z",
+      symbolIds: ["NASDAQ:NVDA"],
+      headline: "A material correction",
+      summary: "A later-observed equal-revision correction.",
+      url: "https://example.test/news-1",
+      contentDigest: "b".repeat(64),
+    });
+    const corrected = await receipt({
+      rawPayload: correctedPayload,
+      rawPayloadHash: await sha256Hex(correctedPayload),
+      observedAt: "2026-11-12T07:47:00.000Z",
+    });
+
+    for (const [index, version] of [
+      original,
+      original,
+      corrected,
+      original,
+    ].entries()) {
+      const claim = await ensureAndClaim(`transition-${index}`);
+      const runId = await repository.startRun(
+        claim.lease,
+        `2026-11-12T08:00:${String(index).padStart(2, "0")}.000Z`,
+      );
+      await repository.persistPage({
+        lease: claim.lease,
+        runId,
+        receipts: [version],
+        nextCursor: null,
+        persistedAt: `2026-11-12T08:00:${String(index + 10).padStart(2, "0")}.000Z`,
+      });
+    }
+
+    expect(
+      sqlite
+        .prepare(`
+          SELECT
+            json_extract(source_events.raw_payload, '$.headline') AS headline,
+            inbox_projection_changes.changed_at AS changed_at
+          FROM inbox_projection_changes
+          INNER JOIN source_events
+            ON source_events.id = inbox_projection_changes.source_event_id
+          ORDER BY inbox_projection_changes.sequence
+        `)
+        .all(),
+    ).toEqual([
+      {
+        headline: "A material update",
+        changed_at: "2026-11-12T08:00:10.000Z",
+      },
+      {
+        headline: "A material correction",
+        changed_at: "2026-11-12T08:00:12.000Z",
+      },
+      {
+        headline: "A material update",
+        changed_at: "2026-11-12T08:00:13.000Z",
+      },
+    ]);
+    expect(
+      sqlite
+        .prepare(`
+          SELECT COUNT(DISTINCT logical_event_id) AS count
+          FROM inbox_projection_changes
+        `)
+        .get(),
+    ).toEqual({ count: 1 });
+    const changes = await repository.listProjectionChanges({
+      afterSequence: 0,
+      limit: 10,
+    });
+    expect(changes.items.map((entry) => entry.event.envelope.headline)).toEqual([
+      "A material update",
+      "A material correction",
+      "A material update",
+    ]);
   });
 
   it("follows the latest observation across an equal-revision correction and reversion", async () => {

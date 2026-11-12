@@ -288,6 +288,15 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 .event-section { margin-top: 22px; }
 .section-heading-row { margin-bottom: 10px; }
 .section-heading-row button { gap: 4px; border: 0; background: transparent; color: #6a7d90; font-size: 9px; cursor: pointer; }
+.intelligence-provenance-note { display: flex; gap: 9px; align-items: flex-start; margin-bottom: 9px; padding: 10px 12px; border: 1px solid rgb(247 199 104 / 18%); border-radius: 9px; background: rgb(247 199 104 / 5%); color: #9e875c; }
+.intelligence-provenance-note.live-only { border-color: rgb(98 217 255 / 18%); background: rgb(98 217 255 / 5%); color: #75aec0; }
+.intelligence-provenance-note.unavailable { border-color: rgb(255 107 125 / 18%); background: rgb(255 107 125 / 5%); color: #b77a84; }
+.intelligence-provenance-note > svg { flex: 0 0 auto; margin-top: 1px; }
+.intelligence-provenance-note > div { display: grid; gap: 3px; }
+.intelligence-provenance-note strong { color: #c6b487; font-size: 10px; font-weight: 650; }
+.intelligence-provenance-note.live-only strong { color: #9ccbd8; }
+.intelligence-provenance-note.unavailable strong { color: #d49aa3; }
+.intelligence-provenance-note span { font-size: 9px; line-height: 1.5; }
 .event-list { display: grid; gap: 7px; }
 .event-card { position: relative; display: grid; grid-template-columns: 36px 1fr 20px; gap: 12px; align-items: start; padding: 15px; border: 1px solid var(--border); border-radius: 12px; background: rgb(11 21 30 / 72%); transition: border-color 160ms ease, background 160ms ease, transform 160ms ease; }
 .event-card:hover { border-color: #283a4b; background: #0c141d; }

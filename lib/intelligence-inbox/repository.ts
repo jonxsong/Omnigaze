@@ -62,6 +62,11 @@ export interface InboxSyncResult {
   newDeliveryCount: number;
 }
 
+export interface InboxSyncOptions {
+  /** True only when the durable owner projection cursor has no remaining page. */
+  globalCursorDrained: boolean;
+}
+
 export interface InboxReconciliationClaim {
   acquired: boolean;
   token: string | null;
@@ -117,6 +122,7 @@ export interface IntelligenceInboxRepository {
     ownerId: string,
     items: IntelligenceFeedItem[],
     syncedAt: string,
+    options?: InboxSyncOptions,
   ): Promise<InboxSyncResult>;
   listInbox(
     ownerId: string,
@@ -325,17 +331,27 @@ function providerRevisionForInboxItem(item: IntelligenceFeedItem) {
   return new Date(timestamp).toISOString();
 }
 
+function receivedAtForInboxItem(item: IntelligenceFeedItem) {
+  const timestamp = Date.parse(item.receivedAt);
+  if (!Number.isFinite(timestamp)) {
+    throw new Error("invalid_provider_observation");
+  }
+  return new Date(timestamp).toISOString();
+}
+
 async function upsertInboxEvent(
   db: InboxDatabase,
   item: IntelligenceFeedItem,
   syncedAt: string,
   knownContentHash?: string,
   knownProviderRevisionAt?: string,
+  knownReceivedAt?: string,
 ) {
   const contentHash =
     knownContentHash ?? (await contentHashForInboxItem(item));
   const providerRevisionAt =
     knownProviderRevisionAt ?? providerRevisionForInboxItem(item);
+  const receivedAt = knownReceivedAt ?? receivedAtForInboxItem(item);
   let existing = (
     await db
       .select()
@@ -346,6 +362,7 @@ async function upsertInboxEvent(
 
   let created = false;
   let revisionChanged = false;
+  let acceptedVersion = false;
   if (!existing) {
     const inserted = await db
       .insert(inboxEvents)
@@ -357,7 +374,7 @@ async function upsertInboxEvent(
         headline: item.headline,
         summary: item.summary,
         publishedAt: item.publishedAt,
-        receivedAt: item.receivedAt,
+        receivedAt,
         providerRevisionAt,
         sourceUrl: item.sourceUrl,
         materiality: item.materiality,
@@ -383,6 +400,7 @@ async function upsertInboxEvent(
           .limit(1)
       )[0];
     created = Boolean(inserted[0]);
+    acceptedVersion = created;
   }
 
   if (!existing) throw new Error("inbox_event_upsert_failed");
@@ -393,9 +411,20 @@ async function upsertInboxEvent(
   for (let attempt = 0; !created && attempt < 3; attempt += 1) {
     const incomingRevisionTime = Date.parse(providerRevisionAt);
     const storedRevisionTime = Date.parse(existing.providerRevisionAt);
+    const incomingObservationTime = Date.parse(receivedAt);
+    const storedObservationTime = Date.parse(existing.receivedAt);
     if (
+      !Number.isFinite(incomingRevisionTime) ||
       !Number.isFinite(storedRevisionTime) ||
-      incomingRevisionTime <= storedRevisionTime
+      !Number.isFinite(incomingObservationTime) ||
+      !Number.isFinite(storedObservationTime)
+    ) {
+      throw new Error("invalid_inbox_event_clock");
+    }
+    if (
+      incomingRevisionTime < storedRevisionTime ||
+      (incomingRevisionTime === storedRevisionTime &&
+        incomingObservationTime <= storedObservationTime)
     ) {
       break;
     }
@@ -410,7 +439,7 @@ async function upsertInboxEvent(
               headline: item.headline,
               summary: item.summary,
               publishedAt: item.publishedAt,
-              receivedAt: item.receivedAt,
+              receivedAt,
               providerRevisionAt,
               sourceUrl: item.sourceUrl,
               materiality: item.materiality,
@@ -423,19 +452,21 @@ async function upsertInboxEvent(
               revision: existing.revision + 1,
               updatedAt: syncedAt,
             }
-          : { providerRevisionAt },
+          : { providerRevisionAt, receivedAt },
       )
       .where(
         and(
           eq(inboxEvents.id, item.id),
           eq(inboxEvents.contentHash, existing.contentHash),
           eq(inboxEvents.providerRevisionAt, existing.providerRevisionAt),
+          eq(inboxEvents.receivedAt, existing.receivedAt),
         ),
       )
       .returning();
     if (updated[0]) {
       existing = updated[0];
       revisionChanged = contentChanged;
+      acceptedVersion = true;
       break;
     }
 
@@ -455,7 +486,11 @@ async function upsertInboxEvent(
   // Provider queries are owner-scoped and can expose only a subset of an event's
   // symbols. Build the global mapping monotonically so one owner's projection
   // never erases another owner's canonical symbol association.
-  if (item.symbolIds.length > 0) {
+  const sameCurrentReceipt =
+    providerRevisionAt === existing.providerRevisionAt &&
+    contentHash === existing.contentHash &&
+    Date.parse(receivedAt) >= Date.parse(existing.receivedAt);
+  if ((acceptedVersion || sameCurrentReceipt) && item.symbolIds.length > 0) {
     await db.run(sql`
       INSERT INTO ${inboxEventSymbols} (event_id, symbol_id)
       SELECT ${item.id}, value
@@ -465,7 +500,7 @@ async function upsertInboxEvent(
     `);
   }
 
-  return { event: existing, created, revisionChanged };
+  return { event: existing, created, revisionChanged, acceptedVersion };
 }
 
 function shiftedIso(value: string, deltaMs: number) {
@@ -590,6 +625,7 @@ async function syncLiveItems(
   ownerId: string,
   items: IntelligenceFeedItem[],
   syncedAt: string,
+  options: InboxSyncOptions = { globalCursorDrained: true },
 ): Promise<InboxSyncResult> {
   let profile = (
     await db
@@ -653,11 +689,15 @@ async function syncLiveItems(
     ).values(),
   ];
   const preparedItems = await Promise.all(
-    eligibleItems.map(async (item) => ({
-      item,
-      contentHash: await contentHashForInboxItem(item),
-      providerRevisionAt: providerRevisionForInboxItem(item),
-    })),
+    eligibleItems.map(async (item) => {
+      const receivedAt = receivedAtForInboxItem(item);
+      return {
+        item: { ...item, receivedAt },
+        contentHash: await contentHashForInboxItem(item),
+        providerRevisionAt: providerRevisionForInboxItem(item),
+        receivedAt,
+      };
+    }),
   );
   const preparedById = new Map(
     preparedItems.map((prepared) => [prepared.item.id, prepared]),
@@ -671,14 +711,20 @@ async function syncLiveItems(
               json_extract(value, '$.id') AS id,
               json_extract(value, '$.contentHash') AS content_hash,
               json_extract(value, '$.providerRevisionAt') AS provider_revision_at,
+              json_extract(value, '$.receivedAt') AS received_at,
+              json_extract(value, '$.symbolIds') AS symbol_ids_json,
               json_extract(value, '$.publishedAt') AS published_at
             FROM json_each(${JSON.stringify(
-              preparedItems.map(({ item, contentHash, providerRevisionAt }) => ({
-                id: item.id,
-                contentHash,
-                providerRevisionAt,
-                publishedAt: item.publishedAt,
-              })),
+              preparedItems.map(
+                ({ item, contentHash, providerRevisionAt, receivedAt }) => ({
+                  id: item.id,
+                  contentHash,
+                  providerRevisionAt,
+                  receivedAt,
+                  symbolIds: item.symbolIds,
+                  publishedAt: item.publishedAt,
+                }),
+              ),
             )})
           )
           SELECT incoming.id
@@ -692,11 +738,63 @@ async function syncLiveItems(
             OR ${inboxEventStates.eventId} IS NULL
             OR julianday(incoming.provider_revision_at) >
               julianday(${inboxEvents.providerRevisionAt})
+            OR (
+              julianday(incoming.provider_revision_at) =
+                julianday(${inboxEvents.providerRevisionAt})
+              AND (
+                (
+                  julianday(incoming.received_at) >
+                    julianday(${inboxEvents.receivedAt})
+                  AND incoming.content_hash <> ${inboxEvents.contentHash}
+                )
+                OR (
+                  julianday(incoming.received_at) >=
+                    julianday(${inboxEvents.receivedAt})
+                  AND incoming.content_hash = ${inboxEvents.contentHash}
+                  AND EXISTS (
+                    SELECT 1
+                    FROM json_each(incoming.symbol_ids_json) AS incoming_symbol
+                    WHERE NOT EXISTS (
+                      SELECT 1
+                      FROM ${inboxEventSymbols}
+                      WHERE ${inboxEventSymbols.eventId} = incoming.id
+                        AND ${inboxEventSymbols.symbolId} = incoming_symbol.value
+                    )
+                  )
+                )
+              )
+            )
             OR ${inboxEvents.updatedAt} > ${inboxEventStates.lastSeenAt}
           ORDER BY
             CASE WHEN ${inboxEvents.id} IS NOT NULL AND (
               julianday(incoming.provider_revision_at) >
                 julianday(${inboxEvents.providerRevisionAt})
+              OR (
+                julianday(incoming.provider_revision_at) =
+                  julianday(${inboxEvents.providerRevisionAt})
+                AND (
+                  (
+                    julianday(incoming.received_at) >
+                      julianday(${inboxEvents.receivedAt})
+                    AND incoming.content_hash <> ${inboxEvents.contentHash}
+                  )
+                  OR (
+                    julianday(incoming.received_at) >=
+                      julianday(${inboxEvents.receivedAt})
+                    AND incoming.content_hash = ${inboxEvents.contentHash}
+                    AND EXISTS (
+                      SELECT 1
+                      FROM json_each(incoming.symbol_ids_json) AS incoming_symbol
+                      WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM ${inboxEventSymbols}
+                        WHERE ${inboxEventSymbols.eventId} = incoming.id
+                          AND ${inboxEventSymbols.symbolId} = incoming_symbol.value
+                      )
+                    )
+                  )
+                )
+              )
               OR (${inboxEventStates.eventId} IS NOT NULL
                 AND ${inboxEvents.updatedAt} > ${inboxEventStates.lastSeenAt})
             ) THEN 0
@@ -717,13 +815,19 @@ async function syncLiveItems(
         prepared !== undefined,
     );
 
-  for (const { item, contentHash, providerRevisionAt } of syncCandidates) {
+  for (const {
+    item,
+    contentHash,
+    providerRevisionAt,
+    receivedAt,
+  } of syncCandidates) {
     const { event } = await upsertInboxEvent(
       db,
       item,
       syncedAt,
       contentHash,
       providerRevisionAt,
+      receivedAt,
     );
     const effectiveEventTime = event.providerRevisionAt;
     const preActivationEvent =
@@ -746,7 +850,7 @@ async function syncLiveItems(
       .returning();
     const stateCreated = Boolean(insertedState[0]);
     if (stateCreated) newItemCount += 1;
-    if (!stateCreated && baselineInProgress && preActivationEvent) {
+    if (!stateCreated && preActivationEvent) {
       await db
         .update(inboxEventStates)
         .set({
@@ -783,12 +887,12 @@ async function syncLiveItems(
       FROM ${alertRules}
       INNER JOIN ${inboxEventSymbols}
         ON ${inboxEventSymbols.symbolId} = ${alertRules.symbolId}
+      -- upsertInboxEvent may reject a stale owner projection and return a newer
+      -- global revision. Evaluate that revision's complete monotonic symbol map,
+      -- never the stale incoming item's narrower symbol subset.
       WHERE ${alertRules.ownerId} = ${ownerId}
         AND ${alertRules.enabled} = 1
         AND ${inboxEventSymbols.eventId} = ${event.id}
-        AND ${alertRules.symbolId} IN (
-          SELECT value FROM json_each(${JSON.stringify(item.symbolIds)})
-        )
         AND EXISTS (
           SELECT 1
           FROM ${watchlistItems}
@@ -838,7 +942,10 @@ async function syncLiveItems(
     }
   }
 
-  const baselineFinished = baselineInProgress && !hasMoreCandidates;
+  const baselineFinished =
+    baselineInProgress &&
+    !hasMoreCandidates &&
+    options.globalCursorDrained;
   await db
     .update(inboxProfiles)
     .set({
@@ -1440,8 +1547,8 @@ export function createIntelligenceInboxRepository(
         completedAt,
         completion,
       ),
-    syncLiveItems: (ownerId, items, syncedAt) =>
-      syncLiveItems(databaseFactory(), ownerId, items, syncedAt),
+    syncLiveItems: (ownerId, items, syncedAt, options) =>
+      syncLiveItems(databaseFactory(), ownerId, items, syncedAt, options),
     listInbox: (ownerId, filter, limit) =>
       listInbox(databaseFactory(), ownerId, filter, limit),
     getInboxItem: (ownerId, eventId) =>

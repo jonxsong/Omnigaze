@@ -5,7 +5,7 @@ export type DatabaseReadinessStatus = "ready" | "unavailable";
 export interface DatabaseReadiness {
   status: DatabaseReadinessStatus;
   checkedAt: string;
-  schema: "sec-fair-access-v1";
+  schema: "owner-projection-cursor-v1";
 }
 
 export interface ReadinessDatabase {
@@ -18,7 +18,7 @@ export type ReadinessDatabaseFactory =
 const REQUIRED_COLUMN_COUNTS = [
   3, 2, 2, 2, 3, 3, 4,
   15, 12, 5, 2, 9, 10, 12,
-  12, 12, 1, 4,
+  12, 12, 1, 4, 7, 10,
 ] as const;
 
 async function runtimeDatabaseFactory(): Promise<ReadinessDatabase> {
@@ -99,6 +99,17 @@ export async function checkDatabaseReadiness(
         (SELECT COUNT(*) FROM pragma_table_info('sec_fair_access_control')
           WHERE name IN (
             'provider', 'next_admission_at_ms', 'cooldown_until_ms', 'updated_at'
+          )),
+        (SELECT COUNT(*) FROM pragma_table_info('inbox_projection_changes')
+          WHERE name IN (
+            'sequence', 'source_event_id', 'logical_event_id', 'provider',
+            'partition_key', 'ingestion_run_id', 'changed_at'
+          )),
+        (SELECT COUNT(*) FROM pragma_table_info('inbox_projection_cursors')
+          WHERE name IN (
+            'owner_id', 'last_sequence', 'claim_token', 'claim_until',
+            'next_allowed_at', 'last_attempt_at', 'last_completed_at',
+            'consecutive_failures', 'created_at', 'updated_at'
           ))
     `)) as number[][];
     const row = rows[0];
@@ -109,13 +120,13 @@ export async function checkDatabaseReadiness(
     return {
       status: ready ? "ready" : "unavailable",
       checkedAt,
-      schema: "sec-fair-access-v1",
+      schema: "owner-projection-cursor-v1",
     };
   } catch {
     return {
       status: "unavailable",
       checkedAt,
-      schema: "sec-fair-access-v1",
+      schema: "owner-projection-cursor-v1",
     };
   }
 }

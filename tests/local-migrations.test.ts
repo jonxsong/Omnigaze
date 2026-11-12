@@ -62,6 +62,7 @@ describe("local D1 migration reconciliation", () => {
       "0005_ai_guardrails_v1.sql",
       "0006_daily_brief_guardrails_v1.sql",
       "0007_sec_fair_access_v1.sql",
+      "0008_inbox_projection_cursor_v1.sql",
     ]);
     expect(result.sql).toContain("CREATE TABLE IF NOT EXISTS `inbox_sync_gates`");
     expect(result.sql).toContain(
@@ -78,6 +79,9 @@ describe("local D1 migration reconciliation", () => {
     );
     expect(result.sql).toContain(
       "CREATE TABLE IF NOT EXISTS `sec_fair_access_control`",
+    );
+    expect(result.sql).toContain(
+      "CREATE TABLE IF NOT EXISTS `inbox_projection_cursors`",
     );
     expect(result.sql).not.toContain("CREATE TABLE `portfolio_holdings`");
   });
@@ -165,6 +169,7 @@ describe("local D1 migration reconciliation", () => {
         "0005_ai_guardrails_v1.sql",
         "0006_daily_brief_guardrails_v1.sql",
         "0007_sec_fair_access_v1.sql",
+        "0008_inbox_projection_cursor_v1.sql",
       ]);
     } finally {
       sqlite.close();
@@ -212,6 +217,7 @@ describe("local D1 migration reconciliation", () => {
       expect(pending.pendingNames).toEqual([
         "0006_daily_brief_guardrails_v1.sql",
         "0007_sec_fair_access_v1.sql",
+        "0008_inbox_projection_cursor_v1.sql",
       ]);
       sqlite.exec(pending.sql);
 

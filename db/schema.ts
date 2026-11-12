@@ -498,6 +498,44 @@ export const inboxSyncGates = sqliteTable("inbox_sync_gates", {
   lastCompletedAt: text("last_completed_at"),
 });
 
+/**
+ * Durable, owner-scoped progress through the global ingestion change ledger.
+ * The cursor is claimed by an operator tick; owner IDs never enter the public
+ * tool input and a cursor can advance only while its lease is held.
+ */
+export const inboxProjectionCursors = sqliteTable(
+  "inbox_projection_cursors",
+  {
+    ownerId: text("owner_id").primaryKey(),
+    lastSequence: integer("last_sequence").notNull().default(0),
+    claimToken: text("claim_token"),
+    claimUntil: text("claim_until"),
+    nextAllowedAt: text("next_allowed_at").notNull(),
+    lastAttemptAt: text("last_attempt_at"),
+    lastCompletedAt: text("last_completed_at"),
+    consecutiveFailures: integer("consecutive_failures").notNull().default(0),
+    createdAt: text("created_at").notNull().default(sql.raw("CURRENT_TIMESTAMP")),
+    updatedAt: text("updated_at").notNull().default(sql.raw("CURRENT_TIMESTAMP")),
+  },
+  (table) => [
+    index("inbox_projection_cursors_due_idx").on(
+      table.nextAllowedAt,
+      table.lastCompletedAt,
+    ),
+    index("inbox_projection_cursors_lease_idx").on(table.claimUntil),
+    check(
+      "inbox_projection_cursors_lease_check",
+      sql.raw(
+        "(claim_token IS NULL AND claim_until IS NULL) OR (claim_token IS NOT NULL AND claim_until IS NOT NULL)",
+      ),
+    ),
+    check(
+      "inbox_projection_cursors_counter_check",
+      sql.raw("last_sequence >= 0 AND consecutive_failures >= 0"),
+    ),
+  ],
+);
+
 export const inboxEventStates = sqliteTable(
   "inbox_event_states",
   {
@@ -831,5 +869,39 @@ export const sourceEventIngestionMetadata = sqliteTable(
       "source_event_ingestion_metadata_payload_policy_check",
       sql.raw("payload_policy = 'minimal_redacted_v1'"),
     ),
+  ],
+);
+
+/**
+ * Monotonic handoff from global provider ingestion to owner projections.
+ * A logical event is recorded before the provider cursor advances whenever its
+ * latest immutable receipt changes. Consecutive repeats are coalesced while
+ * transitions and reversions remain replayable in sequence.
+ */
+export const inboxProjectionChanges = sqliteTable(
+  "inbox_projection_changes",
+  {
+    sequence: integer("sequence").primaryKey({ autoIncrement: true }),
+    sourceEventId: text("source_event_id")
+      .notNull()
+      .references(() => sourceEvents.id, { onDelete: "cascade" }),
+    logicalEventId: text("logical_event_id").notNull(),
+    provider: text("provider").notNull(),
+    partitionKey: text("partition_key").notNull(),
+    ingestionRunId: text("ingestion_run_id").notNull(),
+    changedAt: text("changed_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("inbox_projection_changes_run_receipt_idx").on(
+      table.provider,
+      table.partitionKey,
+      table.ingestionRunId,
+      table.sourceEventId,
+    ),
+    index("inbox_projection_changes_logical_sequence_idx").on(
+      table.logicalEventId,
+      table.sequence,
+    ),
+    index("inbox_projection_changes_time_idx").on(table.changedAt),
   ],
 );

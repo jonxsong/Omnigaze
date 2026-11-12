@@ -1,6 +1,7 @@
 import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
+  inboxProjectionChanges,
   providerIngestionCheckpoints,
   providerIngestionRunErrors,
   providerIngestionRuns,
@@ -19,11 +20,13 @@ import type {
   IngestionAggregateStatus,
   IngestionLeaseIdentity,
   ListCollectedEventsInput,
+  ListProjectionChangesInput,
   PersistPageInput,
   PersistPageResult,
   ProviderCheckpoint,
   ProviderCheckpointClaim,
   ProviderWindow,
+  ProjectionChangePage,
   RawSourceEventReceipt,
   SafeIngestionError,
 } from "@/lib/ingestion/contracts";
@@ -66,6 +69,9 @@ export interface IngestionRepository {
   listCollectedEvents(
     input: ListCollectedEventsInput,
   ): Promise<CollectedEventPage>;
+  listProjectionChanges(
+    input: ListProjectionChangesInput,
+  ): Promise<ProjectionChangePage>;
 }
 
 type CheckpointRow = typeof providerIngestionCheckpoints.$inferSelect;
@@ -73,6 +79,7 @@ type RunRow = typeof providerIngestionRuns.$inferSelect;
 
 type PreparedReceipt = {
   id: string;
+  logicalEventId: string;
   source: string;
   sourceKind: string;
   sourceEventId: string;
@@ -302,8 +309,12 @@ async function prepareReceipts(
       sourceEventId,
       rawPayloadHash,
     );
+    const logicalEventId = await sha256Hex(
+      `${provider}\u0000${sourceEventId}`,
+    );
     const prepared: PreparedReceipt = {
       id,
+      logicalEventId,
       source: provider,
       sourceKind,
       sourceEventId,
@@ -788,6 +799,7 @@ async function persistPage(
 
   const metadata = receipts.map((receipt) => ({
     sourceEventId: receipt.id,
+    logicalEventId: receipt.logicalEventId,
     provider: lease.provider,
     partitionKey: lease.partitionKey,
     payloadPolicy: receipt.payloadPolicy,
@@ -837,6 +849,53 @@ async function persistPage(
           THEN ${sourceEventIngestionMetadata.seenCount}
           ELSE ${sourceEventIngestionMetadata.seenCount} + 1
         END
+    `);
+
+    // The owner projection ledger is written before the provider page cursor
+    // advances. The latest logical-event receipt suppresses consecutive repeat
+    // observations across runs while still retaining transitions and reversions.
+    await db.run(sql`
+      WITH incoming AS (
+        SELECT
+          json_extract(value, '$.sourceEventId') AS source_event_id,
+          json_extract(value, '$.logicalEventId') AS logical_event_id,
+          json_extract(value, '$.provider') AS provider,
+          json_extract(value, '$.partitionKey') AS partition_key,
+          json_extract(value, '$.runId') AS ingestion_run_id,
+          json_extract(value, '$.seenAt') AS changed_at
+        FROM json_each(${JSON.stringify(metadata)})
+      )
+      INSERT INTO ${inboxProjectionChanges} (
+        source_event_id,
+        logical_event_id,
+        provider,
+        partition_key,
+        ingestion_run_id,
+        changed_at
+      )
+      SELECT
+        source_event_id,
+        logical_event_id,
+        provider,
+        partition_key,
+        ingestion_run_id,
+        changed_at
+      FROM incoming
+      WHERE COALESCE((
+        SELECT
+          latest.source_event_id <> incoming.source_event_id
+          AND julianday(incoming.changed_at) > julianday(latest.changed_at)
+        FROM ${inboxProjectionChanges} AS latest
+        WHERE latest.logical_event_id = incoming.logical_event_id
+        ORDER BY latest.sequence DESC
+        LIMIT 1
+      ), 1) = 1
+      ON CONFLICT (
+        provider,
+        partition_key,
+        ingestion_run_id,
+        source_event_id
+      ) DO NOTHING
     `);
   }
 
@@ -1275,6 +1334,128 @@ async function listCollectedEvents(
   };
 }
 
+async function listProjectionChanges(
+  db: IngestionDatabase,
+  input: ListProjectionChangesInput,
+): Promise<ProjectionChangePage> {
+  if (
+    !Number.isSafeInteger(input.afterSequence) ||
+    input.afterSequence < 0 ||
+    !Number.isInteger(input.limit) ||
+    input.limit < 1 ||
+    input.limit > 100
+  ) {
+    invalid();
+  }
+  const rows = await db.values<
+    [
+      number,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string | null,
+      string,
+      string,
+      string,
+      string,
+      string,
+      string,
+    ]
+  >(sql`
+    SELECT
+      ${inboxProjectionChanges.sequence},
+      ${inboxProjectionChanges.changedAt},
+      ${sourceEvents.id},
+      ${sourceEvents.source},
+      ${sourceEvents.sourceKind},
+      ${sourceEvents.sourceEventId},
+      ${sourceEvents.publishedAt},
+      ${sourceEventIngestionMetadata.providerRevisionAt},
+      ${sourceEvents.observedAt},
+      COALESCE(
+        ${sourceEventIngestionMetadata.providerRevisionAt},
+        ${sourceEvents.observedAt}
+      ) AS effective_at,
+      ${sourceEventIngestionMetadata.lastSeenAt},
+      ${sourceEventIngestionMetadata.payloadPolicy},
+      ${sourceEvents.rawPayload},
+      json_group_array(DISTINCT ${sourceEventSymbols.symbolId}) AS symbol_ids
+    FROM ${inboxProjectionChanges}
+    INNER JOIN ${sourceEvents}
+      ON ${sourceEvents.id} = ${inboxProjectionChanges.sourceEventId}
+    INNER JOIN ${sourceEventIngestionMetadata}
+      ON ${sourceEventIngestionMetadata.sourceEventId} =
+        ${inboxProjectionChanges.sourceEventId}
+      AND ${sourceEventIngestionMetadata.provider} =
+        ${inboxProjectionChanges.provider}
+      AND ${sourceEventIngestionMetadata.partitionKey} =
+        ${inboxProjectionChanges.partitionKey}
+    LEFT JOIN ${sourceEventSymbols}
+      ON ${sourceEventSymbols.sourceEventId} =
+        ${inboxProjectionChanges.sourceEventId}
+    WHERE ${inboxProjectionChanges.sequence} > ${input.afterSequence}
+    GROUP BY
+      ${inboxProjectionChanges.sequence},
+      ${inboxProjectionChanges.changedAt},
+      ${sourceEvents.id},
+      ${sourceEvents.source},
+      ${sourceEvents.sourceKind},
+      ${sourceEvents.sourceEventId},
+      ${sourceEvents.publishedAt},
+      ${sourceEventIngestionMetadata.providerRevisionAt},
+      ${sourceEvents.observedAt},
+      ${sourceEventIngestionMetadata.lastSeenAt},
+      ${sourceEventIngestionMetadata.payloadPolicy},
+      ${sourceEvents.rawPayload}
+    ORDER BY ${inboxProjectionChanges.sequence} ASC
+    LIMIT ${input.limit + 1}
+  `);
+  const selected = rows.slice(0, input.limit);
+  return {
+    items: selected.map((row) => {
+      let parsedSymbols: unknown;
+      try {
+        parsedSymbols = JSON.parse(row[13]) as unknown;
+      } catch {
+        throw new IngestionRepositoryError("conflict");
+      }
+      if (
+        !Array.isArray(parsedSymbols) ||
+        parsedSymbols.some(
+          (value) => value !== null && typeof value !== "string",
+        ) ||
+        row[11] !== "minimal_redacted_v1"
+      ) {
+        throw new IngestionRepositoryError("conflict");
+      }
+      return {
+        sequence: Number(row[0]),
+        changedAt: row[1],
+        event: {
+          receiptId: row[2],
+          provider: row[3],
+          sourceKind: row[4],
+          sourceEventId: row[5],
+          publishedAt: row[6],
+          providerRevisionAt: row[7],
+          observedAt: row[8],
+          effectiveAt: row[9],
+          lastSeenAt: row[10],
+          payloadPolicy: "minimal_redacted_v1" as const,
+          envelope: collectedEnvelope(row[12]),
+          symbolIds: parsedSymbols.filter(
+            (value): value is CanonicalSymbol => typeof value === "string",
+          ),
+        },
+      };
+    }),
+    hasMore: rows.length > input.limit,
+  };
+}
+
 async function getAggregateStatus(
   db: IngestionDatabase,
   input: GetIngestionStatusInput,
@@ -1419,6 +1600,8 @@ export function createIngestionRepository(
       getAggregateStatus(databaseFactory(), input),
     listCollectedEvents: (input) =>
       listCollectedEvents(databaseFactory(), input),
+    listProjectionChanges: (input) =>
+      listProjectionChanges(databaseFactory(), input),
   };
 }
 

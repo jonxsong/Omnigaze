@@ -125,7 +125,7 @@ describe("browser API response contracts", () => {
       checkDatabaseReadiness: async () => ({
         status: "ready",
         checkedAt: "2026-11-12T08:00:00.000Z",
-        schema: "sec-fair-access-v1",
+        schema: "owner-projection-cursor-v1",
       }),
       getIngestionReadiness: async () => ({
         mode: "request_time",
@@ -162,13 +162,14 @@ describe("browser API response contracts", () => {
     expect(body.capabilities).toContain("unified-intelligence-read-plane-v1");
     expect(body.capabilities).not.toContain("sec-filing-intelligence");
     expect(body.capabilities).toContain("durable-intelligence-inbox");
+    expect(body.capabilities).toContain("durable-owner-projection-cursor-v1");
     expect(body.capabilities).toContain("in-app-alert-rules");
     expect(body.capabilities).toContain("portfolio-pulse-v1");
     expect(body.capabilities).toContain("mcp-personal-state-writes-v1");
     expect(body.readiness.database).toEqual({
       status: "ready",
       checkedAt: "2026-11-12T08:00:00.000Z",
-      schema: "sec-fair-access-v1",
+      schema: "owner-projection-cursor-v1",
     });
     expect(body.readiness.ingestion).toMatchObject({
       mode: "request_time",
@@ -188,7 +189,7 @@ describe("browser API response contracts", () => {
       checkDatabaseReadiness: async () => ({
         status: "unavailable",
         checkedAt: "2026-11-12T08:00:00.000Z",
-        schema: "sec-fair-access-v1",
+        schema: "owner-projection-cursor-v1",
       }),
       getIngestionReadiness: async () => ({
         mode: "unavailable",
@@ -211,7 +212,7 @@ describe("browser API response contracts", () => {
       readiness: {
         database: {
           status: "unavailable",
-          schema: "sec-fair-access-v1",
+          schema: "owner-projection-cursor-v1",
         },
       },
     });
