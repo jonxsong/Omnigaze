@@ -51,6 +51,111 @@ test.describe("Omnigaze public experience", () => {
     await expect(page.getByText(/OMNIGAZE VIEW/).first()).toBeVisible();
   });
 
+  test("data status does not present response receipt as provider evidence freshness", async ({
+    page,
+  }) => {
+    await page.route("**/api/intelligence?*", async (route) => {
+      const responseTime = new Date().toISOString();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: [],
+          meta: {
+            dataMode: "live",
+            mode: "live",
+            providerCoverage: "partial",
+            coverage: "partial",
+            generatedAt: responseTime,
+            freshness: { state: "unknown", asOf: null, ageSeconds: null },
+            providers: [],
+            notice: "The provider did not supply an evidence timestamp.",
+          },
+        }),
+      });
+    });
+
+    await page.goto("/dashboard");
+    await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+    await page.getByRole("button", { name: "View data status" }).click();
+
+    const panel = page.getByRole("region", { name: "Source and provider status" });
+    const intelligenceStatus = panel
+      .getByText("Intelligence feed", { exact: true })
+      .locator("..");
+    await expect(intelligenceStatus).toContainText("Evidence time unavailable");
+    await expect(intelligenceStatus).toContainText(/Response received (just now|\d+s ago)/);
+    await expect(intelligenceStatus).not.toContainText("Evidence observed");
+
+    const refreshPolicy = panel
+      .getByText("Refresh policy", { exact: true })
+      .locator("..");
+    await expect(refreshPolicy).toContainText("Request-time while open");
+    await expect(refreshPolicy).toContainText("requests time out safely");
+    await expect(refreshPolicy).toContainText("Alerts are in-app only");
+    await expect(panel.getByText("Polling policy", { exact: true })).toHaveCount(0);
+  });
+
+  test("data status labels provider observation and health-check times separately", async ({
+    page,
+  }) => {
+    const checkedAt = new Date().toISOString();
+    const observedAt = new Date(Date.parse(checkedAt) - 60_000).toISOString();
+    await page.route("**/api/health", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          service: "Omnigaze web",
+          status: "healthy",
+          checkedAt,
+          providers: [
+            {
+              provider: "health-only-provider",
+              status: "healthy",
+              checkedAt,
+              latestObservedAt: null,
+              capabilities: ["market-news"],
+              attempted: true,
+            },
+            {
+              provider: "observed-provider",
+              status: "healthy",
+              checkedAt,
+              latestObservedAt: observedAt,
+              capabilities: ["market-news"],
+              attempted: true,
+            },
+          ],
+        }),
+      });
+    });
+
+    await page.goto("/dashboard");
+    await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+    await page.getByRole("button", { name: "View data status" }).click();
+
+    const panel = page.getByRole("region", { name: "Source and provider status" });
+    const applicationStatus = panel
+      .getByText("Application API", { exact: true })
+      .locator("..");
+    await expect(applicationStatus).toContainText(/Health checked (just now|\d+s ago)/);
+
+    const providerList = panel.getByLabel("Configured providers");
+    const healthOnlyProvider = providerList
+      .getByText("health-only-provider", { exact: true })
+      .locator("..");
+    await expect(healthOnlyProvider).toContainText("Evidence time unavailable");
+    await expect(healthOnlyProvider).toContainText(/Health checked (just now|\d+s ago)/);
+    await expect(healthOnlyProvider).not.toContainText("Evidence observed");
+
+    const observedProvider = providerList
+      .getByText("observed-provider", { exact: true })
+      .locator("..");
+    await expect(observedProvider).toContainText(/Evidence observed (\d+s|1m) ago/);
+    await expect(observedProvider).toContainText(/Health checked (just now|\d+s ago)/);
+  });
+
   test("a failed quote refresh labels retained data as last known", async ({
     page,
   }) => {

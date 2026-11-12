@@ -432,6 +432,64 @@ function formatFreshness(value: string | undefined, now: number) {
   }).format(new Date(timestamp))}`;
 }
 
+function formatTimestampAge(value: string | null | undefined, now: number) {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return null;
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1_000));
+  if (seconds < 15) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `on ${new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(timestamp))}`;
+}
+
+function formatEvidenceTiming(
+  observedAt: string | null | undefined,
+  responseReceivedAt: string | undefined,
+  now: number,
+) {
+  const observationAge = formatTimestampAge(observedAt, now);
+  if (observationAge) return `Evidence observed ${observationAge}`;
+
+  const receiptAge = formatTimestampAge(responseReceivedAt, now);
+  return receiptAge
+    ? `Evidence time unavailable · Response received ${receiptAge}`
+    : "Evidence time unavailable";
+}
+
+function formatHealthTiming(
+  checkedAt: string | null | undefined,
+  responseReceivedAt: string | undefined,
+  now: number,
+) {
+  const checkAge = formatTimestampAge(checkedAt, now);
+  if (checkAge) return `Health checked ${checkAge}`;
+
+  const receiptAge = formatTimestampAge(responseReceivedAt, now);
+  return receiptAge
+    ? `Health check time unavailable · Response received ${receiptAge}`
+    : "Health check time unavailable";
+}
+
+function formatProviderTiming(provider: ProviderReport, now: number) {
+  const observationAge = formatTimestampAge(provider.latestObservedAt, now);
+  const checkAge = formatTimestampAge(provider.checkedAt, now);
+  const observationLabel = observationAge
+    ? `Evidence observed ${observationAge}`
+    : "Evidence time unavailable";
+  const checkLabel = checkAge
+    ? `Health checked ${checkAge}`
+    : "Health check time unavailable";
+  return `${observationLabel} · ${checkLabel}`;
+}
+
 function sessionLabel(session: MarketSnapshot["session"]) {
   if (session === "regular") return "Provider session · Regular";
   if (session === "pre-market") return "Provider session · Pre-market";
@@ -1669,7 +1727,14 @@ export function MarketDashboard({
                     ? "Checking"
                     : "Unreachable"}
               </dd>
-              <small>{healthResource.error ?? formatFreshness(healthResource.data?.checkedAt ?? healthResource.receivedAt, now)}</small>
+              <small>
+                {healthResource.error ??
+                  formatHealthTiming(
+                    healthResource.data?.checkedAt,
+                    healthResource.receivedAt,
+                    now,
+                  )}
+              </small>
             </div>
             <div>
               <dt>Intelligence feed</dt>
@@ -1692,18 +1757,21 @@ export function MarketDashboard({
                   (intelligenceMatchesSelection &&
                   intelligenceResource.meta?.freshness.state === "fixture"
                     ? "Fixture timestamps are illustrative."
-                    : formatFreshness(
+                    : formatEvidenceTiming(
                         intelligenceMatchesSelection
-                          ? intelligenceResource.meta?.freshness.asOf ?? intelligenceResource.receivedAt
+                          ? intelligenceResource.meta?.freshness.asOf
+                          : undefined,
+                        intelligenceMatchesSelection
+                          ? intelligenceResource.receivedAt
                           : undefined,
                         now,
                       ))}
               </small>
             </div>
             <div>
-              <dt>Polling policy</dt>
-              <dd><span className="health-dot policy" />30s quotes · 60s intelligence</dd>
-              <small>Polling pauses while this tab is hidden and requests time out safely.</small>
+              <dt>Refresh policy</dt>
+              <dd><span className="health-dot policy" />Request-time while open</dd>
+              <small>Quotes refresh every 30s and intelligence every 60s while this tab is visible; requests time out safely. Alerts are in-app only.</small>
             </div>
           </dl>
 
@@ -1714,7 +1782,10 @@ export function MarketDashboard({
                   <span className={`health-dot ${provider.status}`} />
                   <strong>{provider.provider}</strong>
                   <span>{provider.status}</span>
-                  <small>{provider.message ?? formatFreshness(provider.latestObservedAt ?? provider.checkedAt, now)}</small>
+                  <small>
+                    {provider.message ? `${provider.message} · ` : ""}
+                    {formatProviderTiming(provider, now)}
+                  </small>
                 </div>
               ))
             ) : (
