@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CanonicalSymbol, MarketSnapshot } from "@/lib/market-types";
 import type { ProviderHealth, RawSourceEvent } from "@/lib/pipeline/contracts";
 import type {
@@ -6,12 +6,17 @@ import type {
   MarketDataProvider,
 } from "@/lib/providers/contracts";
 import {
+  createLiveMarketDataOrchestrator,
   LiveMarketDataOrchestrator,
   type ProviderCapability,
 } from "@/lib/services/live-market-data";
 import { getIntelligenceFeed, getMarketSnapshot } from "@/lib/services/market-intelligence";
 
 const NOW = new Date("2026-11-11T19:00:00.000Z");
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function health(
   provider: string,
@@ -95,6 +100,27 @@ function orchestrator(options: {
 }
 
 describe("live market data orchestration", () => {
+  it("keeps production SEC egress dormant even with a valid user agent", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const service = createLiveMarketDataOrchestrator({
+      SEC_USER_AGENT: "Omnigaze tests test@example.com",
+    });
+
+    const status = await service.getProviderStatus();
+    expect(status.providers.find((report) => report.provider === "sec-edgar")).toMatchObject({
+      status: "unconfigured",
+      message: "SEC requests are disabled pending a distributed Fair Access coordinator.",
+    });
+
+    await service.getIntelligenceFeed({
+      symbols: ["NASDAQ:NVDA"],
+      since: "2026-11-11T00:00:00.000Z",
+      limit: 5,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("uses a successful live snapshot and reports IEX-style limited coverage", async () => {
     const result = await orchestrator().getSnapshot("NASDAQ:NVDA");
 
@@ -213,6 +239,81 @@ describe("live market data orchestration", () => {
     expect(result.meta).toMatchObject({
       dataMode: "live",
       coverage: "complete",
+    });
+  });
+
+  it("decodes provider entities before classification and display without mutating the receipt", async () => {
+    const rawPayload = {
+      headline: "CEO&#39;s board investigati&#111;n &amp; review",
+      summary:
+        "Management &amp;amp; directors opened an independent investigation.",
+      symbols: ["NVDA"],
+      url: "https://example.test/news/encoded-42",
+    };
+    const sourceEvent: RawSourceEvent = {
+      source: "alpaca",
+      sourceKind: "licensed_news",
+      sourceEventId: "encoded-42",
+      publishedAt: "2026-11-11T18:58:00.000Z",
+      receivedAt: "2026-11-11T18:58:01.000Z",
+      payload: rawPayload,
+    };
+    const result = await orchestrator({
+      intelligence: [
+        {
+          provider: intelligenceProvider({ events: [sourceEvent] }),
+          capabilities: ["market-news"],
+        },
+      ],
+    }).getIntelligenceFeed({
+      symbols: ["NASDAQ:NVDA"],
+      since: "2026-11-11T00:00:00.000Z",
+      limit: 20,
+    });
+
+    expect(result.data[0]).toMatchObject({
+      headline: "CEO's board investigation & review",
+      summary: "Management & directors opened an independent investigation.",
+      category: "governance",
+      claimStatus: "official-investigation",
+    });
+    expect(sourceEvent.payload).toBe(rawPayload);
+    expect(rawPayload.headline).toContain("&#39;");
+    expect(rawPayload.summary).toContain("&amp;amp;");
+  });
+
+  it("falls back safely when decoded provider display text is blank", async () => {
+    const result = await orchestrator({
+      intelligence: [
+        {
+          provider: intelligenceProvider({
+            events: [
+              {
+                source: "alpaca",
+                sourceKind: "licensed_news",
+                sourceEventId: "blank-entity",
+                publishedAt: "2026-11-12T07:49:00.000Z",
+                receivedAt: "2026-11-12T07:50:00.000Z",
+                payload: {
+                  headline: "&nbsp;",
+                  summary: "&#160;",
+                  symbols: ["NVDA"],
+                },
+              },
+            ],
+          }),
+          capabilities: ["market-news"],
+        },
+      ],
+    }).getIntelligenceFeed({
+      symbols: ["NASDAQ:NVDA"],
+      since: "2026-11-11T00:00:00.000Z",
+      limit: 20,
+    });
+
+    expect(result.data[0]).toMatchObject({
+      headline: "Market intelligence update",
+      summary: null,
     });
   });
 

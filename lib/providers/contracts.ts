@@ -16,9 +16,23 @@ export interface IntelligenceSourceProvider {
     symbols: CanonicalSymbol[];
     since: string;
     limit: number;
-  }): Promise<RawSourceEvent[]>;
+  }): Promise<IntelligenceSourceResult>;
   getHealth(): Promise<ProviderHealth>;
 }
+
+/**
+ * A provider may retain successful peer results when only part of a bounded
+ * batch failed. Consumers must surface partial coverage instead of silently
+ * treating this envelope as a complete provider response.
+ */
+export type PartialIntelligenceSourceResult = {
+  events: RawSourceEvent[];
+  coverage: "partial";
+};
+
+export type IntelligenceSourceResult =
+  | RawSourceEvent[]
+  | PartialIntelligenceSourceResult;
 
 export type IntelligenceEventPageCursor = {
   token: string;

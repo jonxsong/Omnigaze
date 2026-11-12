@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { MarketSnapshot } from "@/lib/market-types";
 import type { ProviderHealth, RawSourceEvent } from "@/lib/pipeline/contracts";
 import type {
+  IntelligenceSourceResult,
   IntelligenceSourceProvider,
   MarketDataProvider,
 } from "@/lib/providers/contracts";
@@ -45,7 +46,7 @@ function marketProvider(overrides: Partial<MarketDataProvider> = {}): MarketData
 
 function intelligenceProvider(
   name: string,
-  events: RawSourceEvent[] | Error,
+  events: IntelligenceSourceResult | Error,
 ): IntelligenceSourceProvider {
   return {
     name,
@@ -172,6 +173,67 @@ describe("live market orchestration resilience", () => {
           latestObservedAt: "2026-11-11T18:44:00.000Z",
         },
         { provider: "filings-test", status: "degraded", attempted: true },
+      ],
+    });
+  });
+
+  it("retains a provider's partial SEC batch and reports its incomplete coverage", async () => {
+    const filing: RawSourceEvent = {
+      source: "sec-edgar",
+      sourceKind: "sec_filing",
+      sourceEventId: "0001045810-26-000001",
+      receivedAt: "2026-11-11T18:44:05.000Z",
+      publishedAt: "2026-11-11T18:44:00.000Z",
+      providerUpdatedAt: "2026-11-11T18:44:00.000Z",
+      payload: {
+        accessionNumber: "0001045810-26-000001",
+        cik: "1045810",
+        form: "8-K",
+        primaryDocument: "report.htm",
+        symbols: ["NASDAQ:NVDA", "NASDAQ:MSFT"],
+      },
+    };
+    const orchestrator = new LiveMarketDataOrchestrator({
+      marketProvider: marketProvider(),
+      intelligenceProviders: [
+        {
+          provider: intelligenceProvider("sec-edgar", {
+            coverage: "partial",
+            events: [filing],
+          }),
+          capabilities: ["sec-filings"],
+        },
+      ],
+      getDemoSnapshot: () => null,
+      getDemoEvents: () => [],
+      now: () => now,
+    });
+
+    const result = await orchestrator.getIntelligenceFeed({
+      symbols: ["NASDAQ:NVDA", "NASDAQ:MSFT"],
+      since: "2026-11-11T00:00:00.000Z",
+      limit: 10,
+    });
+
+    expect(result.data).toEqual([
+      expect.objectContaining({
+        id: "sec-edgar:0001045810-26-000001",
+        symbolIds: ["NASDAQ:MSFT", "NASDAQ:NVDA"],
+        sourceUrl:
+          "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000001/report.htm",
+      }),
+    ]);
+    expect(result.meta).toMatchObject({
+      dataMode: "live",
+      providerCoverage: "partial",
+      providers: [
+        {
+          provider: "sec-edgar",
+          status: "degraded",
+          attempted: true,
+          message:
+            "sec-edgar returned partial live coverage; successful results were retained.",
+        },
       ],
     });
   });

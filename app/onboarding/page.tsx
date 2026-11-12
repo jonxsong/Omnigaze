@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { AppLocaleProvider } from "@/components/app-locale";
 import { OmnigazeOnboarding } from "@/components/onboarding/omnigaze-onboarding";
 
 export const metadata: Metadata = {
@@ -10,5 +11,9 @@ export const metadata: Metadata = {
 
 export default async function OnboardingPage() {
   const user = await getChatGPTUser();
-  return <OmnigazeOnboarding isAuthenticated={Boolean(user)} />;
+  return (
+    <AppLocaleProvider>
+      <OmnigazeOnboarding isAuthenticated={Boolean(user)} />
+    </AppLocaleProvider>
+  );
 }

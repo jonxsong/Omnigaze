@@ -26,7 +26,9 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Lease-protected, cursor-based news ingestion with frozen windows, idempotent page replay, bounded retention, and safe aggregate health.
 - [x] Request-time inbox reconciliation that projects collected global receipts into owner-scoped state.
 - [ ] Verify the hosted hourly operator tick after refreshing the Omnigaze app connection; keep collection labeled `request_time` until the first successful checkpoint.
-- [ ] Configure a real SEC application/contact user agent and broaden CIK resolution beyond the initial supported set.
+- [x] Dormant SEC adapter with official ticker-catalog resolution, collision-safe class-share aliases, per-CIK request deduplication, bounded short-lived caching, global accession ordering, explicit partial-coverage reporting, and a production fail-closed activation gate.
+- [ ] Add a distributed Fair Access coordinator with bounded admission, then configure a truthful application/contact user agent and explicitly activate production SEC egress. `SEC_USER_AGENT` alone cannot enable requests.
+- [ ] Add durable scheduled SEC ingestion, historical backfill, and correction/removal reconciliation; the current adapter reads recent submissions on demand only.
 - [ ] Add sub-minute streaming infrastructure for true push updates; the alpha intentionally uses resilient REST polling.
 
 ## AI and MCP
@@ -50,5 +52,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Public secrets remain server-side; repository credential-pattern scans are part of release review.
 - [x] GitHub Actions runs the locked end-to-end release gates.
 - [ ] Rotate credentials that were ever shared outside the secret manager, then update the deployed secret values.
-- [ ] Split the largest client chunk and add production error/latency telemetry.
-- [ ] Complete Chinese localization for onboarding, dashboard, inbox, and research workspaces.
+- [x] Lazy-load the Recharts workspace and reduce the initial dashboard bundle by roughly one third.
+- [ ] Add production error and latency telemetry.
+- [x] Carry one persisted English/Chinese preference from the landing page through the full onboarding journey.
+- [ ] Complete Chinese localization for the dashboard, inbox, and research workspaces.

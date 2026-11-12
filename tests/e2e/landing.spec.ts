@@ -49,6 +49,10 @@ test.describe("Omnigaze public experience", () => {
     await expect(page.getByRole("link", { name: "Omnigaze home" })).toBeVisible();
     await expect(page.getByText("Core holdings", { exact: true }).first()).toBeVisible();
     await expect(page.getByText(/OMNIGAZE VIEW/).first()).toBeVisible();
+    await expect(page.locator(".chart-wrap .recharts-wrapper svg")).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page.getByText("Rendering price history", { exact: true })).toBeHidden();
   });
 
   test("Ask Omnigaze opens the explicit, sign-in-gated live analysis flow", async ({

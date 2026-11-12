@@ -26,6 +26,7 @@ import {
   Trash2,
   WalletCards,
 } from "lucide-react";
+import { useAppLocale } from "@/components/app-locale";
 import { stockWorkspaces } from "@/lib/demo-market-data";
 import type { CanonicalSymbol } from "@/lib/market-types";
 import {
@@ -34,11 +35,8 @@ import {
   type OnboardingDraft,
   type OnboardingDraftAdapter,
   type OnboardingGoal,
-  type OnboardingHorizon,
-  type OnboardingLiquidityNeed,
   type OnboardingInstrument,
   type OnboardingPosition,
-  type OnboardingRiskProfile,
   type OnboardingStep,
   ONBOARDING_MAX_SYMBOLS,
 } from "@/lib/onboarding-draft";
@@ -47,126 +45,8 @@ import {
   MAX_AVERAGE_COST_MICROS,
   MAX_QUANTITY_MICROS,
 } from "@/lib/portfolio/decimal";
+import { onboardingCopy } from "./onboarding-copy";
 import styles from "./omnigaze-onboarding.module.css";
-
-const steps = [
-  {
-    eyebrow: "YOUR MARKET",
-    title: "Choose the stocks that matter to you",
-    shortTitle: "Stocks",
-    description:
-      "Start with a focused watchlist. You can add or remove companies any time from the dashboard.",
-  },
-  {
-    eyebrow: "YOUR CONTEXT",
-    title: "Which of these do you own?",
-    shortTitle: "Holdings",
-    description:
-      "Position details help Omnigaze frame concentration and exposure. They never authorize trades.",
-  },
-  {
-    eyebrow: "YOUR PRIORITIES",
-    title: "What should Omnigaze prioritize?",
-    shortTitle: "Preferences",
-    description:
-      "Set the research lens for your feed. These choices rank context; they do not create trade recommendations.",
-  },
-  {
-    eyebrow: "READY TO GO",
-    title: "Your market, ready",
-    shortTitle: "Review",
-    description:
-      "Review what will shape your workspace, then open your personalized dashboard.",
-  },
-] as const;
-
-const goalOptions: Array<{
-  value: OnboardingGoal;
-  label: string;
-  detail: string;
-}> = [
-  {
-    value: "material-changes",
-    label: "Stay ahead of material changes",
-    detail: "Prioritize filings, guidance, and events that change the picture.",
-  },
-  {
-    value: "downside-risk",
-    label: "Monitor downside risk",
-    detail: "Bring emerging contradictions and governance risks forward.",
-  },
-  {
-    value: "long-term-thesis",
-    label: "Track a long-term thesis",
-    detail: "Connect new evidence to the durable drivers you care about.",
-  },
-  {
-    value: "earnings-prep",
-    label: "Prepare for earnings",
-    detail: "Surface expectations, changes, and unresolved questions.",
-  },
-  {
-    value: "portfolio-context",
-    label: "Understand portfolio context",
-    detail: "Keep concentration and cross-company signals visible.",
-  },
-];
-
-const horizonOptions: Array<{
-  value: OnboardingHorizon;
-  label: string;
-}> = [
-  { value: "days-weeks", label: "Days to weeks" },
-  { value: "months", label: "Several months" },
-  { value: "one-three-years", label: "1–3 years" },
-  { value: "three-plus-years", label: "3+ years" },
-];
-
-const riskOptions: Array<{
-  value: OnboardingRiskProfile;
-  label: string;
-  detail: string;
-}> = [
-  {
-    value: "early-warning",
-    label: "Early warning",
-    detail: "Show meaningful risks while evidence is still developing.",
-  },
-  {
-    value: "balanced",
-    label: "Balanced",
-    detail: "Balance emerging signals with confirmed material changes.",
-  },
-  {
-    value: "material-only",
-    label: "Material changes only",
-    detail: "Keep attention on the highest-consequence developments.",
-  },
-  {
-    value: "prefer-not-to-say",
-    label: "Prefer not to say",
-    detail: "Use Omnigaze's neutral materiality-first ranking.",
-  },
-];
-
-const liquidityOptions: Array<{
-  value: OnboardingLiquidityNeed;
-  label: string;
-}> = [
-  { value: "none-near-term", label: "No expected near-term need" },
-  { value: "within-twelve-months", label: "Possible need within 12 months" },
-  { value: "ongoing", label: "Ongoing liquidity needs" },
-  { value: "prefer-not-to-say", label: "Prefer not to say" },
-];
-
-const goalLabels = new Map(goalOptions.map((option) => [option.value, option.label]));
-const horizonLabels = new Map(
-  horizonOptions.map((option) => [option.value, option.label]),
-);
-const riskLabels = new Map(riskOptions.map((option) => [option.value, option.label]));
-const liquidityLabels = new Map(
-  liquidityOptions.map((option) => [option.value, option.label]),
-);
 
 const featuredInstruments: OnboardingInstrument[] = stockWorkspaces.map(
   ({ instrument }) => ({
@@ -201,6 +81,43 @@ function BrandMark() {
       <span />
       <span />
     </span>
+  );
+}
+
+function OnboardingLocaleToggle({
+  onLocaleChange,
+}: {
+  onLocaleChange: () => void;
+}) {
+  const { locale, setLocale } = useAppLocale();
+  const copy = onboardingCopy[locale].locale;
+
+  return (
+    <div className={styles.localeToggle} role="group" aria-label={copy.group}>
+      <button
+        type="button"
+        lang="en"
+        aria-pressed={locale === "en"}
+        onClick={() => {
+          onLocaleChange();
+          setLocale("en");
+        }}
+      >
+        {copy.english}
+      </button>
+      <span aria-hidden="true">/</span>
+      <button
+        type="button"
+        lang="zh-CN"
+        aria-pressed={locale === "zh-CN"}
+        onClick={() => {
+          onLocaleChange();
+          setLocale("zh-CN");
+        }}
+      >
+        {copy.chinese}
+      </button>
+    </div>
   );
 }
 
@@ -252,6 +169,14 @@ function StockIdentity({ instrument }: { instrument: OnboardingInstrument }) {
 }
 
 function SetupPreview({ draft }: { draft: OnboardingDraft }) {
+  const { locale } = useAppLocale();
+  const copy = onboardingCopy[locale];
+  const goalLabels = new Map(
+    copy.goals.map((option) => [option.value, option.label]),
+  );
+  const horizonLabels = new Map(
+    copy.horizons.map((option) => [option.value, option.label]),
+  );
   const selectedById = new Map(
     draft.instruments.map((instrument) => [instrument.id, instrument]),
   );
@@ -262,18 +187,18 @@ function SetupPreview({ draft }: { draft: OnboardingDraft }) {
   const owned = draft.positions.filter((position) => position.owned);
 
   return (
-    <aside className={styles.preview} aria-label="Personalization preview">
+    <aside className={styles.preview} aria-label={copy.preview.aria}>
       <div className={styles.previewHeading}>
         <span className={styles.previewOrb}><Sparkles size={17} /></span>
         <div>
-          <span>PERSONALIZATION PREVIEW</span>
-          <strong>Your Omnigaze workspace</strong>
+          <span>{copy.preview.eyebrow}</span>
+          <strong>{copy.preview.title}</strong>
         </div>
       </div>
 
       <div className={styles.previewWatchlist}>
         <div className={styles.previewLabelRow}>
-          <span>WATCHLIST</span>
+          <span>{copy.preview.watchlist}</span>
           <small>{selected.length}/{ONBOARDING_MAX_SYMBOLS}</small>
         </div>
         {selected.length > 0 ? (
@@ -283,7 +208,7 @@ function SetupPreview({ draft }: { draft: OnboardingDraft }) {
                 <span className={styles.stockAvatar}>{instrument.ticker[0]}</span>
                 <span><strong>{instrument.ticker}</strong><small>{instrument.sector ?? instrument.exchange}</small></span>
                 {owned.some((position) => position.symbolId === instrument.id) && (
-                  <span className={styles.ownedBadge}>OWNED</span>
+                  <span className={styles.ownedBadge}>{copy.preview.owned}</span>
                 )}
               </div>
             ))}
@@ -291,24 +216,24 @@ function SetupPreview({ draft }: { draft: OnboardingDraft }) {
         ) : (
           <div className={styles.previewEmpty}>
             <Eye size={17} />
-            <span>Your selected companies will appear here.</span>
+            <span>{copy.preview.empty}</span>
           </div>
         )}
       </div>
 
       <div className={styles.previewSignalGrid}>
         <div>
-          <span>Research horizon</span>
-          <strong>{draft.horizon ? horizonLabels.get(draft.horizon) : "Not set"}</strong>
+          <span>{copy.preview.researchHorizon}</span>
+          <strong>{draft.horizon ? horizonLabels.get(draft.horizon) : copy.preview.notSet}</strong>
         </div>
         <div>
-          <span>Holdings added</span>
+          <span>{copy.preview.holdingsAdded}</span>
           <strong>{owned.length}</strong>
         </div>
       </div>
 
       <div className={styles.previewLens}>
-        <span>YOUR RESEARCH LENS</span>
+        <span>{copy.preview.researchLens}</span>
         {draft.goals.length > 0 ? (
           <ul>
             {draft.goals.slice(0, 3).map((goal) => (
@@ -316,15 +241,15 @@ function SetupPreview({ draft }: { draft: OnboardingDraft }) {
             ))}
           </ul>
         ) : (
-          <p>Choose goals to explain why an event is relevant to you.</p>
+          <p>{copy.preview.emptyLens}</p>
         )}
       </div>
 
       <div className={styles.previewTrust}>
         <ShieldCheck size={16} />
         <div>
-          <strong>Transparent by default</strong>
-          <span>Source, freshness, and demo labels remain visible after personalization.</span>
+          <strong>{copy.preview.trustTitle}</strong>
+          <span>{copy.preview.trustBody}</span>
         </div>
       </div>
     </aside>
@@ -334,6 +259,8 @@ function SetupPreview({ draft }: { draft: OnboardingDraft }) {
 export function OmnigazeOnboarding({
   isAuthenticated = false,
 }: OmnigazeOnboardingProps) {
+  const { hydrated: localeHydrated, locale } = useAppLocale();
+  const copy = onboardingCopy[locale];
   const router = useRouter();
   const reduceMotion = useReducedMotion();
   const adapterRef = useRef<OnboardingDraftAdapter | null>(null);
@@ -351,6 +278,26 @@ export function OmnigazeOnboarding({
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isCompleting, setIsCompleting] = useState(false);
+  const goalLabels = useMemo(
+    () => new Map(copy.goals.map((option) => [option.value, option.label])),
+    [copy.goals],
+  );
+  const horizonLabels = useMemo(
+    () => new Map(copy.horizons.map((option) => [option.value, option.label])),
+    [copy.horizons],
+  );
+  const riskLabels = useMemo(
+    () => new Map(copy.risks.map((option) => [option.value, option.label])),
+    [copy.risks],
+  );
+  const liquidityLabels = useMemo(
+    () => new Map(copy.liquidity.map((option) => [option.value, option.label])),
+    [copy.liquidity],
+  );
+
+  useEffect(() => {
+    if (localeHydrated) document.title = copy.pageTitle;
+  }, [copy.pageTitle, localeHydrated]);
 
   useEffect(() => {
     let active = true;
@@ -436,11 +383,7 @@ export function OmnigazeOnboarding({
               }
             | null;
           if (!response.ok) {
-            throw new Error(
-              typeof body?.error === "string"
-                ? body.error
-                : "Stock search is temporarily unavailable.",
-            );
+            throw new Error("catalog-search-unavailable");
           }
           const data = Array.isArray(body?.data)
             ? body.data.flatMap((candidate): OnboardingInstrument[] => {
@@ -501,7 +444,7 @@ export function OmnigazeOnboarding({
             error:
               error instanceof Error
                 ? error.message
-                : "Stock search is temporarily unavailable.",
+                : "catalog-search-unavailable",
           });
         });
     }, 250);
@@ -632,29 +575,33 @@ export function OmnigazeOnboarding({
     const nextErrors: Record<string, string> = {};
 
     if (draft.currentStep === 0 && draft.symbols.length === 0) {
-      nextErrors.stocks = "Choose at least one stock to personalize your dashboard.";
+      nextErrors.stocks = copy.validation.stocks;
     }
 
     if (draft.currentStep === 1) {
       for (const position of ownedPositions) {
         const instrument = selectedInstrumentById.get(position.symbolId);
         if (!isValidShareQuantity(position.shares)) {
-          nextErrors[`shares-${position.symbolId}`] = `Enter a share quantity for ${instrument?.ticker ?? position.symbolId}.`;
+          nextErrors[`shares-${position.symbolId}`] = copy.validation.shares(
+            instrument?.ticker ?? position.symbolId,
+          );
         }
         if (position.averageCost && !isValidAverageCost(position.averageCost)) {
-          nextErrors[`cost-${position.symbolId}`] = `Enter a valid average cost for ${instrument?.ticker ?? position.symbolId}, or leave it blank.`;
+          nextErrors[`cost-${position.symbolId}`] = copy.validation.averageCost(
+            instrument?.ticker ?? position.symbolId,
+          );
         }
       }
     }
 
     if (draft.currentStep === 2 && !draft.preferencesSkipped) {
       if (draft.goals.length === 0) {
-        nextErrors.goals = "Choose at least one research goal.";
+        nextErrors.goals = copy.validation.goals;
       }
-      if (!draft.horizon) nextErrors.horizon = "Choose a research horizon.";
-      if (!draft.riskProfile) nextErrors.risk = "Choose a risk sensitivity.";
+      if (!draft.horizon) nextErrors.horizon = copy.validation.horizon;
+      if (!draft.riskProfile) nextErrors.risk = copy.validation.risk;
       if (!draft.liquidityNeed) {
-        nextErrors.liquidity = "Choose a liquidity preference.";
+        nextErrors.liquidity = copy.validation.liquidity;
       }
     }
 
@@ -727,11 +674,8 @@ export function OmnigazeOnboarding({
           },
           body: JSON.stringify(draft),
         });
-        const body = (await response.json().catch(() => null)) as
-          | { error?: string }
-          | null;
         if (!response.ok) {
-          throw new Error(body?.error || "Account setup could not be synced.");
+          throw new Error("onboarding-sync-failed");
         }
       }
       const completed = await adapterRef.current.complete(draft, {
@@ -740,13 +684,12 @@ export function OmnigazeOnboarding({
       setDraft(completed);
       setSaveState("saved");
       router.push("/dashboard");
-    } catch (error) {
+    } catch {
       setSaveState("error");
       setErrors({
-        complete:
-          error instanceof Error
-            ? `${error.message} Your existing account data was not replaced; retrying is safe.`
-            : "We could not save this setup. Your existing account data was not replaced; retrying is safe.",
+        complete: isAuthenticated
+          ? copy.validation.syncFailed
+          : copy.validation.saveFailed,
       });
       focusError("complete");
     } finally {
@@ -766,29 +709,29 @@ export function OmnigazeOnboarding({
               maxLength={64}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search any active U.S. stock"
-              aria-label="Search active U.S. stocks"
+              placeholder={copy.search.placeholder}
+              aria-label={copy.search.aria}
               aria-describedby={errors.stocks ? "stocks-error" : "stock-search-note"}
               aria-invalid={Boolean(errors.stocks)}
             />
             <span>{draft.symbols.length}/{ONBOARDING_MAX_SYMBOLS}</span>
           </div>
           <p id="stock-search-note" className={styles.fieldNote}>
-            Search the active U.S. equity catalog. Featured companies appear before you type; no brokerage connection is required.
+            {copy.search.note}
           </p>
           {activeCatalogPhase === "loading" && (
             <p className={styles.fieldNote} role="status">
-              <LoaderCircle size={13} className={styles.spinner} /> Searching the live asset catalog…
+              <LoaderCircle size={13} className={styles.spinner} /> {copy.search.searching}
             </p>
           )}
           {activeCatalogPhase === "ready" && catalogSearch.freshness === "stale" && (
             <p className={styles.fieldNote} role="status">
-              Catalog refresh is delayed; showing the latest verified cached matches.
+              {copy.search.stale}
             </p>
           )}
           {activeCatalogPhase === "error" && (
             <p className={styles.fieldError} role="alert">
-              {catalogSearch.error ?? "Stock search is temporarily unavailable."} Your selected companies are still saved.
+              {copy.search.errorAlert}
             </p>
           )}
           {errors.stocks && <p id="stocks-error" className={styles.fieldError}>{errors.stocks}</p>}
@@ -796,7 +739,7 @@ export function OmnigazeOnboarding({
           {draft.symbols.length > 0 && (
             <div className={styles.selectedSection}>
               <div className={styles.miniHeading}>
-                <span>SELECTED</span><small>{draft.symbols.length} stocks</small>
+                <span>{copy.search.selected}</span><small>{copy.search.selectedCount(draft.symbols.length)}</small>
               </div>
               <div className={styles.selectedChips}>
                 {selectedStocks.map((instrument) => (
@@ -804,7 +747,7 @@ export function OmnigazeOnboarding({
                     type="button"
                     key={instrument.id}
                     onClick={() => toggleInstrument(instrument)}
-                    aria-label={`Remove ${instrument.ticker}`}
+                    aria-label={copy.search.remove(instrument.ticker)}
                   >
                     <span>{instrument.ticker}</span><Trash2 size={12} />
                   </button>
@@ -813,7 +756,7 @@ export function OmnigazeOnboarding({
             </div>
           )}
 
-          <div className={styles.stockResults} aria-label={normalizedQuery ? "Asset catalog matches" : "Featured stocks"}>
+          <div className={styles.stockResults} aria-label={normalizedQuery ? copy.search.matchesAria : copy.search.featuredAria}>
             {visibleStocks.length > 0 ? (
               visibleStocks.map((instrument) => {
                 const selected = draft.symbols.includes(instrument.id);
@@ -838,17 +781,17 @@ export function OmnigazeOnboarding({
             ) : activeCatalogPhase === "loading" ? (
               <div className={styles.noResults} role="status">
                 <LoaderCircle className={styles.spinner} size={18} />
-                <div><strong>Searching the catalog</strong><span>Checking active U.S. equities.</span></div>
+                <div><strong>{copy.search.searchingTitle}</strong><span>{copy.search.searchingBody}</span></div>
               </div>
             ) : activeCatalogPhase === "error" ? (
               <div className={styles.noResults}>
                 <Search size={18} />
-                <div><strong>Catalog unavailable</strong><span>Try again shortly; your draft is unchanged.</span></div>
+                <div><strong>{copy.search.unavailableTitle}</strong><span>{copy.search.unavailableBody}</span></div>
               </div>
             ) : (
               <div className={styles.noResults}>
                 <Search size={18} />
-                <div><strong>No active U.S. equity match</strong><span>Try the full ticker or company name.</span></div>
+                <div><strong>{copy.search.noMatchTitle}</strong><span>{copy.search.noMatchBody}</span></div>
               </div>
             )}
           </div>
@@ -862,8 +805,8 @@ export function OmnigazeOnboarding({
           <div className={styles.privacyNotice}>
             <LockKeyhole size={17} />
             <div>
-              <strong>Private, optional context</strong>
-              <span>Saved only in this browser during the anonymous alpha. Omnigaze cannot place trades.</span>
+              <strong>{copy.holdings.privacyTitle}</strong>
+              <span>{copy.holdings.privacyBody}</span>
             </div>
           </div>
 
@@ -890,7 +833,7 @@ export function OmnigazeOnboarding({
                       }
                     >
                       <span aria-hidden="true" />
-                      {position.owned ? "I own this" : "Watch only"}
+                      {position.owned ? copy.holdings.owned : copy.holdings.watchOnly}
                     </button>
                   </div>
 
@@ -904,7 +847,7 @@ export function OmnigazeOnboarding({
                         transition={{ duration: reduceMotion ? 0 : 0.18 }}
                       >
                         <label>
-                          <span>Shares <strong>Required</strong></span>
+                          <span>{copy.holdings.shares} <strong>{copy.holdings.required}</strong></span>
                           <input
                             id={`shares-${instrument.id}`}
                             inputMode="decimal"
@@ -922,7 +865,7 @@ export function OmnigazeOnboarding({
                           {sharesError && <small id={`shares-error-${instrument.ticker}`} className={styles.fieldError}>{sharesError}</small>}
                         </label>
                         <label>
-                          <span>Average cost per share <em>Optional</em></span>
+                          <span>{copy.holdings.averageCost} <em>{copy.holdings.optional}</em></span>
                           <div className={styles.currencyInput}>
                             <span>$</span>
                             <input
@@ -952,7 +895,7 @@ export function OmnigazeOnboarding({
 
           <div className={styles.contextNote}>
             <CircleDollarSign size={16} />
-            <p>Cost basis is used only for position context. Demo prices will never be presented as real portfolio value or profit and loss.</p>
+            <p>{copy.holdings.contextNote}</p>
           </div>
         </div>
       );
@@ -967,11 +910,11 @@ export function OmnigazeOnboarding({
             className={styles.choiceSection}
             aria-describedby={errors.goals ? "goals-error" : "goals-note"}
           >
-            <legend>What brings you back to the market?</legend>
-            <div className={styles.legendMeta}><span id="goals-note">Choose up to three</span><small>{draft.goals.length}/3</small></div>
+            <legend>{copy.preferences.goalsLegend}</legend>
+            <div className={styles.legendMeta}><span id="goals-note">{copy.preferences.chooseUpToThree}</span><small>{draft.goals.length}/3</small></div>
             {errors.goals && <p id="goals-error" className={styles.fieldError}>{errors.goals}</p>}
             <div className={styles.goalGrid}>
-              {goalOptions.map((option) => {
+              {copy.goals.map((option) => {
                 const checked = draft.goals.includes(option.value);
                 const disabled = !checked && draft.goals.length >= 3;
                 return (
@@ -991,11 +934,11 @@ export function OmnigazeOnboarding({
           </fieldset>
 
           <fieldset id="horizon" tabIndex={-1} className={styles.choiceSection}>
-            <legend>Research horizon</legend>
-            <p>Which time frame should contextualize new evidence?</p>
+            <legend>{copy.preferences.horizonLegend}</legend>
+            <p>{copy.preferences.horizonPrompt}</p>
             {errors.horizon && <p className={styles.fieldError}>{errors.horizon}</p>}
             <div className={styles.segmentedChoices}>
-              {horizonOptions.map((option) => (
+              {copy.horizons.map((option) => (
                 <label key={option.value} data-selected={draft.horizon === option.value}>
                   <input
                     type="radio"
@@ -1017,11 +960,11 @@ export function OmnigazeOnboarding({
           </fieldset>
 
           <fieldset id="risk" tabIndex={-1} className={styles.choiceSection}>
-            <legend>Risk sensitivity</legend>
-            <p>How early should developing risk appear in your feed?</p>
+            <legend>{copy.preferences.riskLegend}</legend>
+            <p>{copy.preferences.riskPrompt}</p>
             {errors.risk && <p className={styles.fieldError}>{errors.risk}</p>}
             <div className={styles.radioCards}>
-              {riskOptions.map((option) => (
+              {copy.risks.map((option) => (
                 <label key={option.value} data-selected={draft.riskProfile === option.value}>
                   <input
                     type="radio"
@@ -1044,11 +987,11 @@ export function OmnigazeOnboarding({
           </fieldset>
 
           <fieldset id="liquidity" tabIndex={-1} className={styles.choiceSection}>
-            <legend>Liquidity preference</legend>
-            <p>Optional context for prioritizing near-term risks.</p>
+            <legend>{copy.preferences.liquidityLegend}</legend>
+            <p>{copy.preferences.liquidityPrompt}</p>
             {errors.liquidity && <p className={styles.fieldError}>{errors.liquidity}</p>}
             <div className={styles.segmentedChoices}>
-              {liquidityOptions.map((option) => (
+              {copy.liquidity.map((option) => (
                 <label key={option.value} data-selected={draft.liquidityNeed === option.value}>
                   <input
                     type="radio"
@@ -1071,7 +1014,7 @@ export function OmnigazeOnboarding({
 
           <div className={styles.researchBoundary}>
             <ShieldCheck size={17} />
-            <p><strong>Research support, not financial advice.</strong> These answers tune ranking and explanation. They never trigger a trade or turn an inference into a fact.</p>
+            <p><strong>{copy.preferences.boundaryTitle}</strong> {copy.preferences.boundaryBody}</p>
           </div>
         </div>
       );
@@ -1088,17 +1031,17 @@ export function OmnigazeOnboarding({
         <section className={styles.reviewHero}>
           <span className={styles.reviewIcon}><CheckCircle2 size={24} /></span>
           <div>
-            <span>SETUP COMPLETE</span>
-            <h2>{draft.symbols.length} stocks, one focused market view</h2>
-            <p>Omnigaze will use this context to organize evidence—not to make decisions for you.</p>
+            <span>{copy.review.complete}</span>
+            <h2>{copy.review.title(draft.symbols.length)}</h2>
+            <p>{copy.review.body}</p>
           </div>
         </section>
 
         <div className={styles.reviewGrid}>
           <section className={styles.reviewCard}>
             <div className={styles.reviewCardHeading}>
-              <div><Eye size={16} /><span>Watchlist</span></div>
-              <button type="button" onClick={() => setStep(0)}>Edit</button>
+              <div><Eye size={16} /><span>{copy.review.watchlist}</span></div>
+              <button type="button" onClick={() => setStep(0)}>{copy.review.edit}</button>
             </div>
             <div className={styles.reviewSymbols}>
               {selectedStocks.map((instrument) => (
@@ -1109,36 +1052,36 @@ export function OmnigazeOnboarding({
 
           <section className={styles.reviewCard}>
             <div className={styles.reviewCardHeading}>
-              <div><WalletCards size={16} /><span>Holdings</span></div>
-              <button type="button" onClick={() => setStep(1)}>Edit</button>
+              <div><WalletCards size={16} /><span>{copy.review.holdings}</span></div>
+              <button type="button" onClick={() => setStep(1)}>{copy.review.edit}</button>
             </div>
             {ownedPositions.length > 0 ? (
               <ul className={styles.reviewList}>
                 {ownedPositions.map((position) => (
                   <li key={position.symbolId}>
                     <strong>{selectedInstrumentById.get(position.symbolId)?.ticker}</strong>
-                    <span>{position.shares} shares{position.averageCost ? ` · $${position.averageCost} avg.` : ""}</span>
+                    <span>{copy.review.position(position.shares, position.averageCost)}</span>
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className={styles.reviewEmpty}>No position details added.</p>
+              <p className={styles.reviewEmpty}>{copy.review.noPositions}</p>
             )}
           </section>
 
           <section className={`${styles.reviewCard} ${styles.reviewWide}`}>
             <div className={styles.reviewCardHeading}>
-              <div><Target size={16} /><span>Research priorities</span></div>
-              <button type="button" onClick={() => setStep(2)}>Edit</button>
+              <div><Target size={16} /><span>{copy.review.priorities}</span></div>
+              <button type="button" onClick={() => setStep(2)}>{copy.review.edit}</button>
             </div>
             {draft.preferencesSkipped ? (
-              <p className={styles.reviewEmpty}>Neutral, materiality-first ranking.</p>
+              <p className={styles.reviewEmpty}>{copy.review.neutral}</p>
             ) : (
               <div className={styles.preferenceSummary}>
-                <div><span>Goals</span><strong>{draft.goals.map((goal) => goalLabels.get(goal)).join(" · ")}</strong></div>
-                <div><span>Horizon</span><strong>{draft.horizon ? horizonLabels.get(draft.horizon) : "Not set"}</strong></div>
-                <div><span>Risk</span><strong>{draft.riskProfile ? riskLabels.get(draft.riskProfile) : "Not set"}</strong></div>
-                <div><span>Liquidity</span><strong>{draft.liquidityNeed ? liquidityLabels.get(draft.liquidityNeed) : "Not set"}</strong></div>
+                <div><span>{copy.review.goals}</span><strong>{draft.goals.map((goal) => goalLabels.get(goal)).join(" · ")}</strong></div>
+                <div><span>{copy.review.horizon}</span><strong>{draft.horizon ? horizonLabels.get(draft.horizon) : copy.preview.notSet}</strong></div>
+                <div><span>{copy.review.risk}</span><strong>{draft.riskProfile ? riskLabels.get(draft.riskProfile) : copy.preview.notSet}</strong></div>
+                <div><span>{copy.review.liquidity}</span><strong>{draft.liquidityNeed ? liquidityLabels.get(draft.liquidityNeed) : copy.preview.notSet}</strong></div>
               </div>
             )}
           </section>
@@ -1147,67 +1090,79 @@ export function OmnigazeOnboarding({
         <div className={styles.localStorageCard}>
           {isAuthenticated ? <ShieldCheck size={18} /> : <LockKeyhole size={18} />}
           <div>
-            <strong>{isAuthenticated ? "Ready to sync safely" : "Saved on this device"}</strong>
+            <strong>{isAuthenticated ? copy.review.authenticatedTitle : copy.review.localTitle}</strong>
             <p>
               {isAuthenticated
-                ? "Completing setup adds these stocks and new positions to your account. Existing watchlists and holdings are preserved; research preferences stay on this device for now."
-                : "This anonymous alpha stores setup in your browser. You can sign in from the dashboard to sync the watchlist across devices."}
+                ? copy.review.authenticatedBody
+                : copy.review.localBody}
             </p>
           </div>
-          <span>{isAuthenticated ? "ACCOUNT" : "LOCAL"}</span>
+          <span>{isAuthenticated ? copy.review.accountBadge : copy.review.localBadge}</span>
         </div>
       </div>
     );
   }
 
-  const currentStep = steps[draft.currentStep];
+  const currentStep = copy.steps[draft.currentStep];
   const hasAnyPreferences =
     draft.goals.length > 0 ||
     Boolean(draft.horizon || draft.riskProfile || draft.liquidityNeed);
 
-  if (!hydrated) {
+  if (!localeHydrated || !hydrated) {
     return (
-      <main className={styles.loadingShell} aria-busy="true">
+      <main
+        className={styles.loadingShell}
+        lang={locale}
+        data-locale={locale}
+        data-hydrated="false"
+        aria-busy="true"
+      >
         <BrandMark />
         <LoaderCircle className={styles.spinner} size={20} />
-        <strong>Restoring your Omnigaze setup</strong>
-        <span>Saved only on this device</span>
+        <strong>{copy.loading.title}</strong>
+        <span>{copy.loading.subtitle}</span>
       </main>
     );
   }
 
   return (
-    <main className={styles.shell}>
+    <main
+      className={styles.shell}
+      lang={locale}
+      data-locale={locale}
+      data-hydrated="true"
+    >
       <header className={styles.header}>
-        <Link href="/" className={styles.brand} aria-label="Omnigaze home">
+        <Link href="/" className={styles.brand} aria-label={copy.chrome.homeAria}>
           <BrandMark />
           <span>OMNIGAZE</span>
-          <small>ALPHA</small>
+          <small>{copy.chrome.alpha}</small>
         </Link>
-        <div className={styles.headerProgress} aria-label={`Step ${draft.currentStep + 1} of ${steps.length}`}>
-          <span>Step {draft.currentStep + 1} of {steps.length}</span>
-          <div><i style={{ width: `${((draft.currentStep + 1) / steps.length) * 100}%` }} /></div>
+        <div className={styles.headerProgress} aria-label={copy.chrome.progressAria(draft.currentStep + 1, copy.steps.length)}>
+          <span>{copy.chrome.progress(draft.currentStep + 1, copy.steps.length)}</span>
+          <div><i style={{ width: `${((draft.currentStep + 1) / copy.steps.length) * 100}%` }} /></div>
         </div>
         <div className={styles.headerActions}>
           <span className={`${styles.saveStatus} ${styles[saveState]}`} role="status" aria-live="polite">
             {saveState === "restoring" || saveState === "saving" ? <LoaderCircle size={13} /> : saveState === "error" ? <span>!</span> : <Check size={13} />}
             {saveState === "restoring"
-              ? "Restoring"
+              ? copy.chrome.restoring
               : saveState === "saving"
-                ? "Saving"
+                ? copy.chrome.saving
                 : saveState === "error"
-                  ? "Local save unavailable"
-                  : "Saved on this device"}
+                  ? copy.chrome.saveError
+                  : copy.chrome.saved}
           </span>
-          <Link href="/">Exit setup</Link>
+          <OnboardingLocaleToggle onLocaleChange={() => setErrors({})} />
+          <Link href="/">{copy.chrome.exit}</Link>
         </div>
       </header>
 
       <div className={styles.layout}>
-        <nav className={styles.stepRail} aria-label="Onboarding progress">
-          <span className={styles.railEyebrow}>PERSONALIZE OMNIGAZE</span>
+        <nav className={styles.stepRail} aria-label={copy.chrome.railAria}>
+          <span className={styles.railEyebrow}>{copy.chrome.railEyebrow}</span>
           <ol>
-            {steps.map((step, index) => {
+            {copy.steps.map((step, index) => {
               const available = index <= draft.highestStep;
               const active = index === draft.currentStep;
               const complete = index < draft.highestStep || draft.completedAt;
@@ -1228,7 +1183,7 @@ export function OmnigazeOnboarding({
           </ol>
           <div className={styles.railTrust}>
             <LockKeyhole size={15} />
-            <span><strong>Local by default</strong>Setup stays in this browser.</span>
+            <span><strong>{copy.chrome.localTitle}</strong>{copy.chrome.localBody}</span>
           </div>
         </nav>
 
@@ -1256,29 +1211,29 @@ export function OmnigazeOnboarding({
             <div>
               {draft.currentStep > 0 && (
                 <button type="button" className={styles.backButton} onClick={goBack}>
-                  <ArrowLeft size={15} /> Back
+                  <ArrowLeft size={15} /> {copy.actions.back}
                 </button>
               )}
             </div>
             <div className={styles.actionGroup}>
               {draft.currentStep === 0 && (
                 <button type="button" className={styles.skipButton} onClick={() => void skipSetup()}>
-                  Skip setup for now
+                  {copy.actions.skipSetup}
                 </button>
               )}
               {draft.currentStep === 1 && ownedPositions.length === 0 && (
                 <button type="button" className={styles.skipButton} onClick={skipHoldings}>
-                  Skip holdings
+                  {copy.actions.skipHoldings}
                 </button>
               )}
               {draft.currentStep === 2 && !hasAnyPreferences && (
                 <button type="button" className={styles.skipButton} onClick={skipPreferences}>
-                  Use neutral defaults
+                  {copy.actions.neutralDefaults}
                 </button>
               )}
               {draft.currentStep < 3 ? (
                 <button type="button" className={styles.primaryButton} onClick={continueSetup}>
-                  Continue <ArrowRight size={15} />
+                  {copy.actions.continue} <ArrowRight size={15} />
                 </button>
               ) : (
                 <button
@@ -1288,7 +1243,7 @@ export function OmnigazeOnboarding({
                   onClick={() => void completeSetup()}
                 >
                   {isCompleting ? <LoaderCircle className={styles.spinner} size={15} /> : <Sparkles size={15} />}
-                  Build my dashboard
+                  {copy.actions.buildDashboard}
                 </button>
               )}
             </div>

@@ -29,6 +29,15 @@
   mask-image: linear-gradient(to bottom, black, transparent 48%);
 }
 
+.shell[data-locale="zh-CN"],
+.loadingShell[data-locale="zh-CN"] {
+  font-family: Inter, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+}
+
+.shell[data-locale="zh-CN"] :is(h1, h2, h3, p) {
+  text-wrap: pretty;
+}
+
 .header {
   position: relative;
   z-index: 20;
@@ -145,6 +154,37 @@
 }
 
 .headerActions > a:hover { color: var(--onboard-copy); }
+
+.localeToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #405667;
+  font-size: 9px;
+}
+
+.localeToggle button {
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #708596;
+  cursor: pointer;
+  font: inherit;
+}
+
+.localeToggle button:hover { color: #c5d4dc; }
+
+.localeToggle button[aria-pressed="true"] {
+  background: rgb(98 217 255 / 9%);
+  color: var(--onboard-cyan);
+}
+
+.localeToggle button:focus-visible {
+  outline: 2px solid var(--onboard-cyan);
+  outline-offset: 2px;
+}
 
 .saveStatus {
   display: inline-flex;
@@ -978,6 +1018,8 @@
   .brand > small { display: none; }
   .brand > span:nth-child(2) { font-size: 10px; }
   .headerProgress { right: 14px; left: 14px; }
+  .headerActions { gap: 6px; }
+  .localeToggle button { padding-inline: 4px; }
   .layout { width: calc(100% - 20px); padding: 48px 0 112px; }
   .stepHeading { margin: 0 5px 20px; }
   .stepHeading h1 { margin-top: 7px; font-size: 29px; line-height: 1.08; }

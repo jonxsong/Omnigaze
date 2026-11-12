@@ -1,16 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import {
   ArrowRight,
   Bell,
@@ -84,6 +75,8 @@ import {
 import type { IntelligenceInboxCounts } from "@/lib/intelligence-inbox/contracts";
 import { OmnigazeViewDialog } from "@/components/omnigaze-view-dialog";
 import { DailyBriefCard } from "@/components/daily-brief-card";
+
+const MarketPriceChart = lazy(() => import("@/components/market-price-chart"));
 
 const timeframes = ["1D", "1W", "1M", "3M", "1Y"] as const;
 type Timeframe = (typeof timeframes)[number];
@@ -650,25 +643,6 @@ function materialityLabel(materiality: Materiality) {
   return materiality === "critical"
     ? "Critical"
     : `${materiality[0].toUpperCase()}${materiality.slice(1)}`;
-}
-
-function ChartTooltip({
-  active,
-  payload,
-}: {
-  active?: boolean;
-  payload?: Array<{ payload: MarketPoint }>;
-}) {
-  if (!active || !payload?.[0]) return null;
-  const point = payload[0].payload;
-
-  return (
-    <div className="chart-tooltip">
-      <span>{point.label}</span>
-      <strong>{formatPrice(point.price)}</strong>
-      <small>{formatCompact(point.volume)} volume</small>
-    </div>
-  );
 }
 
 function BrandMark() {
@@ -2356,42 +2330,17 @@ export function MarketDashboard({
 
             <div className="chart-wrap" aria-label={`${selectedInstrument.ticker} ${timeframe} price chart`}>
               {chartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartData} margin={{ top: 10, right: 8, left: 0, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={chartColor} stopOpacity={0.24} />
-                        <stop offset="100%" stopColor={chartColor} stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid stroke="#172331" strokeDasharray="2 5" vertical={false} />
-                    <XAxis
-                      dataKey="label"
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fill: "#677688", fontSize: 10 }}
-                      minTickGap={28}
-                    />
-                    <YAxis
-                      orientation="right"
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fill: "#677688", fontSize: 10 }}
-                      domain={["dataMin - 2", "dataMax + 2"]}
-                      tickFormatter={(value) => `$${Number(value).toFixed(0)}`}
-                      width={48}
-                    />
-                    <Tooltip content={<ChartTooltip />} cursor={{ stroke: "#3a4b5f" }} />
-                    <Area
-                      type="monotone"
-                      dataKey="price"
-                      stroke={chartColor}
-                      strokeWidth={2}
-                      fill="url(#priceFill)"
-                      isAnimationActive={false}
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+                <Suspense
+                  fallback={
+                    <div className="chart-unavailable-state" role="status">
+                      <Clock3 size={20} />
+                      <strong>Rendering price history</strong>
+                      <span>Preparing the interactive chart.</span>
+                    </div>
+                  }
+                >
+                  <MarketPriceChart color={chartColor} data={chartData} />
+                </Suspense>
               ) : (
                 <div className="chart-unavailable-state" role="status">
                   {chartUnavailable ? <WifiOff size={20} /> : <Clock3 size={20} />}

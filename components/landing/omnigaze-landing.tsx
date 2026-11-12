@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect } from "react";
 import { MotionConfig, motion } from "framer-motion";
 import {
   ArrowRight,
@@ -47,6 +47,7 @@ const featureMeta = [
 
 const landingCopy = {
   en: {
+    pageTitle: "See what moves your stocks — Omnigaze",
     locale: { group: "Landing page language", english: "English", chinese: "中文" },
     header: {
       home: "Omnigaze home",
@@ -193,6 +194,7 @@ const landingCopy = {
     },
   },
   "zh-CN": {
+    pageTitle: "洞察股票为何波动 — Omnigaze",
     locale: { group: "落地页语言", english: "English", chinese: "中文" },
     header: {
       home: "Omnigaze 首页",
@@ -525,22 +527,20 @@ function LocaleToggle() {
 }
 
 function OmnigazeLandingContent({ howItWorks }: OmnigazeLandingProps) {
-  const { locale } = useLandingLocale();
+  const { hydrated, locale } = useLandingLocale();
   const copy = landingCopy[locale];
-  const mainRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
-    mainRef.current?.setAttribute("data-hydrated", "true");
-  }, []);
+    if (hydrated) document.title = copy.pageTitle;
+  }, [copy.pageTitle, hydrated]);
 
   return (
     <MotionConfig reducedMotion="user">
       <main
-        ref={mainRef}
         className={styles.landing}
         lang={locale}
         data-locale={locale}
-        data-hydrated="false"
+        data-hydrated={hydrated}
       >
         <div className={styles.ambientOne} aria-hidden="true" />
         <div className={styles.ambientTwo} aria-hidden="true" />

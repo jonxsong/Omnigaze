@@ -87,4 +87,42 @@ describe("collected intelligence projection", () => {
       )?.sourceUrl,
     ).toBeNull();
   });
+
+  it("decodes stored display text before classification without changing the durable envelope", () => {
+    const event = collected({
+      envelope: {
+        ...collected().envelope,
+        headline: "CEO&#39;s board investigati&#x6f;n &amp; review",
+        summary:
+          "Management &amp;amp; directors opened an independent investigation.",
+      },
+    });
+    const originalEnvelope = event.envelope;
+
+    expect(
+      projectCollectedSourceEvent(event, new Set(["NASDAQ:NVDA"])),
+    ).toMatchObject({
+      headline: "CEO's board investigation & review",
+      summary: "Management & directors opened an independent investigation.",
+      category: "governance",
+      claimStatus: "official-investigation",
+    });
+    expect(event.envelope).toBe(originalEnvelope);
+    expect(event.envelope.headline).toContain("&#39;");
+    expect(event.envelope.summary).toContain("&amp;amp;");
+  });
+
+  it("rejects a stored headline that is blank after entity decoding", () => {
+    const event = collected({
+      envelope: {
+        ...collected().envelope,
+        headline: "&nbsp;",
+        summary: "&#160;",
+      },
+    });
+
+    expect(
+      projectCollectedSourceEvent(event, new Set(["NASDAQ:NVDA"])),
+    ).toBeNull();
+  });
 });

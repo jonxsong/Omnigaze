@@ -76,6 +76,50 @@ test.describe("Omnigaze onboarding", () => {
     });
   });
 
+  test("carries Chinese from landing through onboarding, reload, and history", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+    await page.getByRole("button", { name: "中文" }).click();
+    await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+    await expect(page).toHaveTitle("洞察股票为何波动 — Omnigaze");
+
+    await page.getByRole("link", { name: /体验 Alpha 版/ }).first().click();
+    await expect(
+      page.getByRole("heading", { name: "选择你真正关心的股票" }),
+    ).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+    await expect(page).toHaveTitle("个性化你的市场 — Omnigaze");
+    await expect(page.getByRole("button", { name: "中文" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await page.reload();
+    await expect(
+      page.getByRole("heading", { name: "选择你真正关心的股票" }),
+    ).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+
+    await page.goBack();
+    await expect(page.getByRole("heading", { level: 1 })).toContainText(
+      "洞察股票为何波动",
+    );
+    await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
+
+    await page.goForward();
+    await expect(
+      page.getByRole("heading", { name: "选择你真正关心的股票" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "English" }).click();
+    await expect(
+      page.getByRole("heading", { name: "Choose the stocks that matter to you" }),
+    ).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("lang", "en");
+    await expect(page).toHaveTitle("Personalize your market — Omnigaze");
+  });
+
   test("searches, persists, and hands an arbitrary catalog stock to the dashboard", async ({
     page,
   }) => {

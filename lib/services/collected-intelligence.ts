@@ -1,4 +1,5 @@
 import type { CollectedSourceEvent } from "@/lib/ingestion/contracts";
+import { decodeHtmlEntities } from "@/lib/decode-html-entities";
 import type { CanonicalSymbol } from "@/lib/market-types";
 import { classifyPublicEvent } from "@/lib/pipeline/classify-public-event";
 import type { IntelligenceFeedItem } from "@/lib/services/live-market-data";
@@ -50,8 +51,13 @@ export function projectCollectedSourceEvent(
   ].sort();
   if (symbolIds.length === 0) return null;
 
-  const headline = event.envelope.headline.trim();
-  const summary = event.envelope.summary?.trim() || null;
+  const headline = decodeHtmlEntities(event.envelope.headline).trim();
+  if (headline.length === 0) return null;
+  const rawSummary = event.envelope.summary?.trim() || null;
+  const decodedSummary = rawSummary
+    ? decodeHtmlEntities(rawSummary).trim()
+    : "";
+  const summary = decodedSummary || null;
   const classification = classifyPublicEvent({
     headline,
     summary,

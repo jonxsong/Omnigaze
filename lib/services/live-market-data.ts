@@ -1,4 +1,5 @@
 import { defaultWatchlist } from "@/lib/demo-market-data";
+import { decodeHtmlEntities } from "@/lib/decode-html-entities";
 import type {
   CanonicalSymbol,
   CausalLink,
@@ -11,6 +12,7 @@ import { classifyPublicEvent } from "@/lib/pipeline/classify-public-event";
 import type { ProviderHealth, RawSourceEvent, SourceKind } from "@/lib/pipeline/contracts";
 import { AlpacaProvider } from "@/lib/providers/alpaca";
 import type {
+  IntelligenceSourceResult,
   IntelligenceSourceProvider,
   MarketDataProvider,
 } from "@/lib/providers/contracts";
@@ -120,6 +122,10 @@ function errorMessage(provider: string) {
   return `${provider} could not be reached. Omnigaze did not treat fixture data as live.`;
 }
 
+function partialCoverageMessage(provider: string) {
+  return `${provider} returned partial live coverage; successful results were retained.`;
+}
+
 function tickerFromSymbol(symbol: CanonicalSymbol) {
   return symbol.split(":")[1];
 }
@@ -226,7 +232,24 @@ function normalizeRawEvent(
   const tickerMap = new Map(requestedSymbols.map((symbol) => [tickerFromSymbol(symbol), symbol]));
 
   if (event.sourceKind === "sec_filing") {
-    const symbol = asString(payload.symbol) as CanonicalSymbol | null;
+    const requested = new Set(requestedSymbols);
+    const legacySymbol = asString(payload.symbol);
+    const rawSymbols = Array.isArray(payload.symbols)
+      ? payload.symbols
+      : legacySymbol
+        ? [legacySymbol]
+        : [];
+    const symbolIds = [
+      ...new Set(
+        rawSymbols.flatMap((rawSymbol) => {
+          if (typeof rawSymbol !== "string") return [];
+          const candidate = rawSymbol.trim().toUpperCase() as CanonicalSymbol;
+          if (requested.has(candidate)) return [candidate];
+          const mapped = tickerMap.get(candidate);
+          return mapped ? [mapped] : [];
+        }),
+      ),
+    ].sort();
     const form = asString(payload.form) ?? "SEC filing";
     const accession = asString(payload.accessionNumber);
     const cik = asString(payload.cik)?.replace(/^0+/, "");
@@ -238,7 +261,7 @@ function normalizeRawEvent(
 
     return {
       id: `${event.source}:${event.sourceEventId}`,
-      symbolIds: symbol ? [symbol] : [],
+      symbolIds,
       source: event.source,
       sourceKind: event.sourceKind,
       headline: `${form} filed with the SEC`,
@@ -264,8 +287,15 @@ function normalizeRawEvent(
         .filter((symbol): symbol is CanonicalSymbol => Boolean(symbol))
     : [];
 
-  const headline = asString(payload.headline) ?? "Market intelligence update";
-  const summary = asString(payload.summary);
+  const decodedHeadline = decodeHtmlEntities(
+    asString(payload.headline) ?? "",
+  ).trim();
+  const headline = decodedHeadline || "Market intelligence update";
+  const rawSummary = asString(payload.summary);
+  const decodedSummary = rawSummary
+    ? decodeHtmlEntities(rawSummary).trim()
+    : "";
+  const summary = decodedSummary || null;
   const classification = classifyPublicEvent({
     headline,
     summary,
@@ -586,17 +616,29 @@ export class LiveMarketDataOrchestrator {
         if (report.status !== "healthy") return { report, events: null };
 
         try {
-          const events = await provider.getLatestEvents({
+          const result: IntelligenceSourceResult = await provider.getLatestEvents({
             symbols,
             since: options.since,
             limit: options.limit,
           });
+          const events = Array.isArray(result) ? result : result.events;
+          const partial = !Array.isArray(result) && result.coverage === "partial";
           const latestObservedAt = events.reduce<string | null>((latest, event) => {
             const observedAt = eventObservationAt(event, now);
             return laterObservation(latest, observedAt);
           }, null);
           return {
-            report: { ...report, attempted: true, latestObservedAt },
+            report: {
+              ...report,
+              ...(partial
+                ? {
+                    status: "degraded" as const,
+                    message: partialCoverageMessage(report.provider),
+                  }
+                : {}),
+              attempted: true,
+              latestObservedAt,
+            },
             events,
           };
         } catch {
@@ -650,9 +692,15 @@ export class LiveMarketDataOrchestrator {
           dataMode: "live",
           mode: "live",
           providerCoverage:
-            successfulOutcomes.length === registrations.length ? "complete" : "partial",
+            successfulOutcomes.length === registrations.length &&
+            reports.every((report) => report.status === "healthy")
+              ? "complete"
+              : "partial",
           coverage:
-            successfulOutcomes.length === registrations.length ? "complete" : "partial",
+            successfulOutcomes.length === registrations.length &&
+            reports.every((report) => report.status === "healthy")
+              ? "complete"
+              : "partial",
           generatedAt: now.toISOString(),
           freshness: freshnessFor(newest, now, { allowedAgeSeconds: 86_400 }),
           providers: reports,
@@ -700,6 +748,10 @@ export function createLiveMarketDataOrchestrator(
         : "iex",
   });
   const sec = new SecEdgarProvider({
+    // A truthful user agent is necessary but not sufficient for activation.
+    // Keep production egress fail-closed until requests use a distributed
+    // Fair Access coordinator shared by every Worker isolate.
+    enabled: false,
     userAgent: environment.SEC_USER_AGENT,
     cikByTicker: SEC_CIK_BY_TICKER,
   });
