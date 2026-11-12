@@ -36,7 +36,7 @@
   <rect class="canvas" width="1600" height="1050" rx="28"/>
   <rect class="frame rough" x="13" y="13" width="1574" height="1024" rx="22"/>
 
-  <text class="eyebrow" x="50" y="51">OMNIGAZE · PRODUCTION-MINDED ALPHA</text>
+  <text class="eyebrow" x="50" y="51">OMNIGAZE · CONTROLLED BETA</text>
   <text class="title" x="50" y="89">Evidence in. Decisions explained. Boundaries stay honest.</text>
   <text class="subtitle" x="50" y="118">One typed domain model across the dashboard, HTTP API, MCP tools, deterministic analytics, and guarded AI.</text>
 

@@ -1,156 +1,164 @@
-# Omnigaze
+<div align="center">
+  <img src="public/favicon.svg" width="88" alt="Omnigaze logo" />
 
-[Open the public alpha](https://omnigaze.perkyaisle4.chatgpt.site) · [Explore the architecture](docs/architecture.md) · [Review shipped capabilities](docs/product-status.md)
+  <h1>Omnigaze</h1>
 
-Public trust surfaces: [Privacy](https://omnigaze.perkyaisle4.chatgpt.site/privacy) · [Terms](https://omnigaze.perkyaisle4.chatgpt.site/terms) · [Data & deletion](https://omnigaze.perkyaisle4.chatgpt.site/data-and-deletion)
+  <p><strong>Evidence-first market intelligence, personalized to what you follow and own.</strong></p>
+  <p>Track the market. Understand the context. Inspect the evidence. Ask better questions.</p>
 
-Omnigaze is a personalized market-intelligence workspace. Users search the active U.S. equity universe, track the companies they care about, record holdings, inspect a live fixed-point **Portfolio Pulse**, follow a provider-backed **Market Pulse** made from honestly labeled ETF proxies, compare a selected security with SPY and QQQ through the deterministic **Move Lens**, scan an automatic evidence-only **Today Across Your Watchlist** view, keep a durable intelligence inbox, generate a cited cross-watchlist **Daily Brief**, and open an evidence-backed **Omnigaze View** that separates facts, derived observations, and AI inference.
+  <p>
+    <a href="https://omnigaze.perkyaisle4.chatgpt.site"><img alt="Status: Controlled Beta" src="https://img.shields.io/badge/status-controlled%20beta-62d9ff?labelColor=071018"></a>
+    <a href="https://github.com/jonxsong/omnigaze/actions/workflows/ci.yml"><img alt="Omnigaze CI" src="https://github.com/jonxsong/omnigaze/actions/workflows/ci.yml/badge.svg"></a>
+    <img alt="TypeScript strict" src="https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white">
+    <img alt="Cloudflare Workers" src="https://img.shields.io/badge/Cloudflare-Workers%20%2B%20D1-F38020?logo=cloudflare&logoColor=white">
+    <img alt="MCP" src="https://img.shields.io/badge/MCP-2026--07--28-8B5CF6">
+  </p>
 
-The public alpha uses provider-backed quotes, chart history, and licensed news whenever those capabilities are configured. Alpaca egress is admitted through a database-clocked D1 guard with separate interactive and ingestion budgets, so one busy capability cannot silently consume the entire application allowance. The SEC adapter has its own distributed D1 Fair Access coordinator plus durable recent-filing cursor ingestion, but production SEC egress remains fail-closed until an operator supplies a truthful monitored contact identity and explicitly enables both requested SEC capabilities. Every surface carries source, freshness, delay, and fallback metadata; illustrative fixtures are never labeled as live.
+  <p>
+    <a href="https://omnigaze.perkyaisle4.chatgpt.site"><strong>Open the live beta</strong></a>
+    · <a href="docs/architecture.md">Architecture</a>
+    · <a href="docs/product-status.md">Product status</a>
+    · <a href="https://omnigaze.perkyaisle4.chatgpt.site/data-and-deletion">Data controls</a>
+  </p>
+</div>
 
-## Architecture at a glance
+> [!IMPORTANT]
+> **Omnigaze is currently in controlled beta.** The core product is deployed and its release gates are green, but provider access, scheduled collection, alert delivery, and operational support remain intentionally bounded. Wider commercial-launch work is deferred until the beta experience is proven.
+
+## See the market through evidence, not noise
+
+Omnigaze is a bilingual, personalized market-intelligence workspace for active U.S. equities. It brings a user's watchlist, holdings, timestamped market data, licensed news, deterministic portfolio math, and evidence-grounded AI into one research cockpit.
+
+It is designed around a simple rule: **facts, calculations, inferences, and unknowns must remain visibly different things.** Every market surface carries source, freshness, delay, and fallback metadata. AI can interpret captured evidence, but outputs are rejected when they cite evidence IDs outside the supplied set; the model cannot place trades or quietly turn uncertainty into an order.
+
+## What is inside
+
+| Personalized workspace | Market intelligence |
+| --- | --- |
+| Search the active U.S. equity catalog, build watchlists, record holdings and cost basis, and keep state across sessions. | Inspect provider-backed quotes, chart history, licensed news, Market Pulse ETF proxies, and a deterministic SPY/QQQ Move Lens. |
+| **AI with receipts** | **Durable research workflow** |
+| Generate a cited Omnigaze View or cross-watchlist Daily Brief from eligible evidence, with visible coverage, uncertainty, and model provenance. | Save, read, and dismiss intelligence events; configure explicit in-app alert rules; export or erase owner-scoped saved data. |
+| **English + 中文** | **Browser + API + MCP** |
+| One persisted language preference spans the landing page, onboarding, dashboard, inbox, briefs, and research views. | The dashboard, HTTP APIs, and MCP tools share the same owner-safe domain services and validation contracts. |
+
+### The daily loop
+
+1. **Personalize** — finish onboarding, search symbols, add them to a watchlist, and record positions.
+2. **Observe** — load bounded provider data with explicit timestamps, coverage, delay, and fallback labels.
+3. **Understand** — review Today, the intelligence timeline, Portfolio Pulse, Market Pulse, and Move Lens.
+4. **Investigate** — ask Omnigaze for a structured, evidence-cited interpretation or Daily Brief.
+5. **Act on knowledge, not orders** — save research, tune in-app alert rules, and explore deterministic scenarios without brokerage execution.
+
+## Architecture
 
 [![Omnigaze end-to-end architecture: clients, application services, provider ingestion, deterministic analytics, guarded AI, D1 persistence, and operations](docs/architecture-overview.svg)](docs/architecture.md)
 
-The diagram links to the detailed trust boundaries, degradation model, data contracts, and delivery gates in [`docs/architecture.md`](docs/architecture.md).
+The same domain contracts flow through the React client, HTTP routes, and MCP server. Provider-specific payloads stop at the ingestion boundary; normalized observations, owner state, AI guardrails, and operational coordinators live behind Cloudflare Worker service boundaries.
 
-## Product loop
+Read the detailed [architecture, trust boundaries, and failure model](docs/architecture.md).
 
-1. A user completes a local-first onboarding flow, searches the current asset catalog, and creates a personalized watchlist.
-2. A shared D1 admission guard protects provider quota before Alpaca-backed market, catalog, chart, and news requests. Provider adapters ingest market data and licensed news; the guarded SEC adapter and its separate durable collector remain dormant unless their explicit activation and contact-identity requirements are satisfied.
-3. The pipeline normalizes, timestamps, hashes, and deduplicates every source event. One unified read plane then merges fresh request-time responses with retained D1 receipts; the newest provider revision wins and an exact tie prefers the durable receipt.
-4. Deterministic fixed-point code calculates market changes, freshness, portfolio value, daily contribution, unrealized P&L, and concentration. Move Lens compares the selected security's daily return with SPY and QQQ ETF proxies only when their live observations are comparable, then surfaces the newest symbol-linked event without claiming it caused the move. Missing, stale, or demo quotes remain explicit exclusions rather than zero-valued positions.
-5. A fail-closed D1 guard checks owner-safe, model-aware evidence caches and atomically reserves the authenticated owner’s shared generation budget.
-6. On a cache miss, the OpenAI Agents SDK produces a typed interpretation constrained to known evidence IDs. A single-stock view is cached for at most five minutes; a Daily Brief is keyed by the exact watchlist, evidence revisions, prompt, model, and UTC date and is cached for at most six hours. Neither cache stores a raw prompt.
-7. Deterministic code—not the model—calculates any review zones and hypothetical share scenarios, and suppresses them when data is stale, demo, or has fewer than two attributable evidence items. A single provider stream remains explicitly capped at limited evidence confidence; Omnigaze never infers source agreement.
-8. A fresh live inbox read reconciles normalized events into D1, evaluates explicit in-app alert rules, and preserves per-user read, saved, and dismissed state across sessions.
-9. The dashboard, HTTP API, and MCP tools expose the same owner-scoped domain objects. Authenticated MCP clients can also update watchlist membership, upsert holdings, change inbox state, and configure in-app alert rules through the same strict parsers as the browser. Holdings, inbox state, and alert rules retain optimistic versions; watchlist set mutations remain idempotent.
+## Controlled beta status
 
-Before deletion, an authenticated user can download a deterministic, versioned JSON snapshot of the owner-scoped records currently available for export. Every growing section reports its total, exported count, limit, and truncation state. The allowlisted projection excludes identity fields, credentials, prompts, leases, hashes, raw provider payloads, shared evidence, and platform logs. This browser-only snapshot is intentionally described as bounded rather than a complete platform or account archive.
+| Area | Beta status |
+| --- | --- |
+| Public experience | Live on OpenAI Sites with a startup landing page, onboarding, responsive dashboard, and English/Chinese presentation. |
+| Market data | Request-time Alpaca catalog, quotes, historical bars, and licensed news with honest freshness and fallback metadata. |
+| AI research | Manual, authenticated, evidence-constrained Omnigaze Views and Daily Briefs with durable budgets and caches. |
+| Personal data | Owner-scoped D1 watchlists, holdings, inbox state, alert rules, bounded JSON export, and guarded deletion. |
+| MCP | 21 tools span browser-parity research and personal workflows plus closed operator actions; a deployed connection may require reauthorization. |
+| Verification | 799 unit tests and 52 browser journeys passed in the latest controlled-beta release gate. |
+| Scheduled operations | Cursor engines are implemented; unattended ingestion and owner projection are not claimed until hosted schedules complete a verified tick. |
+| SEC filings | Adapter, Fair Access coordinator, and durable cursor are implemented but production egress remains disabled pending a monitored contact identity and explicit activation. |
+| Trading | No brokerage import, order routing, or autonomous execution. Omnigaze is research support, not investment advice. |
 
-Account-wide data erasure is a separate browser-only safety boundary rather than an MCP tool. It requires an authenticated same-origin challenge and exact typed confirmation, deletes owner-scoped D1 records in one atomic batch, clears known device keys, and signs out. Shared market evidence and platform-managed identity/logs remain outside that control, and later sign-in can create a new empty workspace.
+See the living [shipped-capability checklist and beta milestones](docs/product-status.md).
 
-The authenticated dashboard also loads one bounded Today response on entry and after an explicit refresh. It shows at most four current, non-demo provider events across the saved watchlist, preserves original source language, and labels retained-only, current-only, stale, unknown, truncated, or unavailable evidence without invoking a model. A transient refresh failure keeps the last verified in-memory response visible for that session; it is never persisted in the browser.
+## Engineering highlights
 
-Move Lens is a read-only, non-AI view. In the browser it reuses the selected quote, Market Pulse, and intelligence resources that are already loaded, so it adds no polling lane. It persists no comparison or user state, and its latest related event is context—not causal attribution, investment advice, or a trading instruction. Stronger event-level causal classifications remain confined to the main intelligence feed and are not exposed as Move Lens conclusions.
+- **End to end:** responsive product UI, server APIs, AI agents, MCP, data pipelines, persistence, migrations, tests, CI, observability, and deployment.
+- **Evidence integrity:** normalized event identities, content hashes, correction-aware revisions, point-in-time timestamps, and durable receipt fallback.
+- **Deterministic finance math:** scaled integers and `BigInt` micro-units prevent floating-point drift across holdings, P&L, concentration, and scenario calculations.
+- **Fail-closed AI:** strict Zod outputs, evidence-ID grounding, model-aware caching, atomic owner budgets, cross-isolate leases, and no raw prompt storage.
+- **Provider resilience:** D1 database-clocked admission, separate capability budgets, shared cooldowns, deadlines, bounded pagination, and explicit degraded states.
+- **Privacy by design:** server-derived identity, owner predicates on every personal read/write, no-store personal responses, redacted export, and nonce-bound deletion.
+- **Operational clarity:** privacy-bounded telemetry, correlated request IDs, health/readiness contracts, append-only migrations, and locked CI gates.
 
 ## Stack
 
-- Next.js 16, React 19, and TypeScript
-- Vinext and Cloudflare Workers through OpenAI Sites
-- Tailwind CSS, Lucide, and Recharts
-- Cloudflare D1 with Drizzle ORM
-- OpenAI Agents SDK with Zod structured outputs
-- MCP 2026-07-28 at `POST /mcp`
-- Vitest, ESLint, and TypeScript release gates
-- pnpm
-- GitHub Actions CI with locked static, domain, build, migration, and browser gates
+| Layer | Technology |
+| --- | --- |
+| Product UI | Next.js 16, React 19, TypeScript 5.9, Tailwind CSS 4, Framer Motion, Recharts |
+| Runtime | Vinext, Cloudflare Workers, OpenAI Sites |
+| Data | Cloudflare D1, Drizzle ORM, append-only SQL migrations |
+| Market intelligence | Alpaca market data, active-equity catalog, historical bars, and licensed news |
+| AI | OpenAI Agents SDK, Zod structured outputs, evidence-grounded service layer |
+| Agent interface | Model Context Protocol `2026-07-28` at `POST /mcp` |
+| Quality | Vitest, Playwright, ESLint, TypeScript, GitHub Actions |
+| Package manager | pnpm 11.25 |
 
 ## Repository map
 
 ```text
 app/
-  api/                 Browser-facing APIs and provider-safe server boundaries
+  api/                 Browser-facing APIs and provider-safe boundaries
   mcp/                 Stateless MCP JSON-RPC endpoint
-components/            Interactive dashboard
+components/            Landing, onboarding, dashboard, and research UI
 db/                    Drizzle schema and D1 access
-drizzle/               Reviewed, append-only database migrations
+drizzle/               Reviewed append-only migrations
 lib/
-  ai/                   Evidence-constrained analysis agents and output gates
-  intelligence-inbox/   Durable event projection, owner state, and alert rules
+  ai/                   Evidence-constrained agents and output gates
+  intelligence-inbox/   Durable projection, owner state, and alert rules
   portfolio/            Decimal-safe contracts and deterministic scenarios
   pipeline/             Ingestion contracts and deduplication
   providers/            Market, news, and filing adapters
-  repositories/         User-owned persistence
-  services/             Shared application/MCP domain services
-tests/                  Domain and MCP contract tests
-docs/                   Architecture and engineering decisions
+  repositories/         Owner-scoped persistence
+  services/             Shared browser/API/MCP domain services
+tests/                  Domain, API, MCP, migration, and browser contracts
+docs/                   Architecture, operations, and product status
 ```
 
-The end-to-end data flow and failure boundaries are documented in [`docs/architecture.md`](docs/architecture.md). The shipped-capability checklist and remaining production milestones live in [`docs/product-status.md`](docs/product-status.md).
+## Run it locally
 
-## Local development
-
-Requirements: Node.js 22.13+ and pnpm 11.25+.
+Requirements: **Node.js 22.13+** and **pnpm 11.25+**.
 
 ```bash
+git clone https://github.com/jonxsong/omnigaze.git
+cd omnigaze
 pnpm install
 pnpm db:migrate:local
 pnpm dev
 ```
 
-The portable Sites runtime serves on `http://127.0.0.1:5173` by default.
-`db:migrate:local` reconciles the reviewed, append-only Drizzle migration history
-with the persisted local D1 database in `.wrangler/state`, records applied
-filenames, and is safe to run again. The reconciler permits additive tables and
-indexes plus the checksum-audited 0006 reservation-table rebuild that preserves
-every existing row; altered destructive SQL is rejected. Run it after pulling or
-generating a migration; it never resets the database.
+The portable Sites runtime serves at `http://127.0.0.1:5173` by default. Copy `.env.example` for local configuration and keep every credential out of source control.
 
-Useful release checks:
+### Release gates
 
 ```bash
 pnpm typecheck
 pnpm lint
 pnpm test
 pnpm build
-```
-
-Generate a new migration after changing `db/schema.ts`:
-
-```bash
-pnpm db:generate
 pnpm db:migrate:local
+pnpm test:e2e
 ```
 
-Never edit a migration that has been applied. Append a new migration instead.
+| Gate | Latest verified result |
+| --- | ---: |
+| TypeScript | Passed |
+| ESLint | Passed |
+| Vitest | 105 files · 799 tests passed |
+| Production Worker build | Passed |
+| Local D1 migration reconciliation | Passed |
+| Playwright | 52 browser journeys passed |
 
-## Runtime configuration
+[View the GitHub Actions history](https://github.com/jonxsong/omnigaze/actions/workflows/ci.yml).
 
-Copy `.env.example` for local development. Never commit `.env` files or API keys.
+After a schema change, run `pnpm db:generate` followed by `pnpm db:migrate:local`. Applied migrations are immutable: append a new migration instead of editing one that has already shipped.
 
-| Variable | Purpose |
-| --- | --- |
-| `OPENAI_API_KEY` | Server-side Omnigaze analysis |
-| `OPENAI_MODEL` | Optional Agents SDK model override |
-| `ALPACA_API_KEY_ID` | Market-data/news provider identity |
-| `ALPACA_API_SECRET_KEY` | Market-data/news provider secret |
-| `ALPACA_TRADING_API_BASE_URL` | Allowlisted paper/live Trading API host for asset search |
-| `ALPACA_DATA_FEED` | `iex` for development or licensed `sip` where entitled |
-| `OMNIGAZE_TELEMETRY_SUCCESS_SAMPLE_RATE` | Server-only `0`–`1` sampling rate for ordinary successful HTTP API completion logs; MCP, errors, and slow requests always emit |
-| `INBOX_PROJECTION_COLLECTION_MODE` | Leave `request_time` until the owner-projection schedule is linked and verified; then set `scheduled` |
-| `INBOX_PROJECTION_EXPECTED_CADENCE_SECONDS` | Bounded 60–86,400 second owner-projection cadence, reported only for a declared schedule |
-| `SEC_EDGAR_ENABLED` | Exact `true` opt-in for request-time SEC egress; remains inert without the D1 coordinator and a valid contact-bearing identity |
-| `SEC_USER_AGENT` | Truthful SEC-compliant application/contact identifier; it never activates production egress by itself |
-| `SEC_DURABLE_INGESTION_ENABLED` | Independent exact `true` opt-in for durable recent-filing collection; all request-time SEC gates still apply |
-| `SEC_INGESTION_SYMBOLS` | Reviewed canonical symbols with stable CIK mappings, grouped into one durable partition per issuer |
-| `SEC_INGESTION_COLLECTION_MODE` | Leave `request_time` until the SEC operator schedule is linked and verified; then set `scheduled` |
-| `SEC_INGESTION_EXPECTED_CADENCE_SECONDS` | Bounded 60–86,400 second SEC due interval, publicly reported only for a declared schedule |
+<details>
+<summary><strong>MCP tool surface</strong></summary>
 
-## Data integrity rules
-
-- Every quote includes `asOf`, provider, delay, and market-session metadata.
-- `publishedAt` and `observedAt` are separate to preserve point-in-time truth.
-- Replayed events are idempotent; corrected source payloads remain historical records.
-- Only live, fresh provider events can enter the durable inbox or create an alert delivery. Demo output is ignored; a successful stale live check may record activation metadata but persists no stale event or alert delivery.
-- Inbox writes and alert rules use optimistic versions; exact retries are idempotent, while divergent stale writes fail with a conflict.
-- The first successful live inbox sync baselines existing history as read so activation does not manufacture a backlog of alerts.
-- Provider corrections retain their stable event identity and user state while exposing a new event revision and an `updated since read` signal.
-- AI may interpret captured evidence but may not invent evidence IDs or act as a trading signal.
-- AI generation is manual, authenticated, and fail-closed behind a durable model-aware cache plus atomic per-owner budgets. The ledger stores hashed request/operation keys, not prompts, credentials, headers, or raw provider payloads.
-- Single-stock views and Daily Briefs share the default policy of 20 attempts per UTC day, 5 per rolling minute, and 2 concurrent leases per owner. Exact active retries are denied until the existing lease expires; cache hits and in-isolate followers spend no additional model budget.
-- AI output schemas do not include target-price or share-quantity fields. Scenario math is deterministic, versioned, and never places orders.
-- Alpaca-backed egress acquires an atomic, database-clocked admission before provider work. Independent quote, chart, catalog, interactive-news, and ingestion-news buckets fail closed and share provider cooldowns across Worker isolates without storing an IP address or owner identity.
-- Portfolio quantities and cost basis cross APIs as decimal strings and persist as scaled integers.
-- Portfolio Pulse uses BigInt micro-units, returns decimal strings, bounds each calculation to 50 positions, reports omitted and excluded coverage, and never treats a missing quote as zero.
-- Move Lens recomputes signed basis-point moves from verified price and previous-close values. It classifies only relative arithmetic against SPY and QQQ ETF proxies; incompatible session, delay, exchange-coverage, identity, or observation-time metadata suppresses the affected comparison.
-- Move Lens uses no model, stores no result, and never turns a symbol-linked event into a claimed price driver, recommendation, target, or order instruction.
-- Facts, derived values, inferences, and user views remain visibly distinct.
-- A price movement is not treated as proof of causation.
-
-## MCP surface
-
-The initial stateless tool surface includes:
+### Research and market reads
 
 - `search_symbols`
 - `get_market_snapshot`
@@ -159,6 +167,10 @@ The initial stateless tool surface includes:
 - `get_intelligence_feed`
 - `get_omnigaze_view`
 - `get_daily_brief`
+- `get_provider_status`
+
+### Personalized reads and writes
+
 - `get_watchlist_dashboard`
 - `update_watchlist`
 - `get_intelligence_inbox`
@@ -169,25 +181,56 @@ The initial stateless tool surface includes:
 - `put_portfolio_holding`
 - `get_portfolio_pulse`
 - `get_decision_support`
-- `get_provider_status`
-- `run_intelligence_ingestion_tick` (closed operator tool; one provider page per call)
-- `run_sec_filing_ingestion_tick` (closed operator tool; one recent-filing page per call, independently fail-closed)
-- `run_intelligence_projection_tick` (closed operator tool; one leased durable owner page, no owner input)
+
+### Closed operator tools
+
+- `run_intelligence_ingestion_tick`
+- `run_sec_filing_ingestion_tick`
+- `run_intelligence_projection_tick`
 
 Use `server/discover`, `tools/list`, and `tools/call` with MCP version `2026-07-28`.
 
-## Current limitations
+</details>
 
-- Alpaca currently uses resilient REST polling; long-lived streaming transport is a later infrastructure slice.
-- Market Pulse uses six provider-backed ETF prices (SPY, QQQ, IWM, TLT, USO, and GLD). They are deliberately labeled as proxies and are not underlying index levels, Treasury yields, volatility measures, or spot commodity prices. It loads once on entry and on explicit refresh rather than opening another polling lane.
-- Move Lens is a point-in-time relative comparison, not a prediction or causal model. SPY and QQQ remain ETF prices rather than S&P 500 or Nasdaq-100 index levels; a symbol-linked event may be temporally related but is never presented as proof of the move. The browser reuses existing dashboard refreshes rather than adding another timer.
-- A request-time news reconciliation still caps interactive reads at 100 events. The separate durable cursor engine processes exactly one frozen-window page per operator tick; continuous collection requires a linked hosted schedule, a current authenticated Omnigaze app connection, and at least one verified successful tick before the UI may claim scheduled collection.
-- The unified read plane makes fresh durable receipts available to the timeline, Today, AI, portfolio research, and MCP during a request-time provider outage. A monotonic logical-event ledger and leased per-owner cursor now make bounded offline inbox/alert materialization schedulable. Consecutive identical observations coalesce, revisions and reversions remain ordered by durable observation time, and baseline closes only after the owner cursor drains. The projection tick still needs a separate verified hosted schedule (or an explicitly updated existing schedule prompt) before that behavior is operational.
-- The SEC adapter, distributed Fair Access coordinator, and durable recent-filing cursor engine are covered by tests, but production egress remains disabled until a truthful monitored application/contact identity is configured and `SEC_EDGAR_ENABLED` is set to exact `true`. Any durable tick additionally requires `SEC_DURABLE_INGESTION_ENABLED=true`; continuous collection requires a verified operator schedule. Historical shard backfill and authoritative correction/removal reconciliation remain separate milestones.
-- Alert rules deliver only inside the Omnigaze inbox. Request-time refresh works now; background materialization remains inactive until the operator projection schedule is verified. The owner cursor is global rather than per symbol, so a symbol added after catch-up does not rewind older ledger history for that symbol; interactive newest-100 reconciliation may cover recent events. Email, SMS, push, and browser notifications are not enabled.
-- Brokerage import and order execution are intentionally not part of this alpha.
-- AI analysis requires an authenticated user, runs only after an explicit user request, and returns `503 ai_unconfigured` when the server secret is absent. Daily Brief generation is manual rather than scheduled; it fails closed when the watchlist has no eligible fresh live evidence.
-- Today Across Your Watchlist is an authenticated, request-time evidence view rather than a background notification channel. It makes no AI request, stores no browser copy, and refreshes only on entry, an explicit user refresh, or a successfully persisted watchlist change.
-- Omnigaze provides research support, not investment advice or autonomous trading.
+<details>
+<summary><strong>Core data-integrity rules</strong></summary>
 
-See [Scheduled ingestion](docs/scheduled-ingestion.md) for the operator contract, safety invariants, status semantics, and local verification workflow.
+- Every quote includes provider, observation time, delay, and market-session metadata.
+- `publishedAt` and `observedAt` remain separate to preserve point-in-time truth.
+- Replayed events are idempotent; provider corrections retain stable identity and revision history.
+- Demo or stale evidence cannot silently enter the durable inbox, create an alert, unlock AI, or produce numeric decision scenarios.
+- Missing quotes remain explicit exclusions rather than zero-valued positions.
+- AI output schemas contain no trade target, order, or autonomous share-quantity instruction.
+- A related event is context, not proof that it caused a price movement.
+- Alpaca-backed egress acquires a shared D1 admission before provider work and stores no owner or IP identity.
+- Personal records are owner-filtered at the repository boundary and use optimistic conflict protection where applicable.
+
+</details>
+
+## Beta boundaries
+
+- Market data uses resilient REST requests; sub-minute streaming infrastructure is future work.
+- Request-time news is available now. Continuous background ingestion and offline inbox materialization wait for verified hosted schedules.
+- Alert delivery is currently inside the Omnigaze inbox; email, SMS, push, and browser notifications are not enabled.
+- Market Pulse uses honestly labeled ETF prices as proxies, not underlying index levels, yields, volatility measures, or spot commodities.
+- Move Lens reports deterministic relative movement, not causal attribution, a forecast, or a trading signal.
+- AI runs only after an authenticated, explicit request and fails closed when fresh eligible evidence is unavailable.
+- SEC production egress remains disabled until its identity, activation, and monitoring requirements are satisfied.
+- The saved-data download is a bounded, redacted snapshot—not a complete platform archive.
+- Omnigaze does not import brokerage accounts, place orders, or provide individualized investment advice.
+
+Wider commercial-launch work—including streaming, verified unattended collection, external notifications, expanded operations, and provider/licensing review—is intentionally deferred until the controlled beta has produced enough real usage evidence.
+
+## Trust surfaces
+
+- [Privacy](https://omnigaze.perkyaisle4.chatgpt.site/privacy)
+- [Terms](https://omnigaze.perkyaisle4.chatgpt.site/terms)
+- [Data export and deletion](https://omnigaze.perkyaisle4.chatgpt.site/data-and-deletion)
+- [Scheduled-ingestion contract](docs/scheduled-ingestion.md)
+
+---
+
+<div align="center">
+  <strong>Omnigaze</strong><br />
+  Built to make market research more inspectable, personal, and honest about uncertainty.
+</div>

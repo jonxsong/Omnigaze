@@ -1,6 +1,6 @@
 # Omnigaze product status
 
-This checklist tracks shipped repository capabilities and the next production milestones. A checked item means the code path is implemented and covered by an automated release gate; it does not imply every upstream provider is configured in every environment.
+This checklist tracks shipped controlled-beta capabilities and the future commercial-launch milestones. A checked item means the code path is implemented and covered by an automated release gate; it does not imply every upstream provider is configured in every environment.
 
 ## Product and UX
 
@@ -44,7 +44,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [ ] Configure a truthful monitored application/contact user agent and explicitly set `SEC_EDGAR_ENABLED=true`; `SEC_USER_AGENT` alone cannot enable production SEC egress.
 - [ ] Link and verify the SEC operator schedule, then explicitly set `SEC_DURABLE_INGESTION_ENABLED=true` and label its collection mode `scheduled`.
 - [ ] Add historical SEC shard backfill and authoritative correction/removal reconciliation; absence from one recent-submissions response is never treated as a removal.
-- [ ] Add sub-minute streaming infrastructure for true push updates; the alpha intentionally uses resilient REST polling.
+- [ ] Add sub-minute streaming infrastructure for true push updates; the controlled beta intentionally uses resilient REST polling.
 
 ## AI and MCP
 
