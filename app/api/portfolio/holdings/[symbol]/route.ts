@@ -1,4 +1,5 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import {
   parsePortfolioHoldingDeleteQuery,
   parsePortfolioHoldingMutation,
@@ -56,7 +57,7 @@ function repositoryError(error: PortfolioRepositoryError) {
   }
 }
 
-export async function PUT(request: Request, context: RouteContext) {
+async function putHolding(request: Request, context: RouteContext) {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
 
@@ -101,7 +102,7 @@ export async function PUT(request: Request, context: RouteContext) {
   }
 }
 
-export async function DELETE(request: Request, context: RouteContext) {
+async function deleteHolding(request: Request, context: RouteContext) {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
 
@@ -148,3 +149,13 @@ export async function DELETE(request: Request, context: RouteContext) {
     return apiError("holding_delete_failed", "Holding could not be deleted.", 500);
   }
 }
+
+export const PUT = instrumentApiRoute(
+  { operation: "api.portfolio.holding.put" },
+  putHolding,
+);
+
+export const DELETE = instrumentApiRoute(
+  { operation: "api.portfolio.holding.delete" },
+  deleteHolding,
+);

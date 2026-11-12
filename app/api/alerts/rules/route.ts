@@ -1,7 +1,7 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import { parseEmptyInboxQuery } from "@/lib/intelligence-inbox/contracts";
 import { getAlertRules } from "@/lib/intelligence-inbox/service";
-import { unexpectedApiError } from "@/lib/unexpected-failure";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,7 @@ function apiError(code: string, error: string, status: number) {
   return Response.json({ error, code }, { status, headers: noStore });
 }
 
-export async function GET(request?: Request) {
+async function getAlertRulesHandler(request?: Request) {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
   if (
@@ -21,15 +21,17 @@ export async function GET(request?: Request) {
     return apiError("invalid_query", "Alert-rules query is invalid.", 400);
   }
 
-  try {
-    return Response.json(await getAlertRules(user.userId), { headers: noStore });
-  } catch (failure) {
-    return unexpectedApiError({
-      operation: "alert_rules.list",
-      failure,
+  return Response.json(await getAlertRules(user.userId), { headers: noStore });
+}
+
+export const GET = instrumentApiRoute(
+  {
+    operation: "api.alert_rules.get",
+    unexpectedError: {
       code: "alert_rules_unavailable",
       message: "Alert rules are temporarily unavailable.",
       status: 503,
-    });
-  }
-}
+    },
+  },
+  getAlertRulesHandler,
+);

@@ -466,23 +466,50 @@ describe("intelligence inbox HTTP API", () => {
     }
 
     expect(new Set(requestIds).size).toBe(responses.length);
-    expect(errorSpy).toHaveBeenCalledTimes(responses.length);
-    const loggedDetails = errorSpy.mock.calls.map((call) => call[1]) as Array<{
+    expect(errorSpy).toHaveBeenCalledTimes(responses.length * 2);
+    const unexpectedFailures = errorSpy.mock.calls
+      .filter(([event]) => event === "omnigaze.unexpected_failure")
+      .map((call) => call[1]) as Array<{
       event: string;
       operation: string;
       requestId: string;
       failureKind: string;
     }>;
-    expect(loggedDetails.map((details) => details.requestId).sort()).toEqual(
+    const completions = errorSpy.mock.calls
+      .map(([event]) => event)
+      .filter(
+        (event): event is {
+          event: string;
+          operation: string;
+          requestId: string;
+          outcome: string;
+        } =>
+          typeof event === "object" &&
+          event !== null &&
+          "event" in event &&
+          event.event === "omnigaze.api_request",
+      );
+    expect(unexpectedFailures.map((details) => details.requestId).sort()).toEqual(
       [...requestIds].sort(),
     );
-    expect(loggedDetails.map((details) => details.operation).sort()).toEqual([
-      "alert_rules.list",
-      "alert_rules.update",
-      "intelligence_inbox.item_read",
-      "intelligence_inbox.list",
-      "intelligence_inbox.state_update",
-    ]);
+    expect(completions.map((details) => details.requestId).sort()).toEqual(
+      [...requestIds].sort(),
+    );
+    const operations = [
+      "api.alert_rules.get",
+      "api.alert_rules.put",
+      "api.intelligence_inbox.get",
+      "api.intelligence_inbox_item.get",
+      "api.intelligence_inbox_item.patch",
+    ];
+    expect(
+      unexpectedFailures.map((details) => details.operation).sort(),
+    ).toEqual(operations);
+    expect(completions.map((details) => details.operation).sort()).toEqual(
+      operations,
+    );
+    expect(completions.every((details) => details.outcome === "server_error"))
+      .toBe(true);
     expect(
       JSON.stringify(errorSpy.mock.calls),
     ).not.toContain("do-not-log-this-secret");

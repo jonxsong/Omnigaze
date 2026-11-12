@@ -740,6 +740,10 @@ async function postMcp(request: Request) {
 }
 
 export const POST = instrumentApiRoute(
-  { operation: "mcp.post", slowMs: 30_000 },
+  {
+    operation: "mcp.post",
+    sampleSuccesses: false,
+    slowMs: 30_000,
+  },
   postMcp,
 );

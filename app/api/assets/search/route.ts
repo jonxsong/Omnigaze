@@ -1,4 +1,5 @@
 import { AlpacaAssetProviderError } from "@/lib/providers/alpaca-assets";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import {
   AssetSearchService,
   getAssetSearchService,
@@ -76,6 +77,7 @@ export function createAssetSearchHandler(service: AssetSearch) {
   };
 }
 
-export async function GET(request: Request) {
-  return createAssetSearchHandler(getAssetSearchService())(request);
-}
+export const GET = instrumentApiRoute(
+  { operation: "api.assets.search.get", slowMs: 3_000 },
+  createAssetSearchHandler(getAssetSearchService()),
+);

@@ -55,6 +55,6 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] GitHub Actions runs the locked end-to-end release gates.
 - [ ] Rotate credentials that were ever shared outside the secret manager, then update the deployed secret values.
 - [x] Lazy-load the Recharts workspace and reduce the initial dashboard bundle by roughly one third.
-- [x] Privacy-bounded production error and latency telemetry for health, batched quotes, explicit AI generation, and MCP, including correlated response headers and uncaught Vinext runtime errors.
-- [ ] Extend telemetry to the remaining HTTP routes and establish a sampling/retention policy before materially higher traffic.
+- [x] Privacy-bounded production error and latency telemetry across every HTTP API method and MCP, including correlated response headers and uncaught Vinext runtime errors.
+- [x] Deterministic server-only HTTP success sampling with unsampled error/slow paths, fully emitted MCP completions, and a no-application-retention policy for materially higher traffic.
 - [x] Localize product controls, accessibility labels, validation, and safe error states while preserving tickers, company names, and cited source material in their original language.

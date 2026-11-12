@@ -99,6 +99,7 @@ Copy `.env.example` for local development. Never commit `.env` files or API keys
 | `ALPACA_API_SECRET_KEY` | Market-data/news provider secret |
 | `ALPACA_TRADING_API_BASE_URL` | Allowlisted paper/live Trading API host for asset search |
 | `ALPACA_DATA_FEED` | `iex` for development or licensed `sip` where entitled |
+| `OMNIGAZE_TELEMETRY_SUCCESS_SAMPLE_RATE` | Server-only `0`–`1` sampling rate for ordinary successful HTTP API completion logs; MCP, errors, and slow requests always emit |
 | `SEC_USER_AGENT` | Staged SEC-compliant application/contact identifier; it does not activate production SEC egress |
 
 ## Data integrity rules

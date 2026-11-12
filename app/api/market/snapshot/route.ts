@@ -1,4 +1,5 @@
 import type { CanonicalSymbol } from "@/lib/market-types";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import { liveMarketData } from "@/lib/services/live-market-data";
 import {
   InstrumentResolutionError,
@@ -14,7 +15,7 @@ function apiError(code: string, error: string, status: number) {
   return Response.json({ code, error }, { status, headers: noStore });
 }
 
-export async function GET(request: Request) {
+async function getMarketSnapshot(request: Request) {
   const symbol = new URL(request.url).searchParams.get("symbol")?.toUpperCase();
   if (!symbol || !canonicalSymbolPattern.test(symbol)) {
     return apiError(
@@ -54,3 +55,8 @@ export async function GET(request: Request) {
 
   return Response.json(result, { headers: noStore });
 }
+
+export const GET = instrumentApiRoute(
+  { operation: "api.market.snapshot.get", slowMs: 3_000 },
+  getMarketSnapshot,
+);

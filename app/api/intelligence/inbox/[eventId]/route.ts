@@ -1,4 +1,5 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import {
   inboxEventIdSchema,
   parseEmptyInboxQuery,
@@ -9,7 +10,6 @@ import {
   getIntelligenceInboxItem,
   updateIntelligenceInboxState,
 } from "@/lib/intelligence-inbox/service";
-import { unexpectedApiError } from "@/lib/unexpected-failure";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +30,10 @@ async function parseEventId(context: RouteContext) {
   }
 }
 
-export async function GET(request: Request, context: RouteContext) {
+async function getIntelligenceInboxItemHandler(
+  request: Request,
+  context: RouteContext,
+) {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
 
@@ -51,17 +54,14 @@ export async function GET(request: Request, context: RouteContext) {
     if (error instanceof InboxRepositoryError && error.code === "not_found") {
       return apiError("inbox_item_not_found", "Inbox item not found.", 404);
     }
-    return unexpectedApiError({
-      operation: "intelligence_inbox.item_read",
-      failure: error,
-      code: "inbox_item_unavailable",
-      message: "Inbox item could not be loaded.",
-      status: 503,
-    });
+    throw error;
   }
 }
 
-export async function PATCH(request: Request, context: RouteContext) {
+async function patchIntelligenceInboxItemHandler(
+  request: Request,
+  context: RouteContext,
+) {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
 
@@ -103,12 +103,30 @@ export async function PATCH(request: Request, context: RouteContext) {
             409,
           );
     }
-    return unexpectedApiError({
-      operation: "intelligence_inbox.state_update",
-      failure: error,
+    throw error;
+  }
+}
+
+export const GET = instrumentApiRoute(
+  {
+    operation: "api.intelligence_inbox_item.get",
+    unexpectedError: {
+      code: "inbox_item_unavailable",
+      message: "Inbox item could not be loaded.",
+      status: 503,
+    },
+  },
+  getIntelligenceInboxItemHandler,
+);
+
+export const PATCH = instrumentApiRoute(
+  {
+    operation: "api.intelligence_inbox_item.patch",
+    unexpectedError: {
       code: "inbox_update_failed",
       message: "Inbox item could not be updated.",
       status: 500,
-    });
-  }
-}
+    },
+  },
+  patchIntelligenceInboxItemHandler,
+);

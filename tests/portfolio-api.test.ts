@@ -131,6 +131,12 @@ describe("portfolio HTTP API", () => {
     ]).toEqual([401, 401, 401, 401, 401]);
     for (const response of [read, profile, holding, deletion, decision]) {
       expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("x-request-id")).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      );
+      expect(response.headers.get("server-timing")).toMatch(
+        /^omnigaze;dur=\d+\.\d$/,
+      );
     }
     expect(mocks.getUserPortfolio).not.toHaveBeenCalled();
     expect(mocks.putPortfolioProfile).not.toHaveBeenCalled();

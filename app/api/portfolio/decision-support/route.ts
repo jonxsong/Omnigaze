@@ -1,4 +1,5 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import { parsePortfolioDecisionSupportRequest } from "@/lib/portfolio/contracts";
 import { getPortfolioDecisionSupport } from "@/lib/services/portfolio-decision-support";
 import { InstrumentResolutionError } from "@/lib/services/instrument-resolution";
@@ -11,7 +12,7 @@ function apiError(code: string, error: string, status: number) {
   return Response.json({ error, code }, { status, headers: noStore });
 }
 
-export async function POST(request: Request) {
+async function postDecisionSupport(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
 
@@ -61,3 +62,8 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export const POST = instrumentApiRoute(
+  { operation: "api.portfolio.decision_support.post" },
+  postDecisionSupport,
+);

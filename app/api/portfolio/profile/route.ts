@@ -1,4 +1,5 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import { parsePortfolioProfileMutation } from "@/lib/portfolio/contracts";
 import {
   PortfolioRepositoryError,
@@ -13,7 +14,7 @@ function apiError(code: string, error: string, status: number) {
   return Response.json({ error, code }, { status, headers: noStore });
 }
 
-export async function PUT(request: Request) {
+async function putPortfolioProfileHandler(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
 
@@ -59,3 +60,8 @@ export async function PUT(request: Request) {
     );
   }
 }
+
+export const PUT = instrumentApiRoute(
+  { operation: "api.portfolio.profile.put" },
+  putPortfolioProfileHandler,
+);

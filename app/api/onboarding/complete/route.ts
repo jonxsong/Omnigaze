@@ -1,4 +1,5 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import { defaultWatchlist } from "@/lib/demo-market-data";
 import { parseOnboardingDraft } from "@/lib/onboarding-draft";
 import {
@@ -73,7 +74,7 @@ function operationError(error: unknown) {
   );
 }
 
-export async function POST(request: Request) {
+async function completeOnboardingHandler(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
 
@@ -206,3 +207,8 @@ export async function POST(request: Request) {
     return operationError(error);
   }
 }
+
+export const POST = instrumentApiRoute(
+  { operation: "api.onboarding.complete" },
+  completeOnboardingHandler,
+);

@@ -19,6 +19,12 @@ describe("browser API response contracts", () => {
     };
 
     expect(response.status).toBe(200);
+    expect(response.headers.get("X-Request-ID")).toMatch(
+      /^[0-9a-f-]{36}$/i,
+    );
+    expect(response.headers.get("Server-Timing")).toMatch(
+      /(?:^|,\s*)omnigaze;dur=\d+\.\d$/,
+    );
     expect(body.data).toMatchObject({
       symbolId: "NASDAQ:NVDA",
       isDelayed: true,
@@ -93,6 +99,12 @@ describe("browser API response contracts", () => {
     };
 
     expect(response.status).toBe(200);
+    expect(response.headers.get("X-Request-ID")).toMatch(
+      /^[0-9a-f-]{36}$/i,
+    );
+    expect(response.headers.get("Server-Timing")).toMatch(
+      /(?:^|,\s*)omnigaze;dur=\d+\.\d$/,
+    );
     expect(body.data.length).toBeGreaterThan(0);
     expect(body.data.length).toBeLessThanOrEqual(20);
     expect(body.meta).toMatchObject({

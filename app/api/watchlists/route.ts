@@ -1,4 +1,5 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import {
   addSymbolToWatchlist,
   listUserWatchlists,
@@ -19,7 +20,7 @@ function apiError(code: string, error: string, status: number) {
   return Response.json({ error, code }, { status, headers: noStore });
 }
 
-export async function GET() {
+async function getWatchlistsHandler() {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
 
@@ -52,7 +53,7 @@ export async function GET() {
   }
 }
 
-export async function POST(request: Request) {
+async function updateWatchlistHandler(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
 
@@ -115,3 +116,13 @@ export async function POST(request: Request) {
     return apiError("watchlist_update_failed", "Watchlist update failed.", 500);
   }
 }
+
+export const GET = instrumentApiRoute(
+  { operation: "api.watchlists.get" },
+  getWatchlistsHandler,
+);
+
+export const POST = instrumentApiRoute(
+  { operation: "api.watchlists.post" },
+  updateWatchlistHandler,
+);

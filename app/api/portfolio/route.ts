@@ -1,4 +1,5 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import { getUserPortfolio } from "@/lib/repositories/portfolio";
 
 export const dynamic = "force-dynamic";
@@ -9,7 +10,7 @@ function apiError(code: string, error: string, status: number) {
   return Response.json({ error, code }, { status, headers: noStore });
 }
 
-export async function GET() {
+async function getPortfolio() {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
 
@@ -34,3 +35,8 @@ export async function GET() {
     );
   }
 }
+
+export const GET = instrumentApiRoute(
+  { operation: "api.portfolio.get" },
+  getPortfolio,
+);

@@ -1,4 +1,5 @@
 import type { CanonicalSymbol, HistoricalMarketSeries } from "@/lib/market-types";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import { AlpacaProvider } from "@/lib/providers/alpaca";
 import {
   InstrumentResolutionError,
@@ -28,7 +29,7 @@ function noStoreJson(body: unknown, status = 200) {
   });
 }
 
-export async function GET(request: Request) {
+async function getMarketBars(request: Request) {
   const params = new URL(request.url).searchParams;
   const symbol = params.get("symbol")?.trim().toUpperCase();
   const requestedRange = params.get("timeframe")?.trim().toUpperCase() ?? "1D";
@@ -137,3 +138,8 @@ export async function GET(request: Request) {
     );
   }
 }
+
+export const GET = instrumentApiRoute(
+  { operation: "api.market.bars.get", slowMs: 5_000 },
+  getMarketBars,
+);

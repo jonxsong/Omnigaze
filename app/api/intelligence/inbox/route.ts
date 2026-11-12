@@ -1,7 +1,7 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import { parseInboxQuery } from "@/lib/intelligence-inbox/contracts";
 import { getIntelligenceInbox } from "@/lib/intelligence-inbox/service";
-import { unexpectedApiError } from "@/lib/unexpected-failure";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,7 @@ function apiError(code: string, error: string, status: number) {
   return Response.json({ error, code }, { status, headers: noStore });
 }
 
-export async function GET(request: Request) {
+async function getIntelligenceInboxHandler(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
 
@@ -20,18 +20,20 @@ export async function GET(request: Request) {
     return apiError("invalid_query", "Inbox query is invalid.", 400);
   }
 
-  try {
-    return Response.json(
-      await getIntelligenceInbox(user.userId, query.data),
-      { headers: noStore },
-    );
-  } catch (failure) {
-    return unexpectedApiError({
-      operation: "intelligence_inbox.list",
-      failure,
+  return Response.json(
+    await getIntelligenceInbox(user.userId, query.data),
+    { headers: noStore },
+  );
+}
+
+export const GET = instrumentApiRoute(
+  {
+    operation: "api.intelligence_inbox.get",
+    unexpectedError: {
       code: "inbox_unavailable",
       message: "The intelligence inbox is temporarily unavailable.",
       status: 503,
-    });
-  }
-}
+    },
+  },
+  getIntelligenceInboxHandler,
+);

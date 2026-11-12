@@ -1,4 +1,5 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import {
   extractCanonicalSymbols,
   filterFeedToSymbols,
@@ -16,7 +17,7 @@ function apiError(code: string, error: string, status: number) {
   return Response.json({ error, code }, { status, headers: noStore });
 }
 
-export async function GET(request: Request) {
+async function getTodayIntelligence(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
 
@@ -80,3 +81,8 @@ export async function GET(request: Request) {
     );
   }
 }
+
+export const GET = instrumentApiRoute(
+  { operation: "api.intelligence.today.get", slowMs: 5_000 },
+  getTodayIntelligence,
+);

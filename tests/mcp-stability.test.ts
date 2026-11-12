@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { POST } from "@/app/mcp/route";
 
 function request(body: string, headers: Record<string, string> = {}) {
@@ -24,6 +24,29 @@ async function rpc(method: string, params?: unknown) {
 }
 
 describe("MCP JSON-RPC response stability", () => {
+  it("emits protocol errors even when HTTP success sampling is disabled", async () => {
+    vi.stubEnv("OMNIGAZE_TELEMETRY_SUCCESS_SAMPLE_RATE", "0");
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    try {
+      const response = await request("{");
+      const body = (await response.json()) as { error: { code: number } };
+
+      expect(response.status).toBe(200);
+      expect(body.error.code).toBe(-32700);
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "omnigaze.api_request",
+          operation: "mcp.post",
+          status: 200,
+        }),
+      );
+    } finally {
+      infoSpy.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("uses the standard parse and invalid-request error codes", async () => {
     const parseError = (await (await request("{" )).json()) as {
       error: { code: number };

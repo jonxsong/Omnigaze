@@ -48,6 +48,7 @@ describe("API route telemetry", () => {
       handler,
       {
         createRequestId: () => REQUEST_ID,
+        getSuccessSampleRate: () => 1,
         logger: telemetryLogger,
         now: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(22.34),
       },
@@ -113,6 +114,124 @@ describe("API route telemetry", () => {
     expect(telemetryLogger.error).not.toHaveBeenCalled();
   });
 
+  it("samples ordinary successes without dropping correlation headers", async () => {
+    const telemetryLogger = logger();
+    const wrapped = instrumentApiRoute(
+      { operation: "api.test.get" },
+      () => new Response("ok"),
+      {
+        createRequestId: () => REQUEST_ID,
+        getSuccessSampleRate: () => 0,
+        logger: telemetryLogger,
+        now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(5),
+      },
+    );
+
+    const response = await wrapped();
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-request-id")).toBe(REQUEST_ID);
+    expect(response.headers.get("server-timing")).toBe("omnigaze;dur=5.0");
+    expect(telemetryLogger.info).not.toHaveBeenCalled();
+    expect(telemetryLogger.warn).not.toHaveBeenCalled();
+    expect(telemetryLogger.error).not.toHaveBeenCalled();
+  });
+
+  it("never samples client errors even when successful completions are disabled", async () => {
+    const telemetryLogger = logger();
+    const wrapped = instrumentApiRoute(
+      { operation: "api.test.get" },
+      () => Response.json({ code: "invalid_request" }, { status: 400 }),
+      {
+        createRequestId: () => REQUEST_ID,
+        getSuccessSampleRate: () => 0,
+        logger: telemetryLogger,
+        now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(5),
+      },
+    );
+
+    await wrapped();
+
+    expect(telemetryLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "client_error", status: 400 }),
+    );
+  });
+
+  it("can exempt a protocol boundary whose errors use successful HTTP statuses", async () => {
+    const telemetryLogger = logger();
+    const wrapped = instrumentApiRoute(
+      { operation: "mcp.test", sampleSuccesses: false },
+      () => Response.json({ jsonrpc: "2.0", error: { code: -32600 } }),
+      {
+        createRequestId: () => REQUEST_ID,
+        getSuccessSampleRate: () => 0,
+        logger: telemetryLogger,
+        now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(5),
+      },
+    );
+
+    await wrapped();
+
+    expect(telemetryLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "mcp.test", status: 200 }),
+    );
+  });
+
+  it("samples intermediate rates deterministically from the server request ID", async () => {
+    const telemetryLogger = logger();
+    const requestIds = [REQUEST_ID, RESPONSE_REQUEST_ID];
+    const wrapped = instrumentApiRoute(
+      { operation: "api.test.get" },
+      () => new Response("ok"),
+      {
+        createRequestId: () => requestIds.shift() ?? REQUEST_ID,
+        getSuccessSampleRate: () => 0.5,
+        logger: telemetryLogger,
+        now: vi
+          .fn()
+          .mockReturnValueOnce(0)
+          .mockReturnValueOnce(1)
+          .mockReturnValueOnce(2)
+          .mockReturnValueOnce(3),
+      },
+    );
+
+    await wrapped();
+    await wrapped();
+
+    expect(telemetryLogger.info).toHaveBeenCalledOnce();
+    expect(telemetryLogger.info).toHaveBeenCalledWith(
+      expect.objectContaining({ requestId: RESPONSE_REQUEST_ID }),
+    );
+  });
+
+  it.each(["", "invalid", "-0.1", "1.1"])(
+    "fails safe to full success logging for an invalid rate: %j",
+    async (configuredRate) => {
+      vi.stubEnv(
+        "OMNIGAZE_TELEMETRY_SUCCESS_SAMPLE_RATE",
+        configuredRate,
+      );
+      const telemetryLogger = logger();
+      const wrapped = instrumentApiRoute(
+        { operation: "api.test.get" },
+        () => new Response("ok"),
+        {
+          createRequestId: () => REQUEST_ID,
+          logger: telemetryLogger,
+          now: vi.fn().mockReturnValueOnce(0).mockReturnValueOnce(1),
+        },
+      );
+
+      try {
+        await wrapped();
+        expect(telemetryLogger.info).toHaveBeenCalledOnce();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it("replaces handler response IDs and logs server responses as errors", async () => {
     const telemetryLogger = logger();
     const wrapped = instrumentApiRoute(
@@ -127,6 +246,7 @@ describe("API route telemetry", () => {
         ),
       {
         createRequestId: () => REQUEST_ID,
+        getSuccessSampleRate: () => 0,
         logger: telemetryLogger,
         now: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(20),
       },
@@ -154,6 +274,7 @@ describe("API route telemetry", () => {
       () => new Response(null, { status: 204 }),
       {
         createRequestId: () => REQUEST_ID,
+        getSuccessSampleRate: () => 0,
         logger: telemetryLogger,
         now: vi.fn().mockReturnValueOnce(100).mockReturnValueOnce(125),
       },

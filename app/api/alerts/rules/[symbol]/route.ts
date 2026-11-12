@@ -1,4 +1,5 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import {
   canonicalInboxSymbolSchema,
   parseEmptyInboxQuery,
@@ -6,7 +7,6 @@ import {
 } from "@/lib/intelligence-inbox/contracts";
 import { InboxRepositoryError } from "@/lib/intelligence-inbox/repository";
 import { putAlertRule } from "@/lib/intelligence-inbox/service";
-import { unexpectedApiError } from "@/lib/unexpected-failure";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +27,7 @@ async function parseSymbol(context: RouteContext) {
   }
 }
 
-export async function PUT(request: Request, context: RouteContext) {
+async function putAlertRuleHandler(request: Request, context: RouteContext) {
   const user = await getChatGPTUser();
   if (!user) return apiError("auth_required", "Authentication required.", 401);
 
@@ -69,12 +69,18 @@ export async function PUT(request: Request, context: RouteContext) {
             409,
           );
     }
-    return unexpectedApiError({
-      operation: "alert_rules.update",
-      failure: error,
+    throw error;
+  }
+}
+
+export const PUT = instrumentApiRoute(
+  {
+    operation: "api.alert_rules.put",
+    unexpectedError: {
       code: "alert_rule_update_failed",
       message: "Alert rule could not be updated.",
       status: 500,
-    });
-  }
-}
+    },
+  },
+  putAlertRuleHandler,
+);
