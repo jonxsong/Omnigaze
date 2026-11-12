@@ -147,6 +147,8 @@ The owner cursor is global rather than per symbol. It preserves all post-migrati
 6. The personalized dashboard joins watchlists, holdings, fresh market observations, and evidence events without requiring an order or brokerage connection.
 7. “Ask Omnigaze” receives only the user-approved scenario, normalized evidence, and deterministic math. Its narrative is validated for citations and non-prescriptive language before display.
 
+On authenticated dashboard entry, Today Across Your Watchlist reads the existing owner-scoped `GET /api/intelligence/today` contract once with a bound of 12 events. A strict client parser rejects unknown contract fields, collapses repeated stable event identities to the newest provider revision, removes events with no tracked-symbol intersection, and converts malformed or credential-bearing source URLs to `null`. The card renders at most four live, non-fixture events, keeps provider headlines and excerpts untranslated, and distinguishes retained-only, current-only, stale, unknown, truncated, demo, and unavailable states. It never invokes AI, polls, or persists its response. Explicit dashboard/card refreshes and successfully committed watchlist changes are the only reload triggers; a transient same-session failure may retain the last verified in-memory view, while authentication failure clears it.
+
 | Surface | Purpose |
 | --- | --- |
 | `GET /api/portfolio/pulse` | Return authenticated owner-scoped Portfolio Pulse math with no-store semantics and explicit coverage. |

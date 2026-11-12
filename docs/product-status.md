@@ -15,6 +15,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Explicit in-app alert rules with idempotent delivery records.
 - [x] Responsive desktop and mobile layouts, including a scroll-safe live Omnigaze View.
 - [x] Manual personalized Daily Brief with cited multi-symbol developments, omissions, unknowns, and visible AI-usage provenance.
+- [x] Automatic authenticated Today Across Your Watchlist card with strict client validation, bounded cross-symbol evidence, original-language sources, honest live/durable provenance, and zero model requests.
 - [x] Search discovery foundation: canonical metadata, JSON-LD, `robots.txt`, and `sitemap.xml`.
 - [x] One persisted English/Chinese preference across the landing page, onboarding, dashboard, inbox, Daily Brief, Omnigaze View, and portfolio research workspaces.
 

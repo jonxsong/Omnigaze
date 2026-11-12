@@ -85,6 +85,7 @@ import type { IntelligenceInboxCounts } from "@/lib/intelligence-inbox/contracts
 import { OmnigazeViewDialog } from "@/components/omnigaze-view-dialog";
 import { DailyBriefCard } from "@/components/daily-brief-card";
 import { PortfolioPulseCard } from "@/components/portfolio-pulse-card";
+import { PersonalTodayCard } from "@/components/personal-today-card";
 import { useAppLocale } from "@/components/app-locale";
 import {
   formatMarketDashboardCopy,
@@ -807,6 +808,7 @@ export function MarketDashboard({
     );
   const [showDataStatus, setShowDataStatus] = useState(false);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const [todayWatchlistGeneration, setTodayWatchlistGeneration] = useState(0);
   const [now, setNow] = useState(() => Date.now());
   const [snapshotResources, setSnapshotResources] = useState<
     Partial<Record<CanonicalSymbol, SnapshotResource>>
@@ -1631,6 +1633,7 @@ export function MarketDashboard({
         throw new Error(body?.error || `Watchlist save failed with ${response.status}.`);
       }
       setWatchlistSyncPhase("synced");
+      setTodayWatchlistGeneration((current) => current + 1);
     } catch {
       rollback();
       setWatchlistSyncPhase("error");
@@ -2501,6 +2504,14 @@ export function MarketDashboard({
               else openStockSearch();
             }}
             onSelectPosition={selectPulsePosition}
+          />
+
+          <PersonalTodayCard
+            session={session}
+            refreshToken={`${refreshGeneration}:${todayWatchlistGeneration}`}
+            selectableSymbols={visibleInstruments.map(({ id }) => id)}
+            onSelectSymbol={selectPulsePosition}
+            onOpenInbox={() => openIntelligenceInbox("inbox")}
           />
 
           <DailyBriefCard session={session} />

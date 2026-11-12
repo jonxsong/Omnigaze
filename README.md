@@ -1,6 +1,6 @@
 # Omnigaze
 
-Omnigaze is a personalized market-intelligence workspace. Users search the active U.S. equity universe, track the companies they care about, record holdings, inspect a live fixed-point **Portfolio Pulse**, keep a durable intelligence inbox, generate a cited cross-watchlist **Daily Brief**, and open an evidence-backed **Omnigaze View** that separates facts, derived observations, and AI inference.
+Omnigaze is a personalized market-intelligence workspace. Users search the active U.S. equity universe, track the companies they care about, record holdings, inspect a live fixed-point **Portfolio Pulse**, scan an automatic evidence-only **Today Across Your Watchlist** view, keep a durable intelligence inbox, generate a cited cross-watchlist **Daily Brief**, and open an evidence-backed **Omnigaze View** that separates facts, derived observations, and AI inference.
 
 The public alpha uses provider-backed quotes, chart history, and licensed news whenever those capabilities are configured. The SEC adapter now has a distributed D1 Fair Access coordinator plus durable recent-filing cursor ingestion, but production egress remains fail-closed until an operator supplies a truthful monitored contact identity and explicitly enables both requested SEC capabilities. Every surface carries source, freshness, delay, and fallback metadata; illustrative fixtures are never labeled as live.
 
@@ -15,6 +15,8 @@ The public alpha uses provider-backed quotes, chart history, and licensed news w
 7. Deterministic code—not the model—calculates any review zones and hypothetical share scenarios, and suppresses them when data is stale, demo, or insufficiently corroborated.
 8. A fresh live inbox read reconciles normalized events into D1, evaluates explicit in-app alert rules, and preserves per-user read, saved, and dismissed state across sessions.
 9. The dashboard, HTTP API, and MCP tools expose the same owner-scoped domain objects. Authenticated MCP clients can also update watchlist membership, upsert holdings, change inbox state, and configure in-app alert rules through the same strict parsers as the browser. Holdings, inbox state, and alert rules retain optimistic versions; watchlist set mutations remain idempotent.
+
+The authenticated dashboard also loads one bounded Today response on entry and after an explicit refresh. It shows at most four current, non-demo provider events across the saved watchlist, preserves original source language, and labels retained-only, current-only, stale, unknown, truncated, or unavailable evidence without invoking a model. A transient refresh failure keeps the last verified in-memory response visible for that session; it is never persisted in the browser.
 
 ## Stack
 
@@ -160,6 +162,7 @@ Use `server/discover`, `tools/list`, and `tools/call` with MCP version `2026-07-
 - Alert rules deliver only inside the Omnigaze inbox. Request-time refresh works now; background materialization remains inactive until the operator projection schedule is verified. The owner cursor is global rather than per symbol, so a symbol added after catch-up does not rewind older ledger history for that symbol; interactive newest-100 reconciliation may cover recent events. Email, SMS, push, and browser notifications are not enabled.
 - Brokerage import and order execution are intentionally not part of this alpha.
 - AI analysis requires an authenticated user, runs only after an explicit user request, and returns `503 ai_unconfigured` when the server secret is absent. Daily Brief generation is manual rather than scheduled; it fails closed when the watchlist has no eligible fresh live evidence.
+- Today Across Your Watchlist is an authenticated, request-time evidence view rather than a background notification channel. It makes no AI request, stores no browser copy, and refreshes only on entry, an explicit user refresh, or a successfully persisted watchlist change.
 - Omnigaze provides research support, not investment advice or autonomous trading.
 
 See [Scheduled ingestion](docs/scheduled-ingestion.md) for the operator contract, safety invariants, status semantics, and local verification workflow.
