@@ -232,11 +232,18 @@ export function parseDecisionSupportEnvelope(
     const quote = envelope.context.quote;
     const citations = envelope.context.evidence ?? [];
     const evidenceIds = new Set(envelope.decision.evidenceConfidence.evidenceIds);
+    const providerStreamCount =
+      envelope.context.providerStreamCount ??
+      envelope.context.independentSourceCount;
     if (
       !quote?.freshUntil ||
       quote.asOf !== envelope.decision.asOf ||
       citations.length < 2 ||
-      citations.some((citation) => !evidenceIds.has(citation.id))
+      citations.some((citation) => !evidenceIds.has(citation.id)) ||
+      providerStreamCount < 1 ||
+      (providerStreamCount < 2 &&
+        (envelope.decision.evidenceConfidence.label !== "limited" ||
+          envelope.decision.evidenceConfidence.score > 0.44))
     ) {
       throw new PortfolioClientContractError("unsafe_response");
     }

@@ -368,6 +368,18 @@ test.describe("Omnigaze public experience", () => {
               since: new Date(Date.parse(checkedAt) - 86_400_000).toISOString(),
               providers: [],
             },
+            projection: {
+              mode: "scheduled",
+              status: "healthy",
+              expectedCadenceSeconds: 300,
+              generatedAt: checkedAt,
+              hasProfiles: true,
+              hasPendingWork: false,
+              hasActiveLease: false,
+              hasFailures: false,
+              lastAttemptAt: checkedAt,
+              lastCompletedAt: checkedAt,
+            },
           },
           providers: [
             {
@@ -428,6 +440,16 @@ test.describe("Omnigaze public experience", () => {
     await expect(ingestionStatus).toContainText(
       /Status calculated: (just now|\d+s ago)/,
     );
+    const projectionStatus = panel.getByTestId("projection-status");
+    await expect(projectionStatus).toContainText("Offline alert delivery");
+    await expect(projectionStatus).toContainText("Scheduled · Healthy");
+    await expect(projectionStatus).toContainText(
+      "The durable inbox and in-app alert projector is caught up.",
+    );
+    await expect(projectionStatus).toContainText("Projection queue: Caught up");
+    await expect(projectionStatus).toContainText(
+      /Last completion: (just now|\d+s ago)/,
+    );
   });
 
   test("request-time collection transparency fits a mobile viewport without implying background alerts", async ({
@@ -444,6 +466,18 @@ test.describe("Omnigaze public experience", () => {
       since: new Date(Date.parse(checkedAt) - 86_400_000).toISOString(),
       providers: [],
     };
+    let projection = {
+      mode: "request_time",
+      status: "idle",
+      expectedCadenceSeconds: null,
+      generatedAt: checkedAt,
+      hasProfiles: false,
+      hasPendingWork: false,
+      hasActiveLease: false,
+      hasFailures: false,
+      lastAttemptAt: null,
+      lastCompletedAt: null,
+    };
     await page.setViewportSize({ width: 390, height: 844 });
     await page.route("**/api/health", async (route) => {
       await route.fulfill({
@@ -455,6 +489,7 @@ test.describe("Omnigaze public experience", () => {
           checkedAt,
           readiness: {
             ingestion,
+            projection,
           },
           providers: [],
         }),
@@ -482,8 +517,36 @@ test.describe("Omnigaze public experience", () => {
     await expect(panel).toContainText("Alerts are in-app only");
     await expect(panel).not.toContainText("Background alerts");
 
+    const projectionStatus = panel.getByTestId("projection-status");
+    await expect(projectionStatus).toContainText("Operator-triggered · Idle");
+    await expect(projectionStatus).toContainText(
+      "No durable inbox profile has been activated yet.",
+    );
+    await expect(projectionStatus).toContainText("Projection queue: Caught up");
+    await expect(projectionStatus).toContainText(
+      "Last completion: No projection completion recorded",
+    );
+
+    await page
+      .getByRole("group", { name: "Dashboard language" })
+      .getByRole("button", { name: "中文" })
+      .click();
+    const chineseProjectionStatus = page.getByTestId("projection-status");
+    await expect(chineseProjectionStatus).toContainText("离线提醒投递");
+    await expect(chineseProjectionStatus).toContainText("操作员触发 · 空闲");
+    await expect(chineseProjectionStatus).toContainText("投影队列： 已追赶完成");
+    await page
+      .getByRole("group", { name: "仪表盘语言" })
+      .getByRole("button", { name: "EN" })
+      .click();
+
     ingestion = {
       ...ingestion,
+      mode: "unavailable",
+      status: "unavailable",
+    };
+    projection = {
+      ...projection,
       mode: "unavailable",
       status: "unavailable",
     };
@@ -499,6 +562,10 @@ test.describe("Omnigaze public experience", () => {
     await expect(ingestionStatus).toContainText("Expected cadence: Unavailable");
     await expect(ingestionStatus).not.toContainText(
       "No successful collection recorded",
+    );
+    await expect(projectionStatus).toContainText("Status unavailable");
+    await expect(projectionStatus).toContainText(
+      "Alert-delivery readiness could not be read.",
     );
 
     const overflow = await page.evaluate(() => ({
@@ -1179,8 +1246,8 @@ test.describe("Omnigaze public experience", () => {
               },
             ],
             evidenceConfidence: {
-              score: 0.65,
-              label: "moderate",
+              score: 0.44,
+              label: "limited",
               meaning: "Evidence coverage only.",
               evidenceIds: ["news-1", "filing-1"],
             },
@@ -1206,8 +1273,8 @@ test.describe("Omnigaze public experience", () => {
               hasHolding: false,
               holding: null,
               evidenceCount: eligible ? 2 : 1,
-              independentSourceCount: eligible ? 2 : 1,
-              providerStreamCount: eligible ? 2 : 1,
+              independentSourceCount: 1,
+              providerStreamCount: 1,
               evidence: eligible
                 ? [
                     {
@@ -1221,9 +1288,9 @@ test.describe("Omnigaze public experience", () => {
                     },
                     {
                       id: "filing-1",
-                      headline: "Quarterly filing update",
-                      source: "sec-edgar",
-                      sourceKind: "sec_filing",
+                      headline: "Additional company update",
+                      source: "alpaca",
+                      sourceKind: "licensed_news",
                       publishedAt: now,
                       sourceUrl: "https://example.test/filing-1",
                       materiality: "high",
@@ -1275,6 +1342,9 @@ test.describe("Omnigaze public experience", () => {
     await expect(output.getByText("1.25 shares")).toBeVisible();
     await expect(output.getByText("Material company update")).toBeVisible();
     await expect(output.getByText("evidence coverage", { exact: true })).toBeVisible();
+    await expect(output).toContainText(
+      "1 provider stream · confidence capped at limited · source agreement not measured",
+    );
     await expect(workspace.getByText(/No trade execution/)).toBeVisible();
     await page.screenshot({
       path: "outputs/portfolio-workspace-desktop.png",

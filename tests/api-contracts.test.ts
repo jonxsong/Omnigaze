@@ -137,6 +137,18 @@ describe("browser API response contracts", () => {
         since: "2026-11-11T08:00:00.000Z",
         providers: [],
       }),
+      getProjectionReadiness: async () => ({
+        mode: "request_time",
+        status: "idle",
+        expectedCadenceSeconds: null,
+        generatedAt: "2026-11-12T08:00:00.000Z",
+        hasProfiles: false,
+        hasPendingWork: false,
+        hasActiveLease: false,
+        hasFailures: false,
+        lastAttemptAt: null,
+        lastCompletedAt: null,
+      }),
     });
     const response = await getHealth();
     const body = (await response.json()) as {
@@ -148,6 +160,7 @@ describe("browser API response contracts", () => {
       readiness: {
         database: { status: string; schema: string };
         ingestion: { mode: string; status: string };
+        projection: { mode: string; status: string; hasProfiles: boolean };
       };
     };
 
@@ -175,6 +188,11 @@ describe("browser API response contracts", () => {
       mode: "request_time",
       status: "idle",
     });
+    expect(body.readiness.projection).toMatchObject({
+      mode: "request_time",
+      status: "idle",
+      hasProfiles: false,
+    });
     expect(body.capabilities).toContain("bounded-cursor-ingestion");
     expect(Number.isNaN(Date.parse(body.checkedAt))).toBe(false);
   });
@@ -201,6 +219,18 @@ describe("browser API response contracts", () => {
         since: "2026-11-11T08:00:00.000Z",
         providers: [],
       }),
+      getProjectionReadiness: async () => ({
+        mode: "unavailable",
+        status: "unavailable",
+        expectedCadenceSeconds: null,
+        generatedAt: "2026-11-12T08:00:00.000Z",
+        hasProfiles: null,
+        hasPendingWork: null,
+        hasActiveLease: null,
+        hasFailures: null,
+        lastAttemptAt: null,
+        lastCompletedAt: null,
+      }),
     });
 
     const response = await getHealth();
@@ -213,6 +243,10 @@ describe("browser API response contracts", () => {
         database: {
           status: "unavailable",
           schema: "owner-projection-cursor-v1",
+        },
+        projection: {
+          mode: "unavailable",
+          status: "unavailable",
         },
       },
     });

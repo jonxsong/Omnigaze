@@ -10,6 +10,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Durable arbitrary-stock descriptors across anonymous reloads, with server-side canonical verification before authenticated writes.
 - [x] Personalized watchlist and holdings dashboard with optimistic persistence and conflict recovery.
 - [x] Bilingual Portfolio Pulse with fixed-point market value, daily contribution, unrealized P&L, concentration, top contributors, explicit quote exclusions, and HTTP/MCP parity.
+- [x] Bilingual provider-backed Market Pulse with one bounded six-ETF batch, strict client validation, live/partial/stale/unavailable states, honest proxy labeling, explicit refresh, and HTTP/MCP parity.
 - [x] Intelligence timeline with neutral handling of controversial executive, governance, legal, and reputational events.
 - [x] Durable intelligence inbox with read, saved, dismissed, and corrected-since-read state.
 - [x] Explicit in-app alert rules with idempotent delivery records.
@@ -29,6 +30,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Lease-protected, cursor-based news ingestion with frozen windows, idempotent page replay, bounded retention, and safe aggregate health.
 - [x] Request-time inbox reconciliation that projects collected global receipts into owner-scoped state.
 - [x] Monotonic logical-event projection ledger plus leased per-owner cursor and bounded operator tick. Consecutive repeats coalesce, A→B→A transitions remain replayable, equal revisions use durable observation order, and cursor advancement stops before any unmaterialized eligible event.
+- [x] Privacy-bounded owner-projection readiness across health, provider status, MCP, and the bilingual dashboard Data Status panel; no owner IDs, symbols, leases, cursor positions, or raw failures are exposed.
 - [ ] Link and verify a hosted `run_intelligence_projection_tick` schedule (or explicitly update and verify the existing ingestion schedule prompt) before claiming offline in-app alert materialization is operational.
 - [x] Unified intelligence reads across the public timeline, personalized Today feed, Daily Brief, Omnigaze View, portfolio decision support, and MCP, with deterministic correction merging and durable-evidence outage fallback.
 - [ ] Verify the hosted hourly operator tick after refreshing the Omnigaze app connection; keep collection labeled `request_time` until the first successful checkpoint.
@@ -53,6 +55,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Durable, model-aware AI-result caching with stable evidence fingerprints, freshness-bounded TTLs, atomic shared per-owner budgets, rolling limits, and cross-isolate leases.
 - [x] Generated cross-watchlist Daily Brief with deterministic live-evidence selection, strict grounding, owner-scoped caching, HTTP/MCP parity, and a manual dashboard workflow.
 - [x] Locale-aware Daily Brief and Omnigaze View generation with English/Chinese cache isolation, source-language preservation, and bilingual non-prescriptive output checks.
+- [x] Deterministic price/position research scenarios remain available with one fresh attributable provider stream when at least two evidence items exist; single-stream confidence is capped at limited and never presented as measured source agreement.
 
 ## Engineering and operations
 

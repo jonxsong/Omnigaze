@@ -11,6 +11,8 @@ The hosted trigger is intentionally external to the worker bundle. After deploym
 - `ALPACA_INGESTION_SYMBOLS`: optional comma-separated canonical IDs such as `NASDAQ:NVDA,NASDAQ:MSFT`. The core watchlist is used when omitted.
 - `INGESTION_EXPECTED_CADENCE_SECONDS`: bounded to 60–86,400 seconds; defaults to 300.
 - `INGESTION_COLLECTION_MODE`: leave as `request_time` until the hosted schedule is confirmed, then set to `scheduled`.
+- `INBOX_PROJECTION_EXPECTED_CADENCE_SECONDS`: bounded to 60–86,400 seconds and publicly reported only for a declared owner-projection schedule.
+- `INBOX_PROJECTION_COLLECTION_MODE`: leave as `request_time` until the separate projection schedule is linked and a successful tick is observed, then set to `scheduled`.
 - `SEC_EDGAR_ENABLED`: exact `true` request/egress gate.
 - `SEC_USER_AGENT`: truthful monitored application and operator contact identity.
 - `SEC_DURABLE_INGESTION_ENABLED`: second exact `true` gate for durable recent filings.

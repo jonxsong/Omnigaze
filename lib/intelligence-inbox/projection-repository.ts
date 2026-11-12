@@ -1,6 +1,7 @@
 import { and, asc, eq, isNull, or, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
+  inboxProjectionChanges,
   inboxProfiles,
   inboxProjectionCursors,
 } from "@/db/schema";
@@ -18,6 +19,16 @@ export interface InboxProjectionLease {
   lastSequence: number;
 }
 
+export interface InboxProjectionAggregateStatus {
+  generatedAt: string;
+  ownerCount: number;
+  pendingOwnerCount: number;
+  leasedOwnerCount: number;
+  failingOwnerCount: number;
+  lastAttemptAt: string | null;
+  lastCompletedAt: string | null;
+}
+
 export interface InboxProjectionCursorRepository {
   claimNext(requestedAt: string): Promise<InboxProjectionLease | null>;
   complete(
@@ -27,6 +38,7 @@ export interface InboxProjectionCursorRepository {
     hasMore: boolean,
   ): Promise<void>;
   fail(lease: InboxProjectionLease, failedAt: string): Promise<void>;
+  getAggregateStatus(now: string): Promise<InboxProjectionAggregateStatus>;
 }
 
 function normalizedIso(value: string) {
@@ -195,6 +207,68 @@ async function fail(
     );
 }
 
+async function getAggregateStatus(
+  db: ProjectionDatabase,
+  nowInput: string,
+): Promise<InboxProjectionAggregateStatus> {
+  const now = normalizedIso(nowInput);
+  const rows = await db.values<
+    [
+      number,
+      number,
+      number,
+      number,
+      string | null,
+      string | null,
+    ]
+  >(sql`
+    SELECT
+      COUNT(${inboxProfiles.ownerId}) AS owner_count,
+      COALESCE(SUM(
+        CASE
+          WHEN ${inboxProjectionCursors.ownerId} IS NULL
+            OR ${inboxProfiles.baselineCompletedAt} IS NULL
+            OR ${inboxProjectionCursors.lastSequence} < ledger.max_sequence
+          THEN 1
+          ELSE 0
+        END
+      ), 0) AS pending_owner_count,
+      COALESCE(SUM(
+        CASE
+          WHEN ${inboxProjectionCursors.claimToken} IS NOT NULL
+            AND julianday(${inboxProjectionCursors.claimUntil}) > julianday(${now})
+          THEN 1
+          ELSE 0
+        END
+      ), 0) AS leased_owner_count,
+      COALESCE(SUM(
+        CASE
+          WHEN ${inboxProjectionCursors.consecutiveFailures} > 0 THEN 1
+          ELSE 0
+        END
+      ), 0) AS failing_owner_count,
+      MAX(${inboxProjectionCursors.lastAttemptAt}) AS last_attempt_at,
+      MAX(${inboxProjectionCursors.lastCompletedAt}) AS last_completed_at
+    FROM ${inboxProfiles}
+    LEFT JOIN ${inboxProjectionCursors}
+      ON ${inboxProjectionCursors.ownerId} = ${inboxProfiles.ownerId}
+    CROSS JOIN (
+      SELECT COALESCE(MAX(${inboxProjectionChanges.sequence}), 0) AS max_sequence
+      FROM ${inboxProjectionChanges}
+    ) AS ledger
+  `);
+  const row = rows[0];
+  return {
+    generatedAt: now,
+    ownerCount: Number(row?.[0] ?? 0),
+    pendingOwnerCount: Number(row?.[1] ?? 0),
+    leasedOwnerCount: Number(row?.[2] ?? 0),
+    failingOwnerCount: Number(row?.[3] ?? 0),
+    lastAttemptAt: row?.[4] ?? null,
+    lastCompletedAt: row?.[5] ?? null,
+  };
+}
+
 export function createInboxProjectionCursorRepository(
   databaseFactory: ProjectionDatabaseFactory = getDb,
 ): InboxProjectionCursorRepository {
@@ -209,6 +283,7 @@ export function createInboxProjectionCursorRepository(
         hasMore,
       ),
     fail: (lease, failedAt) => fail(databaseFactory(), lease, failedAt),
+    getAggregateStatus: (now) => getAggregateStatus(databaseFactory(), now),
   };
 }
 

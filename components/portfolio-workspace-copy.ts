@@ -47,7 +47,7 @@ const english = {
   removePosition: "Remove position",
   evidenceGated: "EVIDENCE-GATED",
   researchIntro:
-    "Calculate review checkpoints from a fresh quote and corroborated evidence. These are not targets or recommendations.",
+    "Calculate review checkpoints from a fresh quote and at least two attributable evidence items. These are not targets or recommendations.",
   signInForScenarios: "Sign in to run evidence-gated scenarios",
   privateScenarioIdentity:
     "The service derives your saved holding privately and never accepts a caller-supplied account identity.",
@@ -83,6 +83,10 @@ const english = {
   providerQuote: "Provider quote",
   coverage: "coverage",
   evidenceCoverage: "evidence coverage",
+  singleStreamDisclosure:
+    "1 provider stream · confidence capped at limited · source agreement not measured",
+  multipleStreamsDisclosure:
+    "provider streams · source agreement not measured",
   limited: "limited",
   moderate: "moderate",
   strong: "strong",
@@ -226,7 +230,7 @@ const chinese: PortfolioWorkspaceCopy = {
   removePosition: "移除持仓",
   evidenceGated: "证据门控",
   researchIntro:
-    "基于新鲜报价和相互印证的证据计算复核检查点；这些不是目标价或建议。",
+    "基于新鲜报价和至少两条可归属证据计算复核检查点；这些不是目标价或建议。",
   signInForScenarios: "登录以运行证据门控情景",
   privateScenarioIdentity:
     "服务会私密读取您保存的持仓，绝不接受调用方提供的账户身份。",
@@ -261,6 +265,10 @@ const chinese: PortfolioWorkspaceCopy = {
   providerQuote: "提供商报价",
   coverage: "覆盖",
   evidenceCoverage: "证据覆盖度",
+  singleStreamDisclosure:
+    "1 个提供商信息流 · 置信度上限为有限 · 未衡量来源一致性",
+  multipleStreamsDisclosure:
+    "个提供商信息流 · 未衡量来源一致性",
   limited: "有限",
   moderate: "中等",
   strong: "充分",

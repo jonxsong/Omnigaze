@@ -18,7 +18,10 @@ const MAX_PROJECTION_CHANGES_PER_TICK = 16;
 type WatchlistResult = Awaited<ReturnType<typeof listUserWatchlists>>;
 
 export interface IntelligenceProjectionDependencies {
-  cursors: InboxProjectionCursorRepository;
+  cursors: Pick<
+    InboxProjectionCursorRepository,
+    "claimNext" | "complete" | "fail"
+  >;
   inbox: IntelligenceInboxRepository;
   listWatchlists(ownerId: string): Promise<WatchlistResult>;
   listChanges(input: {

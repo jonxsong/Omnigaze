@@ -152,6 +152,52 @@ describe("portfolio dashboard response contracts", () => {
     ).toThrowError(PortfolioClientContractError);
   });
 
+  it("rejects a single-stream response that overstates evidence confidence", () => {
+    expect(() =>
+      parseDecisionSupportEnvelope(
+        {
+          ...eligibleEnvelope,
+          data: {
+            ...eligibleEnvelope.data,
+            context: {
+              ...eligibleEnvelope.data.context,
+              independentSourceCount: 1,
+              providerStreamCount: 1,
+            },
+          },
+        },
+        "NASDAQ:NVDA",
+      ),
+    ).toThrowError(PortfolioClientContractError);
+
+    const safe = parseDecisionSupportEnvelope(
+      {
+        ...eligibleEnvelope,
+        data: {
+          ...eligibleEnvelope.data,
+          decision: {
+            ...eligibleEnvelope.data.decision,
+            evidenceConfidence: {
+              ...eligibleEnvelope.data.decision.evidenceConfidence,
+              score: 0.44,
+              label: "limited",
+            },
+          },
+          context: {
+            ...eligibleEnvelope.data.context,
+            independentSourceCount: 1,
+            providerStreamCount: 1,
+          },
+        },
+      },
+      "NASDAQ:NVDA",
+    );
+    expect(safe.decision).toMatchObject({
+      eligible: true,
+      evidenceConfidence: { score: 0.44, label: "limited" },
+    });
+  });
+
   it("validates exact-decimal editor inputs", () => {
     expect(validatePositionFields(" 15.125 ", "140.50")).toEqual({
       success: true,

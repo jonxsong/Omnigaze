@@ -55,6 +55,7 @@ import type {
   Materiality,
 } from "@/lib/market-types";
 import type { IngestionReadiness } from "@/lib/services/ingestion-health";
+import type { ProjectionReadiness } from "@/lib/services/projection-health";
 import type { IntelligenceReadPlaneMeta } from "@/lib/services/intelligence-read-plane";
 import type {
   IntelligenceFeedItem,
@@ -86,6 +87,7 @@ import { OmnigazeViewDialog } from "@/components/omnigaze-view-dialog";
 import { DailyBriefCard } from "@/components/daily-brief-card";
 import { PortfolioPulseCard } from "@/components/portfolio-pulse-card";
 import { PersonalTodayCard } from "@/components/personal-today-card";
+import { MarketContextTicker } from "@/components/market-context-ticker";
 import { useAppLocale } from "@/components/app-locale";
 import {
   formatMarketDashboardCopy,
@@ -358,6 +360,7 @@ interface HealthResponse {
   providerHealth?: ProviderReport[];
   readiness?: {
     ingestion?: IngestionReadiness;
+    projection?: ProjectionReadiness;
   };
 }
 
@@ -574,6 +577,15 @@ function formatIngestionMode(mode: IngestionReadiness["mode"], t: DashboardTrans
   return t("ingestionUnavailable");
 }
 
+function formatProjectionMode(
+  mode: ProjectionReadiness["mode"],
+  t: DashboardTranslator,
+) {
+  if (mode === "scheduled") return t("ingestionScheduled");
+  if (mode === "request_time") return t("projectionOperatorTriggered");
+  return t("ingestionUnavailable");
+}
+
 function formatIngestionStatus(status: IngestionReadiness["status"], t: DashboardTranslator) {
   if (status === "catching_up") return t("statusCatchingUp");
   if (status === "idle") return t("statusIdle");
@@ -596,6 +608,18 @@ function ingestionStatusDescription(status: IngestionReadiness["status"], t: Das
   }
   if (status === "idle") return t("collectionIdle");
   return t("collectionUnreadable");
+}
+
+function projectionStatusDescription(
+  status: ProjectionReadiness["status"],
+  t: DashboardTranslator,
+) {
+  if (status === "healthy") return t("projectionHealthy");
+  if (status === "catching_up") return t("projectionCatchingUp");
+  if (status === "delayed") return t("projectionDelayed");
+  if (status === "degraded") return t("projectionDegraded");
+  if (status === "idle") return t("projectionIdle");
+  return t("projectionUnreadable");
 }
 
 function ingestionStatusDot(status: IngestionReadiness["status"]) {
@@ -1518,6 +1542,10 @@ export function MarketDashboard({
   const ingestionUnavailable =
     ingestionReadiness?.mode === "unavailable" ||
     ingestionReadiness?.status === "unavailable";
+  const projectionReadiness = healthResource.data?.readiness?.projection;
+  const projectionUnavailable =
+    projectionReadiness?.mode === "unavailable" ||
+    projectionReadiness?.status === "unavailable";
   const applicationHealthDot =
     healthResource.phase === "ready" && healthResource.data?.status === "degraded"
       ? "degraded"
@@ -2216,6 +2244,83 @@ export function MarketDashboard({
                   {healthResource.phase === "loading"
                     ? t("waitingCollection")
                     : t("noCollectionStatus")}
+                </small>
+              )}
+            </div>
+            <div data-testid="projection-status">
+              <dt>{t("alertDelivery")}</dt>
+              <dd>
+                <span
+                  aria-hidden="true"
+                  className={`health-dot ${
+                    projectionReadiness
+                      ? ingestionStatusDot(projectionReadiness.status)
+                      : healthResource.phase === "loading"
+                        ? "loading"
+                        : "unavailable"
+                  }`}
+                />
+                {healthResource.phase === "loading"
+                  ? t("checking")
+                  : projectionReadiness
+                    ? projectionUnavailable
+                      ? t("statusUnavailable")
+                      : `${formatProjectionMode(projectionReadiness.mode, t)} · ${formatIngestionStatus(projectionReadiness.status, t)}`
+                    : t("statusUnavailable")}
+              </dd>
+              {projectionReadiness ? (
+                <small className="collection-status-details">
+                  <span>
+                    {projectionUnavailable
+                      ? t("projectionUnreadable")
+                      : projectionStatusDescription(projectionReadiness.status, t)}
+                  </span>
+                  <span>
+                    <strong>{t("projectionQueue")}</strong>{" "}
+                    {projectionUnavailable
+                      ? t("unavailable")
+                      : projectionReadiness.hasPendingWork
+                        ? t("projectionPending")
+                        : t("projectionCaughtUp")}
+                  </span>
+                  <span>
+                    <strong>{t("lastProjectionAttempt")}</strong>{" "}
+                    {formatOperationalTimestamp(
+                      projectionReadiness.lastAttemptAt,
+                      now,
+                      projectionUnavailable
+                        ? t("unavailable")
+                        : t("noProjectionAttempt"),
+                      locale,
+                      t,
+                    )}
+                  </span>
+                  <span>
+                    <strong>{t("lastProjectionCompleted")}</strong>{" "}
+                    {formatOperationalTimestamp(
+                      projectionReadiness.lastCompletedAt,
+                      now,
+                      projectionUnavailable
+                        ? t("unavailable")
+                        : t("noProjectionCompletion"),
+                      locale,
+                      t,
+                    )}
+                  </span>
+                  <span>
+                    <strong>{t("expectedCadence")}</strong>{" "}
+                    {formatCadence(
+                      projectionReadiness.expectedCadenceSeconds,
+                      projectionReadiness.mode,
+                      t,
+                    )}
+                  </span>
+                </small>
+              ) : (
+                <small>
+                  {healthResource.phase === "loading"
+                    ? t("waitingProjection")
+                    : t("noProjectionStatus")}
                 </small>
               )}
             </div>
@@ -2937,21 +3042,7 @@ export function MarketDashboard({
         </section>
       )}
 
-      <footer className="market-ticker" aria-label={t("marketSummary")}>
-        <span className="ticker-status"><span className="status-dot fixture" /> {t("demoContext")}</span>
-        {[
-          ["S&P 500", "7,141.20", "+0.82%"],
-          ["NASDAQ", "25,418.60", "+1.14%"],
-          ["US 10Y", "4.18%", "+3 bps"],
-          ["VIX", "16.72", "-2.34%"],
-          ["WTI", "$78.16", "+0.42%"],
-        ].map(([name, value, change]) => (
-          <span className="ticker-item" key={name}>
-            <strong>{name}</strong><span>{value}</span><small className={change.startsWith("+") ? "market-positive" : "market-negative"}>{change}</small>
-          </span>
-        ))}
-        <span className="ticker-time">{t("illustrativeIndex")}</span>
-      </footer>
+      <MarketContextTicker refreshToken={refreshGeneration} />
 
       {hasMarketSelection && (
         <OmnigazeViewDialog

@@ -47,6 +47,11 @@ export interface EvidenceConfidence {
   label: "limited" | "moderate" | "strong";
   meaning: string;
   evidenceIds: string[];
+  sourceDiversity: {
+    independentSourceCount: number;
+    label: "single_stream" | "multiple_streams";
+    meaning: string;
+  };
 }
 
 export type DecisionSupportResult =
@@ -124,7 +129,7 @@ function confidenceFor(evidence: DecisionEvidenceInput): EvidenceConfidence {
     0.2,
     evidence.contradictorySignalCount * 0.05,
   );
-  const score = Math.max(
+  const rawScore = Math.max(
     0,
     Math.min(
       0.85,
@@ -136,13 +141,27 @@ function confidenceFor(evidence: DecisionEvidenceInput): EvidenceConfidence {
         contradictionPenalty,
     ),
   );
+  const hasMultipleStreams = evidence.independentSourceCount >= 2;
+  const score = hasMultipleStreams ? rawScore : Math.min(rawScore, 0.44);
 
   return {
     score: Number(score.toFixed(2)),
-    label: score >= 0.7 ? "strong" : score >= 0.45 ? "moderate" : "limited",
+    label:
+      hasMultipleStreams && score >= 0.7
+        ? "strong"
+        : hasMultipleStreams && score >= 0.45
+          ? "moderate"
+          : "limited",
     meaning:
-      "Evidence coverage and source agreement only; this is not a probability of price direction or return.",
+      "Evidence coverage only; this is not a probability of price direction or return.",
     evidenceIds,
+    sourceDiversity: {
+      independentSourceCount: evidence.independentSourceCount,
+      label: hasMultipleStreams ? "multiple_streams" : "single_stream",
+      meaning: hasMultipleStreams
+        ? "Evidence spans multiple provider streams. Omnigaze has not measured whether those sources agree."
+        : "Evidence comes from one provider stream, so confidence remains limited. Omnigaze has not measured source agreement.",
+    },
   };
 }
 
@@ -153,9 +172,6 @@ function suppressedReasons(input: DecisionSupportInput) {
   if (input.market.priceMicros <= 0) reasons.push("valid_market_price_required");
   if (new Set(input.evidence.evidenceIds.filter(Boolean)).size < 2) {
     reasons.push("insufficient_evidence");
-  }
-  if (input.evidence.independentSourceCount < 2) {
-    reasons.push("independent_sources_required");
   }
   return reasons;
 }

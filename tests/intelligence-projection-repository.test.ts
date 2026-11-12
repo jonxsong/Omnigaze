@@ -157,4 +157,59 @@ describe("owner intelligence projection cursor repository", () => {
       repository.claimNext("2026-11-12T09:00:11.000Z"),
     ).resolves.toMatchObject({ lastSequence: 0 });
   });
+
+  it("reports only privacy-bounded aggregate projection readiness", async () => {
+    activate(sqlite, "owner-a", "2026-11-12T08:00:00.000Z");
+    activate(sqlite, "owner-b", "2026-11-12T08:00:01.000Z");
+    sqlite
+      .prepare(
+        "UPDATE inbox_profiles SET baseline_completed_at = NULL WHERE owner_id = ?",
+      )
+      .run("owner-b");
+
+    await expect(
+      repository.getAggregateStatus("2026-11-12T09:00:00.000Z"),
+    ).resolves.toEqual({
+      generatedAt: "2026-11-12T09:00:00.000Z",
+      ownerCount: 2,
+      pendingOwnerCount: 2,
+      leasedOwnerCount: 0,
+      failingOwnerCount: 0,
+      lastAttemptAt: null,
+      lastCompletedAt: null,
+    });
+
+    const first = await repository.claimNext("2026-11-12T09:00:00.000Z");
+    const whileLeased = await repository.getAggregateStatus(
+      "2026-11-12T09:00:00.500Z",
+    );
+    expect(whileLeased).toMatchObject({
+      ownerCount: 2,
+      pendingOwnerCount: 1,
+      leasedOwnerCount: 1,
+      failingOwnerCount: 0,
+      lastAttemptAt: "2026-11-12T09:00:00.000Z",
+    });
+
+    await repository.complete(
+      first!,
+      "2026-11-12T09:00:01.000Z",
+      0,
+      false,
+    );
+    const second = await repository.claimNext("2026-11-12T09:00:01.000Z");
+    await repository.fail(second!, "2026-11-12T09:00:02.000Z");
+    const failed = await repository.getAggregateStatus(
+      "2026-11-12T09:00:03.000Z",
+    );
+    expect(failed).toMatchObject({
+      ownerCount: 2,
+      pendingOwnerCount: 1,
+      leasedOwnerCount: 0,
+      failingOwnerCount: 1,
+      lastAttemptAt: "2026-11-12T09:00:01.000Z",
+      lastCompletedAt: "2026-11-12T09:00:01.000Z",
+    });
+    expect(JSON.stringify(failed)).not.toMatch(/owner-a|owner-b|claim|sequence/i);
+  });
 });

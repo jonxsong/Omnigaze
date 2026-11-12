@@ -34,6 +34,7 @@ describe("MCP 2026-07-28 contract", () => {
       expect.arrayContaining([
         "search_symbols",
         "get_market_snapshot",
+        "get_market_context",
         "get_intelligence_feed",
         "get_omnigaze_view",
         "get_daily_brief",
@@ -55,6 +56,67 @@ describe("MCP 2026-07-28 contract", () => {
     };
     expect(content.data.symbolId).toBe("NASDAQ:NVDA");
     expect(content.meta.isDelayed).toBe(true);
+  });
+
+  it("returns the fixed, honestly labeled ETF-proxy market context", async () => {
+    const body = await callMcp("tools/call", {
+      name: "get_market_context",
+      arguments: {},
+    });
+    const result = body.result as { content: Array<{ text: string }> };
+    const content = JSON.parse(result.content[0].text) as {
+      data: Array<{ ticker: string; assetType: string; status: string }>;
+      meta: { requestedCount: number; notice: string };
+    };
+
+    expect(content.data.map((item) => item.ticker)).toEqual([
+      "SPY",
+      "QQQ",
+      "IWM",
+      "TLT",
+      "USO",
+      "GLD",
+    ]);
+    expect(content.data.every((item) => item.assetType === "etf_proxy")).toBe(
+      true,
+    );
+    expect(content.meta).toMatchObject({
+      requestedCount: 6,
+      notice:
+        "Provider-backed ETF proxies. Values are not the underlying index, yield, volatility index, or spot commodity.",
+    });
+  });
+
+  it("reports privacy-bounded owner projection readiness with provider status", async () => {
+    const body = await callMcp("tools/call", {
+      name: "get_provider_status",
+      arguments: {},
+    });
+    const result = body.result as { content: Array<{ text: string }> };
+    const content = JSON.parse(result.content[0].text) as {
+      data: {
+        projection: {
+          mode: string;
+          status: string;
+          hasProfiles: boolean | null;
+          hasPendingWork: boolean | null;
+        };
+      };
+    };
+
+    expect(content.data.projection).toMatchObject({
+      mode: expect.stringMatching(/^(request_time|scheduled|unavailable)$/),
+      status: expect.stringMatching(
+        /^(healthy|catching_up|delayed|degraded|idle|unavailable)$/,
+      ),
+    });
+    expect([true, false, null]).toContain(content.data.projection.hasProfiles);
+    expect([true, false, null]).toContain(
+      content.data.projection.hasPendingWork,
+    );
+    expect(JSON.stringify(content.data.projection)).not.toMatch(
+      /ownerId|ownerCount|pendingOwnerCount|leasedOwnerCount|failingOwnerCount|symbol|claimToken|lastSequence|partitionKey/,
+    );
   });
 
   it("reports unknown tools without crashing the endpoint", async () => {

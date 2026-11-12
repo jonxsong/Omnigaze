@@ -53,6 +53,16 @@ const tools = [
     },
   },
   {
+    name: "get_market_context",
+    description:
+      "Return a fixed, provider-backed market pulse using six explicitly labeled ETF proxies. Values are ETF prices, not underlying index levels, yields, volatility, or spot commodities.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_intelligence_feed",
     description:
       "Return evidence-backed market events, optionally filtered to one symbol.",
@@ -502,6 +512,15 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
             })
           : toolError("Symbol not found.");
       }
+      case "get_market_context": {
+        const parsed = z.object({}).strict().safeParse(args);
+        if (!parsed.success) return validationError(parsed.error);
+        const { getMarketContext } = await import(
+          "@/lib/services/market-context"
+        );
+        const result = await getMarketContext();
+        return toolContent(result.data, result.meta);
+      }
       case "get_intelligence_feed": {
         const parsed = z
           .object({
@@ -756,11 +775,15 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         const { getIngestionReadiness } = await import(
           "@/lib/services/ingestion-health"
         );
-        const [providerStatus, ingestion] = await Promise.all([
+        const { getProjectionReadiness } = await import(
+          "@/lib/services/projection-health"
+        );
+        const [providerStatus, ingestion, projection] = await Promise.all([
           liveMarketData.getProviderStatus(),
           getIngestionReadiness(),
+          getProjectionReadiness(),
         ]);
-        return toolContent({ ...providerStatus, ingestion }, {
+        return toolContent({ ...providerStatus, ingestion, projection }, {
           generatedAt: new Date().toISOString(),
         });
       }

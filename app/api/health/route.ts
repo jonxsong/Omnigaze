@@ -8,6 +8,10 @@ import {
   getIngestionReadiness,
   type IngestionReadiness,
 } from "@/lib/services/ingestion-health";
+import {
+  getProjectionReadiness,
+  type ProjectionReadiness,
+} from "@/lib/services/projection-health";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +19,7 @@ interface HealthDependencies {
   getProviderStatus: typeof liveMarketData.getProviderStatus;
   checkDatabaseReadiness: () => Promise<DatabaseReadiness>;
   getIngestionReadiness: () => Promise<IngestionReadiness>;
+  getProjectionReadiness: () => Promise<ProjectionReadiness>;
 }
 
 export function createHealthHandler(
@@ -22,13 +27,20 @@ export function createHealthHandler(
     getProviderStatus: () => liveMarketData.getProviderStatus(),
     checkDatabaseReadiness,
     getIngestionReadiness,
+    getProjectionReadiness,
   },
 ) {
   return async function healthHandler() {
-    const [providerStatus, databaseReadiness, ingestionReadiness] = await Promise.all([
+    const [
+      providerStatus,
+      databaseReadiness,
+      ingestionReadiness,
+      projectionReadiness,
+    ] = await Promise.all([
       dependencies.getProviderStatus(),
       dependencies.checkDatabaseReadiness(),
       dependencies.getIngestionReadiness(),
+      dependencies.getProjectionReadiness(),
     ]);
     const providerDegraded = providerStatus.providers.some(
       (provider) => provider.status === "degraded",
@@ -38,6 +50,9 @@ export function createHealthHandler(
       databaseReadiness.status !== "ready" ||
       ["degraded", "delayed", "unavailable"].includes(
         ingestionReadiness.status,
+      ) ||
+      ["degraded", "delayed", "unavailable"].includes(
+        projectionReadiness.status,
       )
         ? "degraded"
         : "ok";
@@ -52,6 +67,7 @@ export function createHealthHandler(
           "personal-dashboard",
           "active-us-equity-search",
           "market-snapshots",
+          "live-market-context-etf-proxies-v1",
           "historical-bars",
           "market-news-intelligence",
           "unified-intelligence-read-plane-v1",
@@ -69,6 +85,9 @@ export function createHealthHandler(
           ...(ingestionReadiness.mode === "scheduled"
             ? ["scheduled-cursor-ingestion"]
             : []),
+          ...(projectionReadiness.mode === "scheduled"
+            ? ["scheduled-owner-projection"]
+            : []),
           "mcp-2026-07-28",
           "mcp-personal-state-writes-v1",
         ],
@@ -76,6 +95,7 @@ export function createHealthHandler(
         readiness: {
           database: databaseReadiness,
           ingestion: ingestionReadiness,
+          projection: projectionReadiness,
         },
         providers: providerStatus.providers,
         liveCapabilities: providerStatus.liveCapabilities,

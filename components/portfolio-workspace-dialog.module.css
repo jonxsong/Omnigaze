@@ -279,6 +279,7 @@
 .coverageBadge strong { color: #a7e8f9; font-size: 16px; font-variant-numeric: tabular-nums; }
 .coverageBadge span { color: #6c8798; font-size: 6px; text-transform: uppercase; }
 .coverageBadge small { margin-top: 3px; color: #6fb9cd; font-size: 7px; text-transform: capitalize; }
+.sourceDiversityNotice { margin: -8px 0 0; color: #708696; font-size: 8px; line-height: 1.5; }
 
 .zoneGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .zoneGrid article { min-width: 0; padding: 13px; border: 1px solid #1d303e; border-radius: 11px; background: linear-gradient(160deg, rgb(15 31 42 / 85%), rgb(8 18 26 / 75%)); }

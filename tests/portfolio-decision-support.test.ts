@@ -163,6 +163,44 @@ describe("portfolio decision-support orchestration", () => {
     }
   });
 
+  it("keeps scenarios available but confidence limited for one provider stream", async () => {
+    const result = await getPortfolioDecisionSupport(
+      "owner-a",
+      request,
+      dependencies({
+        getIntelligence: vi.fn().mockResolvedValue({
+          data: [
+            evidence("news-1", "alpaca"),
+            evidence("news-2", "alpaca"),
+          ],
+          meta: freshMeta,
+        }),
+      }),
+    );
+
+    expect(result.context).toMatchObject({
+      evidenceCount: 2,
+      independentSourceCount: 1,
+      providerStreamCount: 1,
+    });
+    expect(result.decision.eligible).toBe(true);
+    if (!result.decision.eligible) return;
+    expect(result.decision.evidenceConfidence).toMatchObject({
+      label: "limited",
+      sourceDiversity: {
+        independentSourceCount: 1,
+        label: "single_stream",
+      },
+    });
+    expect(result.decision.evidenceConfidence.score).toBeLessThan(0.45);
+    expect(result.decision.evidenceConfidence.meaning).not.toContain(
+      "agreement",
+    );
+    expect(result.decision.evidenceConfidence.sourceDiversity.meaning).toContain(
+      "has not measured source agreement",
+    );
+  });
+
   it("suppresses numeric output when the quote is demo data", async () => {
     const demoMeta = {
       ...freshMeta,

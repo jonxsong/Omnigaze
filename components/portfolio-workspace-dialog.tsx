@@ -1149,6 +1149,14 @@ export function PortfolioWorkspaceDialog({
                         </div>
                       </div>
 
+                      <p className={styles.sourceDiversityNotice}>
+                        {(scenarioContext?.providerStreamCount ??
+                          scenarioContext?.independentSourceCount ??
+                          0) < 2
+                          ? copy.singleStreamDisclosure
+                          : `${scenarioContext?.providerStreamCount ?? scenarioContext?.independentSourceCount ?? 0} ${copy.multipleStreamsDisclosure}`}
+                      </p>
+
                       <div className={styles.zoneGrid}>
                         {eligibleDecision.zones.map((zone) => (
                           <article key={zone.kind}>

@@ -70,6 +70,13 @@ describe("deterministic decision support", () => {
     if (!result.eligible) return;
     expect(result.evidenceConfidence.score).toBeLessThanOrEqual(0.85);
     expect(result.evidenceConfidence.meaning).toContain("not a probability");
+    expect(result.evidenceConfidence.meaning).not.toContain("agreement");
+    expect(result.evidenceConfidence.sourceDiversity).toEqual({
+      independentSourceCount: 3,
+      label: "multiple_streams",
+      meaning:
+        "Evidence spans multiple provider streams. Omnigaze has not measured whether those sources agree.",
+    });
     expect(result.evidenceConfidence.evidenceIds).toEqual([
       "filing-1",
       "news-1",
@@ -97,7 +104,7 @@ describe("deterministic decision support", () => {
     expect("zones" in result).toBe(false);
   });
 
-  it("requires corroboration before showing numeric scenarios", () => {
+  it("requires at least two attributable evidence items before showing numeric scenarios", () => {
     const result = buildDecisionSupport({
       ...baseInput,
       evidence: {
@@ -109,8 +116,39 @@ describe("deterministic decision support", () => {
 
     expect(result).toMatchObject({
       eligible: false,
-      suppressedReasons: ["insufficient_evidence", "independent_sources_required"],
+      suppressedReasons: ["insufficient_evidence"],
     });
+  });
+
+  it("allows one provider stream but caps evidence confidence at limited", () => {
+    const result = buildDecisionSupport({
+      ...baseInput,
+      evidence: {
+        ...baseInput.evidence,
+        evidenceIds: ["news-1", "news-2", "news-3", "news-4", "filing-1"],
+        independentSourceCount: 1,
+        materialEventCount: 4,
+        contradictorySignalCount: 0,
+        hasRecentFiling: true,
+      },
+    });
+
+    expect(result.eligible).toBe(true);
+    if (!result.eligible) return;
+    expect(result.evidenceConfidence).toMatchObject({
+      score: 0.44,
+      label: "limited",
+      meaning:
+        "Evidence coverage only; this is not a probability of price direction or return.",
+      sourceDiversity: {
+        independentSourceCount: 1,
+        label: "single_stream",
+      },
+    });
+    expect(result.evidenceConfidence.score).toBeLessThan(0.45);
+    expect(result.evidenceConfidence.sourceDiversity.meaning).toContain(
+      "has not measured source agreement",
+    );
   });
 
   it("rejects unsafe numeric inputs at the deterministic boundary", () => {
