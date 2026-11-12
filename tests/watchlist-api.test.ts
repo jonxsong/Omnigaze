@@ -6,13 +6,20 @@ const mocks = vi.hoisted(() => {
       super(code);
     }
   }
+  class MockInstrumentResolutionError extends Error {
+    constructor(readonly code: string) {
+      super(code);
+    }
+  }
 
   return {
     getChatGPTUser: vi.fn(),
     listUserWatchlists: vi.fn(),
     addSymbolToWatchlist: vi.fn(),
     removeSymbolFromWatchlist: vi.fn(),
+    resolveCanonicalInstrument: vi.fn(),
     WatchlistRepositoryError: MockWatchlistRepositoryError,
+    InstrumentResolutionError: MockInstrumentResolutionError,
   };
 });
 
@@ -25,6 +32,11 @@ vi.mock("@/lib/repositories/watchlists", () => ({
   addSymbolToWatchlist: mocks.addSymbolToWatchlist,
   removeSymbolFromWatchlist: mocks.removeSymbolFromWatchlist,
   WatchlistRepositoryError: mocks.WatchlistRepositoryError,
+}));
+
+vi.mock("@/lib/services/instrument-resolution", () => ({
+  resolveCanonicalInstrument: mocks.resolveCanonicalInstrument,
+  InstrumentResolutionError: mocks.InstrumentResolutionError,
 }));
 
 import { GET, POST } from "@/app/api/watchlists/route";
@@ -45,6 +57,15 @@ describe("personal watchlist API", () => {
       email: "a@example.test",
       displayName: "A",
       fullName: null,
+    });
+    mocks.resolveCanonicalInstrument.mockResolvedValue({
+      id: "NASDAQ:NVDA",
+      ticker: "NVDA",
+      exchange: "NASDAQ",
+      name: "NVIDIA Corporation",
+      sector: "Semiconductors",
+      currency: "USD",
+      status: "active",
     });
   });
 
@@ -126,6 +147,7 @@ describe("personal watchlist API", () => {
       "user-a",
       "list-a",
       "NASDAQ:NVDA",
+      expect.objectContaining({ id: "NASDAQ:NVDA", ticker: "NVDA" }),
     );
     expect(valid.status).toBe(200);
     expect(valid.headers.get("cache-control")).toBe("no-store");
@@ -149,6 +171,48 @@ describe("personal watchlist API", () => {
     expect(await response.json()).toEqual({
       error: "Watchlist not found.",
       code: "watchlist_not_found",
+    });
+    expect(mocks.resolveCanonicalInstrument).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when an unknown symbol cannot be verified", async () => {
+    mocks.resolveCanonicalInstrument.mockRejectedValue(
+      new mocks.InstrumentResolutionError("symbol_not_supported"),
+    );
+
+    const response = await POST(
+      mutation({
+        operation: "add",
+        watchlist_id: "list-a",
+        symbol_id: "NASDAQ:NOTREAL",
+      }),
+    );
+
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({
+      error: "Symbol is not supported.",
+      code: "symbol_not_supported",
+    });
+    expect(mocks.addSymbolToWatchlist).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes a catalog outage from an unsupported symbol", async () => {
+    mocks.resolveCanonicalInstrument.mockRejectedValue(
+      new mocks.InstrumentResolutionError("asset_catalog_unavailable"),
+    );
+
+    const response = await POST(
+      mutation({
+        operation: "add",
+        watchlist_id: "list-a",
+        symbol_id: "NYSE:IBM",
+      }),
+    );
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({
+      error: "The asset catalog is temporarily unavailable.",
+      code: "asset_catalog_unavailable",
     });
   });
 });

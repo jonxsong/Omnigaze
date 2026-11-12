@@ -1,7 +1,6 @@
 import { z } from "zod";
 import {
   getOmnigazeView,
-  searchSymbols,
   serviceMeta,
 } from "@/lib/services/market-intelligence";
 import { liveMarketData } from "@/lib/services/live-market-data";
@@ -11,19 +10,26 @@ import {
   summarizeWatchlists,
 } from "@/lib/api/personal-intelligence";
 import type { CanonicalSymbol } from "@/lib/market-types";
+import { parsePortfolioDecisionSupportRequest } from "@/lib/portfolio/contracts";
+import {
+  InstrumentResolutionError,
+  resolveCanonicalInstrument,
+} from "@/lib/services/instrument-resolution";
 
 export const dynamic = "force-dynamic";
 
 const MCP_VERSION = "2026-07-28";
 const canonicalSymbolPattern = "^[A-Z0-9._-]+:[A-Z0-9._-]+$";
+const canonicalSymbolInputPattern = "^[A-Za-z0-9._-]+:[A-Za-z0-9._-]+$";
 
 const tools = [
   {
     name: "search_symbols",
-    description: "Find supported stocks by ticker or company name.",
+    description:
+      "Search the current active US-equity catalog by ticker or company name.",
     inputSchema: {
       type: "object",
-      properties: { query: { type: "string", maxLength: 120 } },
+      properties: { query: { type: "string", minLength: 1, maxLength: 64 } },
       required: ["query"],
       additionalProperties: false,
     },
@@ -93,6 +99,54 @@ const tools = [
       additionalProperties: false,
     },
   },
+  {
+    name: "get_portfolio",
+    description:
+      "Return the authenticated user's saved portfolio profile and holdings. Quantities and cost basis are decimal strings.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "get_decision_support",
+    description:
+      "Return deterministic, evidence-gated research scenarios for an authenticated user's symbol. This tool never places an order; confidence means evidence coverage, not return probability.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        symbol_id: {
+          type: "string",
+          pattern: canonicalSymbolInputPattern,
+          description: "Canonical exchange:ticker symbol; normalized to uppercase.",
+        },
+        horizon: {
+          type: "string",
+          enum: ["near_term", "long_term"],
+        },
+        preset: {
+          type: "string",
+          enum: ["tight", "balanced", "wide"],
+        },
+        budget: {
+          anyOf: [
+            {
+              type: "string",
+              maxLength: 32,
+              pattern:
+                "^(?=.*[1-9])(?:0|[1-9][0-9]*)(?:\\.[0-9]{1,6})?$",
+            },
+            { type: "null" },
+          ],
+          description:
+            "Optional positive USD scenario budget as a decimal string; never an order amount.",
+        },
+      },
+      required: ["symbol_id", "horizon", "preset"],
+      additionalProperties: false,
+    },
+  },
 ] as const;
 
 const symbolSchema = z
@@ -113,7 +167,10 @@ type JsonRpcRequest = {
 };
 
 function jsonRpcResult(id: JsonRpcRequest["id"], result: unknown) {
-  return Response.json({ jsonrpc: "2.0", id: id ?? null, result });
+  return Response.json(
+    { jsonrpc: "2.0", id: id ?? null, result },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }
 
 function jsonRpcError(
@@ -122,21 +179,26 @@ function jsonRpcError(
   message: string,
   data?: unknown,
 ) {
-  return Response.json({
-    jsonrpc: "2.0",
-    id: id ?? null,
-    error: { code, message, ...(data === undefined ? {} : { data }) },
-  });
+  return Response.json(
+    {
+      jsonrpc: "2.0",
+      id: id ?? null,
+      error: { code, message, ...(data === undefined ? {} : { data }) },
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }
 
 function toolContent(data: unknown, meta: object = serviceMeta) {
+  const envelope = { data, meta };
   return {
     content: [
       {
         type: "text",
-        text: JSON.stringify({ data, meta }, null, 2),
+        text: JSON.stringify(envelope, null, 2),
       },
     ],
+    structuredContent: envelope,
   };
 }
 
@@ -156,20 +218,57 @@ function validationError(error: z.ZodError) {
   return toolError("Invalid tool arguments.", error.flatten());
 }
 
+async function resolveToolSymbol(symbolId: CanonicalSymbol) {
+  try {
+    return {
+      success: true as const,
+      symbolId: (await resolveCanonicalInstrument(symbolId)).id,
+    };
+  } catch (error) {
+    if (error instanceof InstrumentResolutionError) {
+      return {
+        success: false as const,
+        error:
+          error.code === "symbol_not_supported"
+            ? toolError("Symbol is not supported.", {
+                code: "symbol_not_supported",
+              })
+            : toolError("The asset catalog is temporarily unavailable.", {
+                code: "asset_catalog_unavailable",
+              }),
+      };
+    }
+    return {
+      success: false as const,
+      error: toolError("Symbol could not be verified.", {
+        code: "symbol_resolution_failed",
+      }),
+    };
+  }
+}
+
 async function callTool(name: string, args: Record<string, unknown>, request: Request) {
   try {
     switch (name) {
       case "search_symbols": {
-        const parsed = z.object({ query: z.string().max(120) }).safeParse(args);
-        return parsed.success
-          ? toolContent(searchSymbols(parsed.data.query))
-          : validationError(parsed.error);
+        const parsed = z
+          .object({ query: z.string().trim().min(1).max(64) })
+          .strict()
+          .safeParse(args);
+        if (!parsed.success) return validationError(parsed.error);
+        const { getAssetSearchService } = await import(
+          "@/lib/services/asset-search"
+        );
+        const result = await getAssetSearchService().search(parsed.data.query, 20);
+        return toolContent(result.data, result.meta);
       }
       case "get_market_snapshot": {
-        const parsed = z.object({ symbol_id: symbolSchema }).safeParse(args);
+        const parsed = z.object({ symbol_id: symbolSchema }).strict().safeParse(args);
         if (!parsed.success) return validationError(parsed.error);
-        const result = await liveMarketData.getSnapshot(parsed.data.symbol_id);
-        return result.data
+        const verified = await resolveToolSymbol(parsed.data.symbol_id);
+        if (!verified.success) return verified.error;
+        const result = await liveMarketData.getSnapshot(verified.symbolId);
+        return result.data && result.data.symbolId === verified.symbolId
           ? toolContent(result.data, {
               ...result.meta,
               asOf: result.data.asOf,
@@ -189,17 +288,28 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
             limit: z.number().int().min(1).max(100).optional().default(20),
             since: z.string().datetime({ offset: true }).optional(),
           })
+          .strict()
           .safeParse(args);
         if (!parsed.success) return validationError(parsed.error);
+        const verified = parsed.data.symbol_id
+          ? await resolveToolSymbol(parsed.data.symbol_id)
+          : null;
+        if (verified && !verified.success) return verified.error;
+        const verifiedSymbol = verified?.success ? verified.symbolId : undefined;
         const result = await liveMarketData.getIntelligenceFeed({
-          symbols: parsed.data.symbol_id ? [parsed.data.symbol_id] : undefined,
+          symbols: verifiedSymbol ? [verifiedSymbol] : undefined,
           minimumMateriality: parsed.data.minimum_materiality,
           limit: parsed.data.limit,
           since:
             parsed.data.since ??
             new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(),
         });
-        return toolContent(result.data, result.meta);
+        return toolContent(
+          verifiedSymbol
+            ? result.data.filter((item) => item.symbolIds.includes(verifiedSymbol))
+            : result.data,
+          result.meta,
+        );
       }
       case "get_omnigaze_view": {
         const parsed = z.object({ symbol_id: symbolSchema }).safeParse(args);
@@ -258,14 +368,62 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
           generatedAt: new Date().toISOString(),
         });
       }
+      case "get_portfolio": {
+        const parsed = z.object({}).strict().safeParse(args);
+        if (!parsed.success) return validationError(parsed.error);
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const { getUserPortfolio } = await import("@/lib/repositories/portfolio");
+        return toolContent(await getUserPortfolio(userId), {
+          scope: "personal",
+          identity: "authenticated",
+          persistence: "server",
+          generatedAt: new Date().toISOString(),
+        });
+      }
+      case "get_decision_support": {
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const parsed = parsePortfolioDecisionSupportRequest(args);
+        if (!parsed.success) return validationError(parsed.error);
+        const { getPortfolioDecisionSupport } = await import(
+          "@/lib/services/portfolio-decision-support"
+        );
+        try {
+          return toolContent(
+            await getPortfolioDecisionSupport(userId, parsed.data),
+            {
+              scope: "personal",
+              identity: "authenticated",
+              purpose: "research_scenarios",
+              tradeExecutionAllowed: false,
+              generatedAt: new Date().toISOString(),
+            },
+          );
+        } catch (error) {
+          if (error instanceof InstrumentResolutionError) {
+            return error.code === "symbol_not_supported"
+              ? toolError("Symbol is not supported.", {
+                  code: "symbol_not_supported",
+                })
+              : toolError("The asset catalog is temporarily unavailable.", {
+                  code: "asset_catalog_unavailable",
+                });
+          }
+          throw error;
+        }
+      }
       default:
         return toolError(`Unknown tool: ${name}`);
     }
-  } catch (error) {
-    return toolError(
-      "Tool execution failed.",
-      error instanceof Error ? error.message : "Unknown error",
-    );
+  } catch {
+    return toolError("Tool execution failed.", {
+      code: "tool_execution_failed",
+    });
   }
 }
 

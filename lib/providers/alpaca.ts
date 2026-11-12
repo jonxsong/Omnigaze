@@ -1,4 +1,9 @@
-import type { CanonicalSymbol, MarketSnapshot } from "@/lib/market-types";
+import type {
+  CanonicalSymbol,
+  HistoricalBar,
+  HistoricalMarketSeries,
+  MarketSnapshot,
+} from "@/lib/market-types";
 import type { ProviderHealth, RawSourceEvent } from "@/lib/pipeline/contracts";
 import {
   ProviderConfigurationError,
@@ -10,6 +15,16 @@ type AlpacaConfig = {
   keyId?: string;
   secretKey?: string;
   feed?: "iex" | "sip" | "delayed_sip";
+};
+
+export type HistoricalRange = HistoricalMarketSeries["timeframe"];
+
+type HistoricalBarsOptions = {
+  range: HistoricalRange;
+  timeframe: string;
+  start: string;
+  end: string;
+  limit?: number;
 };
 
 function tickerFromSymbol(symbol: CanonicalSymbol) {
@@ -51,19 +66,25 @@ export class AlpacaProvider
 
     const data = (await response.json()) as {
       latestTrade?: { p?: number; t?: string };
-      dailyBar?: { c?: number; v?: number };
+      dailyBar?: { c?: number; v?: number; t?: string };
       prevDailyBar?: { c?: number };
     };
     const price = data.latestTrade?.p ?? data.dailyBar?.c;
     const previousClose = data.prevDailyBar?.c;
-    if (typeof price !== "number" || typeof previousClose !== "number") {
+    const asOf = data.latestTrade?.t ?? data.dailyBar?.t;
+    if (
+      typeof price !== "number" ||
+      typeof previousClose !== "number" ||
+      typeof asOf !== "string" ||
+      !Number.isFinite(Date.parse(asOf))
+    ) {
       throw new Error("Alpaca returned an incomplete snapshot");
     }
 
     const change = price - previousClose;
     return {
       symbolId: symbol,
-      asOf: data.latestTrade?.t ?? new Date().toISOString(),
+      asOf,
       session: "regular",
       price,
       previousClose,
@@ -75,6 +96,84 @@ export class AlpacaProvider
       delaySeconds: feed === "delayed_sip" ? 900 : 0,
       provider: `Alpaca ${feed}`,
       marketCoverage: feed === "iex" ? "limited-exchange" : "consolidated",
+    };
+  }
+
+  async getHistoricalBars(
+    symbol: CanonicalSymbol,
+    options: HistoricalBarsOptions,
+  ): Promise<HistoricalMarketSeries> {
+    const ticker = tickerFromSymbol(symbol);
+    const configuredFeed = this.config.feed ?? "iex";
+    const feed = configuredFeed === "delayed_sip" ? "sip" : configuredFeed;
+    const url = new URL(
+      `https://data.alpaca.markets/v2/stocks/${encodeURIComponent(ticker)}/bars`,
+    );
+    url.searchParams.set("timeframe", options.timeframe);
+    url.searchParams.set("start", options.start);
+    url.searchParams.set("end", options.end);
+    url.searchParams.set("limit", String(Math.min(Math.max(options.limit ?? 1_000, 1), 10_000)));
+    url.searchParams.set("adjustment", "all");
+    url.searchParams.set("feed", feed);
+    url.searchParams.set("sort", "asc");
+
+    const response = await fetch(url, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) {
+      throw new Error(`Alpaca historical bars failed with ${response.status}`);
+    }
+
+    const data = (await response.json()) as {
+      bars?: Array<{
+        t?: unknown;
+        o?: unknown;
+        h?: unknown;
+        l?: unknown;
+        c?: unknown;
+        v?: unknown;
+        n?: unknown;
+        vw?: unknown;
+      }>;
+    };
+    const bars = (data.bars ?? [])
+      .map((bar): HistoricalBar | null => {
+        if (
+          typeof bar.t !== "string" ||
+          !Number.isFinite(Date.parse(bar.t)) ||
+          typeof bar.o !== "number" ||
+          typeof bar.h !== "number" ||
+          typeof bar.l !== "number" ||
+          typeof bar.c !== "number" ||
+          typeof bar.v !== "number"
+        ) {
+          return null;
+        }
+        return {
+          timestamp: bar.t,
+          open: bar.o,
+          high: bar.h,
+          low: bar.l,
+          close: bar.c,
+          volume: bar.v,
+          tradeCount: typeof bar.n === "number" ? bar.n : null,
+          volumeWeightedPrice: typeof bar.vw === "number" ? bar.vw : null,
+        };
+      })
+      .filter((bar): bar is HistoricalBar => bar !== null)
+      .sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+
+    return {
+      symbolId: symbol,
+      timeframe: options.range,
+      asOf: bars.at(-1)?.timestamp ?? null,
+      provider: `Alpaca ${configuredFeed}`,
+      marketCoverage: feed === "iex" ? "limited-exchange" : "consolidated",
+      isDelayed: configuredFeed === "delayed_sip",
+      delaySeconds: configuredFeed === "delayed_sip" ? 900 : 0,
+      adjustment: "all",
+      bars,
     };
   }
 

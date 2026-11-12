@@ -6,6 +6,10 @@ import {
   WatchlistRepositoryError,
 } from "@/lib/repositories/watchlists";
 import { parseWatchlistMutation } from "@/lib/api/personal-intelligence";
+import {
+  InstrumentResolutionError,
+  resolveCanonicalInstrument,
+} from "@/lib/services/instrument-resolution";
 
 export const dynamic = "force-dynamic";
 
@@ -64,18 +68,22 @@ export async function POST(request: Request) {
   }
 
   try {
-    const data =
-      parsed.data.operation === "add"
-        ? await addSymbolToWatchlist(
-            user.userId,
-            parsed.data.watchlist_id,
-            parsed.data.symbol_id,
-          )
-        : await removeSymbolFromWatchlist(
-            user.userId,
-            parsed.data.watchlist_id,
-            parsed.data.symbol_id,
-          );
+    let data;
+    if (parsed.data.operation === "add") {
+      const instrument = await resolveCanonicalInstrument(parsed.data.symbol_id);
+      data = await addSymbolToWatchlist(
+        user.userId,
+        parsed.data.watchlist_id,
+        parsed.data.symbol_id,
+        instrument,
+      );
+    } else {
+      data = await removeSymbolFromWatchlist(
+        user.userId,
+        parsed.data.watchlist_id,
+        parsed.data.symbol_id,
+      );
+    }
     return Response.json(
       {
         data,
@@ -88,6 +96,16 @@ export async function POST(request: Request) {
       { headers: noStore },
     );
   } catch (error) {
+    if (error instanceof InstrumentResolutionError) {
+      if (error.code === "asset_catalog_unavailable") {
+        return apiError(
+          "asset_catalog_unavailable",
+          "The asset catalog is temporarily unavailable.",
+          503,
+        );
+      }
+      return apiError("symbol_not_supported", "Symbol is not supported.", 422);
+    }
     if (error instanceof WatchlistRepositoryError) {
       if (error.code === "watchlist_not_found") {
         return apiError("watchlist_not_found", "Watchlist not found.", 404);

@@ -15,6 +15,16 @@ export class WatchlistRepositoryError extends Error {
   }
 }
 
+export interface InstrumentRecordInput {
+  id: CanonicalSymbol;
+  ticker: string;
+  exchange: string;
+  name: string;
+  sector: string | null;
+  currency: string;
+  status: string;
+}
+
 export async function ensureDefaultWatchlist(ownerId: string) {
   const db = getDb();
   const existing = await db
@@ -82,34 +92,69 @@ async function assertOwnedWatchlist(ownerId: string, watchlistId: string) {
   if (!owned[0]) throw new WatchlistRepositoryError("watchlist_not_found");
 }
 
-export async function addSymbolToWatchlist(
-  ownerId: string,
-  watchlistId: string,
+async function upsertSupportedInstrument(
+  db: ReturnType<typeof getDb>,
   symbolId: CanonicalSymbol,
+  resolvedInstrument?: InstrumentRecordInput,
 ) {
-  const db = getDb();
-  await assertOwnedWatchlist(ownerId, watchlistId);
+  if (resolvedInstrument && resolvedInstrument.id !== symbolId) {
+    throw new WatchlistRepositoryError("symbol_not_supported");
+  }
+
   const workspace = workspaceBySymbol.get(symbolId);
-  if (!workspace) throw new WatchlistRepositoryError("symbol_not_supported");
+  const candidate =
+    resolvedInstrument ??
+    (workspace
+      ? {
+          ...workspace.instrument,
+          status: "active",
+        }
+      : null);
+
+  if (!candidate) {
+    const existing = await db
+      .select({ id: instruments.id })
+      .from(instruments)
+      .where(eq(instruments.id, symbolId))
+      .limit(1);
+    if (existing[0]) return;
+    throw new WatchlistRepositoryError("symbol_not_supported");
+  }
 
   await db
     .insert(instruments)
     .values({
-      id: workspace.instrument.id,
-      ticker: workspace.instrument.ticker,
-      exchange: workspace.instrument.exchange,
-      name: workspace.instrument.name,
-      sector: workspace.instrument.sector,
-      currency: workspace.instrument.currency,
+      id: candidate.id,
+      ticker: candidate.ticker,
+      exchange: candidate.exchange,
+      name: candidate.name,
+      sector: candidate.sector,
+      currency: candidate.currency,
+      status: candidate.status,
     })
     .onConflictDoUpdate({
       target: instruments.id,
       set: {
-        name: workspace.instrument.name,
-        sector: workspace.instrument.sector,
+        ticker: candidate.ticker,
+        exchange: candidate.exchange,
+        name: candidate.name,
+        sector: candidate.sector,
+        currency: candidate.currency,
+        status: candidate.status,
         updatedAt: new Date().toISOString(),
       },
     });
+}
+
+export async function addSymbolToWatchlist(
+  ownerId: string,
+  watchlistId: string,
+  symbolId: CanonicalSymbol,
+  resolvedInstrument?: InstrumentRecordInput,
+) {
+  const db = getDb();
+  await assertOwnedWatchlist(ownerId, watchlistId);
+  await upsertSupportedInstrument(db, symbolId, resolvedInstrument);
 
   await db
     .insert(watchlistItems)

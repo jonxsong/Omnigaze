@@ -109,6 +109,23 @@ describe("live market data orchestration", () => {
     expect(result.meta.fallbackReason).toBeUndefined();
   });
 
+  it("marks materially future provider timestamps unknown instead of fresh", async () => {
+    const result = await orchestrator({
+      market: marketProvider({
+        snapshot: {
+          ...liveSnapshot(),
+          asOf: "2026-11-11T20:00:00.000Z",
+        },
+      }),
+    }).getSnapshot("NASDAQ:NVDA");
+
+    expect(result.meta.freshness).toEqual({
+      state: "unknown",
+      asOf: "2026-11-11T20:00:00.000Z",
+      ageSeconds: null,
+    });
+  });
+
   it("labels fallback snapshots as demo when the live provider is unconfigured", async () => {
     const result = await orchestrator({
       market: marketProvider({ status: "unconfigured" }),

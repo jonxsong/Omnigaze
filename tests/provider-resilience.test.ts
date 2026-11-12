@@ -74,6 +74,28 @@ describe("market provider resilience", () => {
     expect(message).not.toContain("public-test-id");
     expect(message).not.toContain("do-not-leak-this-secret");
   });
+
+  it("rejects snapshots without a provider timestamp instead of inventing freshness", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          latestTrade: { p: 201.25 },
+          dailyBar: { c: 201.1, v: 42_000_000 },
+          prevDailyBar: { c: 198.5 },
+        }),
+      ),
+    );
+    const provider = new AlpacaProvider({
+      keyId: "test-key-id",
+      secretKey: "test-secret-value",
+      feed: "iex",
+    });
+
+    await expect(provider.getSnapshot("NASDAQ:NVDA")).rejects.toThrow(
+      "incomplete snapshot",
+    );
+  });
 });
 
 describe("SEC EDGAR provider degradation", () => {
@@ -96,22 +118,54 @@ describe("SEC EDGAR provider degradation", () => {
     ).rejects.toThrow("SEC_USER_AGENT");
   });
 
-  it("does not call EDGAR for a symbol without a configured CIK", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+  it("resolves an arbitrary ticker through the official SEC ticker catalog", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          0: { cik_str: 51143, ticker: "IBM", title: "INTERNATIONAL BUSINESS MACHINES CORP" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          filings: {
+            recent: {
+              accessionNumber: ["0000051143-26-000001"],
+              filingDate: ["2026-11-11"],
+              acceptanceDateTime: ["2026-11-11T18:30:00.000Z"],
+              form: ["8-K"],
+              primaryDocument: ["ibm-8k.htm"],
+            },
+          },
+        }),
+      );
     const provider = new SecEdgarProvider({
       userAgent: "Omnigaze test@example.com",
       cikByTicker: {},
+      fetcher: fetchMock,
     });
 
     await expect(
       provider.getLatestEvents({
-        symbols: ["NASDAQ:NVDA"],
+        symbols: ["NYSE:IBM"],
         since: "2026-11-01T00:00:00.000Z",
         limit: 10,
       }),
-    ).resolves.toEqual([]);
-    expect(fetchMock).not.toHaveBeenCalled();
+    ).resolves.toEqual([
+      expect.objectContaining({
+        source: "sec-edgar",
+        sourceKind: "sec_filing",
+        sourceEventId: "0000051143-26-000001",
+        publishedAt: "2026-11-11T18:30:00.000Z",
+      }),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "https://www.sec.gov/files/company_tickers.json",
+    );
+    expect(String(fetchMock.mock.calls[1][0])).toBe(
+      "https://data.sec.gov/submissions/CIK0000051143.json",
+    );
   });
 
   it("surfaces an upstream EDGAR outage as a bounded provider error", async () => {
@@ -122,6 +176,7 @@ describe("SEC EDGAR provider degradation", () => {
     const provider = new SecEdgarProvider({
       userAgent: "Omnigaze test@example.com",
       cikByTicker: { NVDA: "1045810" },
+      fetcher: fetch,
     });
 
     await expect(

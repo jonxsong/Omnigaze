@@ -559,7 +559,7 @@ function OmnigazeLandingContent({ howItWorks }: OmnigazeLandingProps) {
           </nav>
           <div className={styles.headerActions}>
             <LocaleToggle />
-            <a className={styles.navCta} href="/dashboard">{copy.header.openAlpha} <ArrowRight size={14} /></a>
+            <a className={styles.navCta} href="/onboarding">{copy.header.openAlpha} <ArrowRight size={14} /></a>
           </div>
         </header>
 
@@ -574,7 +574,7 @@ function OmnigazeLandingContent({ howItWorks }: OmnigazeLandingProps) {
             <h1 id="hero-title">{copy.hero.title}<br /><em>{copy.hero.titleAccent}</em></h1>
             <p>{copy.hero.body}</p>
             <div className={styles.heroActions}>
-              <a className={styles.primaryCta} href="/dashboard">{copy.hero.primary} <ArrowRight size={16} /></a>
+              <a className={styles.primaryCta} href="/onboarding">{copy.hero.primary} <ArrowRight size={16} /></a>
               <a className={styles.secondaryCta} href="#how-it-works">{copy.hero.secondary}</a>
             </div>
             <div className={styles.heroProof} aria-label={copy.hero.principles}>
@@ -689,7 +689,7 @@ function OmnigazeLandingContent({ howItWorks }: OmnigazeLandingProps) {
           <span className={styles.eyebrow}>{copy.finalCta.eyebrow}</span>
           <h2 id="final-cta-title">{copy.finalCta.title}<br /><em>{copy.finalCta.titleAccent}</em></h2>
           <p>{copy.finalCta.body}</p>
-          <a className={styles.primaryCta} href="/dashboard">{copy.finalCta.action} <ArrowRight size={16} /></a>
+          <a className={styles.primaryCta} href="/onboarding">{copy.finalCta.action} <ArrowRight size={16} /></a>
         </section>
 
         <footer className={styles.footer}>

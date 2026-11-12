@@ -41,10 +41,15 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
-import { defaultWatchlist, stockWorkspaces } from "@/lib/demo-market-data";
+import {
+  defaultWatchlist,
+  stockWorkspaces,
+  workspaceBySymbol,
+} from "@/lib/demo-market-data";
 import type {
   CanonicalSymbol,
   EvidenceClassification,
+  HistoricalMarketSeries,
   IntelligenceEvent,
   MarketPoint,
   MarketSnapshot,
@@ -55,15 +60,54 @@ import type {
   OrchestrationMeta,
   ProviderReport,
 } from "@/lib/services/live-market-data";
+import {
+  ONBOARDING_DRAFT_KEY,
+  parseOnboardingDraft,
+} from "@/lib/onboarding-draft";
+import {
+  isPortfolioDecimal,
+  MAX_AVERAGE_COST_MICROS,
+  MAX_QUANTITY_MICROS,
+} from "@/lib/portfolio/decimal";
 
 const timeframes = ["1D", "1W", "1M", "3M", "1Y"] as const;
 type Timeframe = (typeof timeframes)[number];
 
 const DASHBOARD_PREFERENCES_KEY = "omnigaze:dashboard-preferences";
-const DASHBOARD_PREFERENCES_VERSION = 1;
+const DASHBOARD_PREFERENCES_VERSION = 2;
+const canonicalSymbolPattern = /^[A-Z0-9._-]+:[A-Z0-9._-]+$/;
 
-interface DashboardPreferences {
+export interface DashboardInstrument {
+  id: CanonicalSymbol;
+  ticker: string;
+  exchange: string;
+  name: string;
+  sector: string | null;
+  currency: "USD";
+}
+
+export interface DashboardHolding {
+  symbolId: CanonicalSymbol;
+  ticker?: string;
+  exchange?: string;
+  name?: string;
+  quantity: string;
+  averageCost: string | null;
+  totalCostBasis?: string | null;
+  costCurrency?: string;
+  quantityAsOf?: string;
+  version?: number;
+}
+
+export interface DashboardPreferences {
   version: typeof DASHBOARD_PREFERENCES_VERSION;
+  instruments: DashboardInstrument[];
+  selectedSymbol: CanonicalSymbol;
+  timeframe: Timeframe;
+}
+
+interface LegacyDashboardPreferences {
+  version: 1;
   watchlist: CanonicalSymbol[];
   selectedSymbol: CanonicalSymbol;
   timeframe: Timeframe;
@@ -84,13 +128,15 @@ type DashboardSession =
 interface AccountWatchlist {
   id: string;
   name: string;
-  symbols: CanonicalSymbol[];
+  instruments: DashboardInstrument[];
 }
 
 interface MarketDashboardProps {
   session: DashboardSession;
   accountWatchlist?: AccountWatchlist | null;
   accountSyncUnavailable?: boolean;
+  accountHoldings?: DashboardHolding[] | null;
+  accountPortfolioUnavailable?: boolean;
 }
 
 type WatchlistSyncPhase =
@@ -100,42 +146,97 @@ type WatchlistSyncPhase =
   | "error"
   | "unavailable";
 
-const supportedSymbols = new Set<CanonicalSymbol>(
-  stockWorkspaces.map(({ instrument }) => instrument.id),
-);
+const fixtureInstruments = stockWorkspaces.map(({ instrument }) => ({
+  ...instrument,
+  currency: "USD" as const,
+}));
 
-function isSupportedSymbol(value: unknown): value is CanonicalSymbol {
-  return typeof value === "string" && supportedSymbols.has(value as CanonicalSymbol);
+function isCanonicalSymbol(value: unknown): value is CanonicalSymbol {
+  return typeof value === "string" && canonicalSymbolPattern.test(value);
 }
 
 function isTimeframe(value: unknown): value is Timeframe {
   return typeof value === "string" && timeframes.includes(value as Timeframe);
 }
 
-function readDashboardPreferences(): DashboardPreferences | null {
-  if (typeof window === "undefined") return null;
+function normalizeDashboardInstrument(value: unknown): DashboardInstrument | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<DashboardInstrument>;
+  const id = typeof candidate.id === "string" ? candidate.id.trim().toUpperCase() : "";
+  const ticker =
+    typeof candidate.ticker === "string" ? candidate.ticker.trim().toUpperCase() : "";
+  const exchange =
+    typeof candidate.exchange === "string"
+      ? candidate.exchange.trim().toUpperCase()
+      : "";
+  const name = typeof candidate.name === "string" ? candidate.name.trim() : "";
 
+  if (
+    !isCanonicalSymbol(id) ||
+    !ticker ||
+    !exchange ||
+    `${exchange}:${ticker}` !== id ||
+    !name
+  ) {
+    return null;
+  }
+
+  return {
+    id,
+    ticker,
+    exchange,
+    name,
+    sector:
+      typeof candidate.sector === "string" && candidate.sector.trim()
+        ? candidate.sector.trim()
+        : null,
+    currency: "USD",
+  };
+}
+
+function dedupeInstruments(instruments: DashboardInstrument[]) {
+  return Array.from(
+    new Map(instruments.map((instrument) => [instrument.id, instrument])).values(),
+  );
+}
+
+export function parseDashboardPreferences(raw: string | null): DashboardPreferences | null {
+  if (!raw) return null;
   try {
-    const raw = window.localStorage.getItem(DASHBOARD_PREFERENCES_KEY);
-    if (!raw) return null;
-    const value = JSON.parse(raw) as Partial<DashboardPreferences>;
-    if (
-      value.version !== DASHBOARD_PREFERENCES_VERSION ||
-      !Array.isArray(value.watchlist)
+    const value = JSON.parse(raw) as
+      | Partial<DashboardPreferences>
+      | Partial<LegacyDashboardPreferences>;
+    let instruments: DashboardInstrument[];
+
+    if (value.version === 1 && Array.isArray(value.watchlist)) {
+      instruments = value.watchlist.flatMap((symbol) => {
+        const workspace = isCanonicalSymbol(symbol)
+          ? workspaceBySymbol.get(symbol)
+          : undefined;
+        return workspace ? [{ ...workspace.instrument, currency: "USD" as const }] : [];
+      });
+    } else if (
+      value.version === DASHBOARD_PREFERENCES_VERSION &&
+      Array.isArray(value.instruments)
     ) {
+      instruments = value.instruments
+        .map(normalizeDashboardInstrument)
+        .filter((instrument): instrument is DashboardInstrument => instrument !== null);
+    } else {
       return null;
     }
 
-    const watchlist = Array.from(new Set(value.watchlist.filter(isSupportedSymbol)));
-    const selectedSymbol = isSupportedSymbol(value.selectedSymbol)
-      ? watchlist.length === 0 || watchlist.includes(value.selectedSymbol)
+    instruments = dedupeInstruments(instruments);
+    const instrumentIds = new Set(instruments.map(({ id }) => id));
+    const selectedSymbol = isCanonicalSymbol(value.selectedSymbol)
+      ? instruments.length === 0 || instrumentIds.has(value.selectedSymbol)
         ? value.selectedSymbol
-        : watchlist[0]
-      : watchlist[0] ?? defaultWatchlist[0];
+        : instruments[0].id
+      : instruments[0]?.id ?? defaultWatchlist[0];
 
     return {
       version: DASHBOARD_PREFERENCES_VERSION,
-      watchlist,
+      instruments,
       selectedSymbol,
       timeframe: isTimeframe(value.timeframe) ? value.timeframe : "1D",
     };
@@ -144,8 +245,19 @@ function readDashboardPreferences(): DashboardPreferences | null {
   }
 }
 
+function readDashboardPreferences(): DashboardPreferences | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return parseDashboardPreferences(
+      window.localStorage.getItem(DASHBOARD_PREFERENCES_KEY),
+    );
+  } catch {
+    return null;
+  }
+}
+
 function writeDashboardPreferences(
-  watchlist: CanonicalSymbol[],
+  instruments: DashboardInstrument[],
   selectedSymbol: CanonicalSymbol,
   timeframe: Timeframe,
 ) {
@@ -153,7 +265,7 @@ function writeDashboardPreferences(
 
   const value: DashboardPreferences = {
     version: DASHBOARD_PREFERENCES_VERSION,
-    watchlist,
+    instruments,
     selectedSymbol,
     timeframe,
   };
@@ -198,6 +310,38 @@ interface HealthResource {
   data?: HealthResponse;
   phase: FetchPhase;
   receivedAt?: string;
+  error?: string;
+}
+
+interface ChartResource {
+  data?: HistoricalMarketSeries;
+  phase: FetchPhase;
+  receivedAt?: string;
+  error?: string;
+}
+
+interface CatalogSearchResponse {
+  data: Array<{
+    symbolId: CanonicalSymbol;
+    symbol: string;
+    name: string;
+    exchange: string;
+  }>;
+  meta: {
+    catalogAsOf: string;
+    totalMatches: number;
+    freshness: {
+      state: "fresh" | "stale";
+      ageSeconds: number;
+    };
+  };
+}
+
+interface CatalogSearchResource {
+  data: DashboardInstrument[];
+  phase: "idle" | FetchPhase;
+  query: string;
+  meta?: CatalogSearchResponse["meta"];
   error?: string;
 }
 
@@ -308,6 +452,27 @@ function formatTime(value: string) {
   }).format(new Date(value));
 }
 
+function formatChartLabel(value: string, timeframe: Timeframe) {
+  const date = new Date(value);
+  if (timeframe === "1D") {
+    return new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(date);
+  }
+  if (timeframe === "1W" || timeframe === "1M") {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: timeframe === "1W" ? "numeric" : undefined,
+    }).format(date);
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+  }).format(date);
+}
+
 function movementClass(value: number) {
   return value >= 0 ? "market-positive" : "market-negative";
 }
@@ -357,15 +522,30 @@ export function MarketDashboard({
   session,
   accountWatchlist = null,
   accountSyncUnavailable = false,
+  accountHoldings = null,
+  accountPortfolioUnavailable = false,
 }: MarketDashboardProps) {
   const authoritativeWatchlist = useMemo(
-    () => accountWatchlist?.symbols.filter(isSupportedSymbol) ?? null,
-    [accountWatchlist],
+    () => {
+      if (!session.isAuthenticated) return null;
+      return (accountWatchlist?.instruments ?? [])
+        .map(normalizeDashboardInstrument)
+        .filter(
+          (instrument): instrument is DashboardInstrument => instrument !== null,
+        );
+    },
+    [accountWatchlist, session.isAuthenticated],
   );
-  const initialWatchlist = authoritativeWatchlist ?? defaultWatchlist;
-  const [watchlist, setWatchlist] = useState<CanonicalSymbol[]>(initialWatchlist);
+  const initialWatchlist = session.isAuthenticated
+    ? authoritativeWatchlist ?? []
+    : fixtureInstruments;
+  const [watchlist, setWatchlist] =
+    useState<DashboardInstrument[]>(initialWatchlist);
+  const [holdings, setHoldings] = useState<DashboardHolding[]>(
+    accountHoldings ?? [],
+  );
   const [selectedSymbol, setSelectedSymbol] = useState<CanonicalSymbol>(
-    initialWatchlist[0] ?? defaultWatchlist[0],
+    initialWatchlist[0]?.id ?? accountHoldings?.[0]?.symbolId ?? defaultWatchlist[0],
   );
   const [timeframe, setTimeframe] = useState<Timeframe>("1D");
   const [query, setQuery] = useState("");
@@ -383,6 +563,15 @@ export function MarketDashboard({
   const [healthResource, setHealthResource] = useState<HealthResource>({
     phase: "loading",
   });
+  const [chartResources, setChartResources] = useState<Record<string, ChartResource>>(
+    {},
+  );
+  const [catalogSearch, setCatalogSearch] = useState<CatalogSearchResource>({
+    data: [],
+    phase: "idle",
+    query: "",
+  });
+  const [searchGeneration, setSearchGeneration] = useState(0);
   const [watchlistSyncPhase, setWatchlistSyncPhase] =
     useState<WatchlistSyncPhase>(() => {
       if (!session.isAuthenticated) return "local";
@@ -398,6 +587,36 @@ export function MarketDashboard({
   const accountPersistenceEnabled =
     session.isAuthenticated && Boolean(accountWatchlist) && !accountSyncUnavailable;
   const watchlistName = accountWatchlist?.name ?? "Core holdings";
+  const watchlistIds = useMemo(
+    () => new Set(watchlist.map(({ id }) => id)),
+    [watchlist],
+  );
+  const holdingsBySymbol = useMemo(
+    () => new Map(holdings.map((holding) => [holding.symbolId, holding])),
+    [holdings],
+  );
+  const visibleInstruments = useMemo(() => {
+    const visible = new Map(watchlist.map((instrument) => [instrument.id, instrument]));
+    for (const holding of holdings) {
+      if (visible.has(holding.symbolId)) continue;
+      const workspace = workspaceBySymbol.get(holding.symbolId);
+      const [canonicalExchange, canonicalTicker] = holding.symbolId.split(":");
+      const ticker = holding.ticker ?? workspace?.instrument.ticker ?? canonicalTicker;
+      const exchange =
+        holding.exchange ?? workspace?.instrument.exchange ?? canonicalExchange;
+      const name = holding.name ?? workspace?.instrument.name ?? ticker;
+      if (!ticker || !exchange || !name) continue;
+      visible.set(holding.symbolId, {
+        id: holding.symbolId,
+        ticker,
+        exchange,
+        name,
+        sector: workspace?.instrument.sector ?? null,
+        currency: "USD",
+      });
+    }
+    return [...visible.values()];
+  }, [holdings, watchlist]);
 
   useEffect(() => {
     shellRef.current?.setAttribute("data-hydrated", "true");
@@ -411,31 +630,133 @@ export function MarketDashboard({
   useEffect(() => {
     const timer = window.setTimeout(() => {
       if (preferencesTouchedRef.current) return;
-      const preferences = readDashboardPreferences();
-      if (!preferences) return;
-      if (authoritativeWatchlist) {
-        const nextSelected =
-          authoritativeWatchlist.length === 0 ||
-          authoritativeWatchlist.includes(preferences.selectedSymbol)
-            ? preferences.selectedSymbol
-            : authoritativeWatchlist[0];
-        setSelectedSymbol(nextSelected);
-        setTimeframe(preferences.timeframe);
+      if (session.isAuthenticated) {
+        const nextWatchlist = authoritativeWatchlist ?? [];
+        setWatchlist(nextWatchlist);
+        setSelectedSymbol((current) =>
+          nextWatchlist.some(({ id }) => id === current) ||
+          accountHoldings?.some(({ symbolId }) => symbolId === current)
+            ? current
+            : nextWatchlist[0]?.id ??
+              accountHoldings?.[0]?.symbolId ??
+              defaultWatchlist[0],
+        );
         return;
       }
-      setWatchlist(preferences.watchlist);
+      const preferences = readDashboardPreferences();
+      if (!preferences) return;
+      setWatchlist(preferences.instruments);
       setSelectedSymbol(preferences.selectedSymbol);
       setTimeframe(preferences.timeframe);
+      writeDashboardPreferences(
+        preferences.instruments,
+        preferences.selectedSymbol,
+        preferences.timeframe,
+      );
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [authoritativeWatchlist]);
+  }, [accountHoldings, authoritativeWatchlist, session.isAuthenticated]);
+
+  useEffect(() => {
+    if (session.isAuthenticated || typeof window === "undefined") return;
+    const timer = window.setTimeout(() => {
+      const draft = parseOnboardingDraft(
+        window.localStorage.getItem(ONBOARDING_DRAFT_KEY),
+        fixtureInstruments.map(({ id }) => id),
+      );
+      const nextHoldings = draft?.completedAt
+        ? draft.positions
+          .filter(
+            (position) =>
+              position.owned &&
+              isPortfolioDecimal(position.shares, {
+                allowZero: false,
+                maxMicros: MAX_QUANTITY_MICROS,
+              }) &&
+              (!position.averageCost ||
+                isPortfolioDecimal(position.averageCost, {
+                  allowZero: true,
+                  maxMicros: MAX_AVERAGE_COST_MICROS,
+                })),
+          )
+          .map((position) => ({
+            symbolId: position.symbolId,
+            quantity: position.shares,
+            averageCost: position.averageCost || null,
+          }))
+        : [];
+      setHoldings((current) =>
+        current.length === nextHoldings.length &&
+        current.every(
+          (holding, index) =>
+            holding.symbolId === nextHoldings[index]?.symbolId &&
+            holding.quantity === nextHoldings[index]?.quantity &&
+            holding.averageCost === nextHoldings[index]?.averageCost,
+        )
+          ? current
+          : nextHoldings,
+      );
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [session.isAuthenticated]);
+
+  useEffect(() => {
+    const normalizedQuery = query.trim();
+    if (!showSearch || !normalizedQuery) return;
+
+    const controller = new AbortController();
+    let stopped = false;
+    const timer = window.setTimeout(() => {
+      setCatalogSearch({ data: [], phase: "loading", query: normalizedQuery });
+      void fetchApi<CatalogSearchResponse>(
+        `/api/assets/search?q=${encodeURIComponent(normalizedQuery)}&limit=20`,
+        controller.signal,
+      )
+        .then((result) => {
+          if (stopped) return;
+          setCatalogSearch({
+            data: result.data.map((instrument) => ({
+              id: instrument.symbolId,
+              ticker: instrument.symbol,
+              exchange: instrument.exchange,
+              name: instrument.name,
+              sector: null,
+              currency: "USD",
+            })),
+            phase: "ready",
+            query: normalizedQuery,
+            meta: result.meta,
+          });
+        })
+        .catch((error) => {
+          if (stopped || controller.signal.aborted) return;
+          setCatalogSearch({
+            data: [],
+            phase: "error",
+            query: normalizedQuery,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Stock search is temporarily unavailable.",
+          });
+        });
+    }, 250);
+
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query, searchGeneration, showSearch]);
 
   useEffect(() => {
     let stopped = false;
     let timer: number | undefined;
     let activeController: AbortController | undefined;
-    const symbols = Array.from(new Set([selectedSymbol, ...watchlist])).slice(0, 12);
+    const symbols = Array.from(
+      new Set([selectedSymbol, ...visibleInstruments.map(({ id }) => id)]),
+    ).slice(0, 12);
 
     async function poll() {
       if (document.visibilityState === "hidden") {
@@ -446,13 +767,19 @@ export function MarketDashboard({
       activeController = new AbortController();
       const timeout = window.setTimeout(() => activeController?.abort(), 10_000);
       const results = await Promise.allSettled(
-        symbols.map(async (symbol) => ({
-          symbol,
-          envelope: await fetchApi<{ data: MarketSnapshot; meta: OrchestrationMeta }>(
+        symbols.map(async (symbol) => {
+          const envelope = await fetchApi<{
+            data: MarketSnapshot;
+            meta: OrchestrationMeta;
+          }>(
             `/api/market/snapshot?symbol=${encodeURIComponent(symbol)}`,
             activeController!.signal,
-          ),
-        })),
+          );
+          if (envelope.data.symbolId !== symbol) {
+            throw new Error("Snapshot identity did not match the requested symbol.");
+          }
+          return { symbol, envelope };
+        }),
       );
       window.clearTimeout(timeout);
       if (stopped) return;
@@ -491,7 +818,7 @@ export function MarketDashboard({
       activeController?.abort();
       if (timer) window.clearTimeout(timer);
     };
-  }, [refreshGeneration, selectedSymbol, watchlist]);
+  }, [refreshGeneration, selectedSymbol, visibleInstruments]);
 
   useEffect(() => {
     let stopped = false;
@@ -517,7 +844,9 @@ export function MarketDashboard({
         if (!stopped) {
           setIntelligenceResource({
             symbolId: selectedSymbol,
-            data: envelope.data,
+            data: envelope.data.filter((item) =>
+              item.symbolIds.includes(selectedSymbol),
+            ),
             meta: envelope.meta,
             phase: "ready",
             receivedAt: new Date().toISOString(),
@@ -589,19 +918,81 @@ export function MarketDashboard({
     };
   }, [refreshGeneration]);
 
-  const selected =
-    stockWorkspaces.find(
-      (workspace) => workspace.instrument.id === selectedSymbol,
-    ) ?? stockWorkspaces[0];
+  useEffect(() => {
+    const key = `${selectedSymbol}:${timeframe}`;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 10_000);
 
-  const watchedStocks = watchlist
-    .map((symbol) =>
-      stockWorkspaces.find((workspace) => workspace.instrument.id === symbol),
+    void fetchApi<{
+      data: HistoricalMarketSeries;
+      meta: { dataMode: "live"; freshness: { state: string; asOf: string | null } };
+    }>(
+      `/api/market/bars?symbol=${encodeURIComponent(selectedSymbol)}&timeframe=${timeframe}`,
+      controller.signal,
     )
-    .filter(Boolean) as typeof stockWorkspaces;
+      .then((envelope) => {
+        if (envelope.data.symbolId !== selectedSymbol) {
+          throw new Error("History identity did not match the requested symbol.");
+        }
+        setChartResources((current) => ({
+          ...current,
+          [key]: {
+            data: envelope.data,
+            phase: "ready",
+            receivedAt: new Date().toISOString(),
+          },
+        }));
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setChartResources((current) => ({
+          ...current,
+          [key]: {
+            ...current[key],
+            phase: "error",
+            error:
+              error instanceof Error
+                ? error.message
+                : "Historical market data is unavailable.",
+          },
+        }));
+      })
+      .finally(() => window.clearTimeout(timeout));
 
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [refreshGeneration, selectedSymbol, timeframe]);
+
+  const selectedWorkspace = workspaceBySymbol.get(selectedSymbol);
+  const selectedInstrument =
+    visibleInstruments.find(({ id }) => id === selectedSymbol) ??
+    (selectedWorkspace
+      ? { ...selectedWorkspace.instrument, currency: "USD" as const }
+      : {
+          id: selectedSymbol,
+          ticker: selectedSymbol.split(":")[1] ?? selectedSymbol,
+          exchange: selectedSymbol.split(":")[0] ?? "UNKNOWN",
+          name: selectedSymbol.split(":")[1] ?? selectedSymbol,
+          sector: null,
+          currency: "USD" as const,
+        });
+  const watchedStocks = visibleInstruments.map((instrument) => ({
+    instrument,
+    workspace: workspaceBySymbol.get(instrument.id),
+    holding: holdingsBySymbol.get(instrument.id),
+  }));
+  const selectedHolding = holdingsBySymbol.get(selectedSymbol);
+  const selectedAverageCost = selectedHolding?.averageCost
+    ? Number(selectedHolding.averageCost)
+    : null;
+  const hasSelectedAverageCost =
+    selectedAverageCost !== null &&
+    Number.isFinite(selectedAverageCost) &&
+    selectedAverageCost >= 0;
   const selectedSnapshotResource = snapshotResources[selectedSymbol];
-  const snapshot = selectedSnapshotResource?.data ?? selected.snapshot;
+  const snapshot = selectedSnapshotResource?.data ?? selectedWorkspace?.snapshot;
   const intelligenceMatchesSelection =
     intelligenceResource.symbolId === selectedSymbol;
   const intelligencePhase: FetchPhase = intelligenceMatchesSelection
@@ -609,35 +1000,57 @@ export function MarketDashboard({
     : "loading";
   const feedItems =
     intelligenceMatchesSelection && intelligenceResource.phase === "ready"
-      ? intelligenceResource.data
+      ? intelligenceResource.data.filter((item) =>
+          item.symbolIds.includes(selectedSymbol),
+        )
       : [];
   const events =
     intelligenceMatchesSelection && intelligenceResource.phase === "ready"
       ? feedItems.map((item) => normalizeFeedItem(item, selectedSymbol))
-      : selected.events;
+      : selectedWorkspace?.events ?? [];
   const feedItemById = new Map(feedItems.map((item) => [item.id, item]));
-  const viewHeadline = selected.events[0]?.headline ?? "Illustrative Omnigaze view";
+  const viewHeadline =
+    selectedWorkspace?.events[0]?.headline ??
+    `Awaiting evidence-backed analysis for ${selectedInstrument.ticker}`;
   const snapshotUsesApi = Boolean(selectedSnapshotResource?.data);
-  const fixtureData = isFixtureSource(selectedSnapshotResource?.meta, snapshot);
+  const fixtureData = snapshot
+    ? isFixtureSource(selectedSnapshotResource?.meta, snapshot)
+    : false;
+  const hasProviderSnapshot = snapshotUsesApi && !fixtureData;
+  const providerSnapshotIsStale =
+    hasProviderSnapshot &&
+    (selectedSnapshotResource?.phase === "error" ||
+      selectedSnapshotResource?.meta?.freshness.state !== "fresh");
   const sourceState =
-    selectedSnapshotResource?.phase === "error" ||
-    Boolean(selectedSnapshotResource?.meta?.fallbackReason)
-      ? "fallback"
-      : fixtureData
-        ? "fixture"
-        : snapshotUsesApi
-          ? "provider"
-          : "loading";
+    providerSnapshotIsStale
+      ? "stale"
+      : hasProviderSnapshot
+      ? "provider"
+      : selectedSnapshotResource?.phase === "error"
+        ? selectedWorkspace
+          ? "fallback"
+          : "unavailable"
+        : Boolean(selectedSnapshotResource?.meta?.fallbackReason)
+          ? selectedWorkspace
+            ? "fallback"
+            : "unavailable"
+          : fixtureData
+            ? "fixture"
+            : "loading";
   const sourceLabel =
     sourceState === "provider"
-      ? snapshot.provider
+      ? snapshot?.provider ?? "Provider quote"
+      : sourceState === "stale"
+        ? "Last known provider quote"
       : sourceState === "fallback"
         ? "Bundled demo fallback"
+        : sourceState === "unavailable"
+          ? "Quote unavailable"
         : sourceState === "loading"
           ? "Loading provider status"
           : "Omnigaze demo fixture";
   const freshness = formatFreshness(
-    selectedSnapshotResource?.meta?.freshness.asOf ?? snapshot.asOf,
+    selectedSnapshotResource?.meta?.freshness.asOf ?? snapshot?.asOf,
     now,
   );
   const providerReports = [
@@ -648,8 +1061,10 @@ export function MarketDashboard({
   const healthProviders = Array.from(
     new Map(providerReports.map((provider) => [provider.provider, provider])).values(),
   );
-  const positiveMovers = watchedStocks.filter(({ instrument, snapshot: fallback }) => {
-    return (snapshotResources[instrument.id]?.data ?? fallback).change > 0;
+  const positiveMovers = watchedStocks.filter(({ instrument, workspace }) => {
+    return (
+      (snapshotResources[instrument.id]?.data ?? workspace?.snapshot)?.change ?? 0
+    ) > 0;
   }).length;
   const materialEventCount = events.filter((event) =>
     ["high", "critical"].includes(event.materiality),
@@ -657,23 +1072,48 @@ export function MarketDashboard({
   const dataModeLabel =
     sourceState === "provider"
       ? "Provider data"
+      : sourceState === "stale"
+        ? "Provider quote · stale"
+      : sourceState === "unavailable"
+        ? "Quote unavailable"
       : sourceState === "loading"
         ? "Checking source"
         : "Demo data";
 
-  const searchResults = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return stockWorkspaces;
+  const normalizedSearchQuery = query.trim();
+  const catalogMatchesQuery = catalogSearch.query === normalizedSearchQuery;
+  const activeSearchPhase = normalizedSearchQuery
+    ? catalogMatchesQuery
+      ? catalogSearch.phase
+      : "loading"
+    : "idle";
+  const searchResults = normalizedSearchQuery && catalogMatchesQuery
+    ? catalogSearch.data
+    : normalizedSearchQuery
+      ? []
+      : fixtureInstruments;
 
-    return stockWorkspaces.filter(
-      ({ instrument }) =>
-        instrument.ticker.toLowerCase().includes(normalized) ||
-        instrument.name.toLowerCase().includes(normalized),
-    );
-  }, [query]);
-
-  const chartData = selected.chart[timeframe];
-  const positive = snapshot.change >= 0;
+  const chartResource = chartResources[`${selectedSymbol}:${timeframe}`];
+  const providerChartData: MarketPoint[] =
+    chartResource?.data?.bars.map((bar) => ({
+      timestamp: bar.timestamp,
+      label: formatChartLabel(bar.timestamp, timeframe),
+      price: bar.close,
+      volume: bar.volume,
+    })) ?? [];
+  const chartUsesProvider = providerChartData.length > 0;
+  const chartIsStale =
+    chartUsesProvider && chartResource?.phase === "error";
+  const chartUsesFixture =
+    !chartUsesProvider && Boolean(selectedWorkspace?.chart[timeframe].length);
+  const chartData = chartUsesProvider
+    ? providerChartData
+    : selectedWorkspace?.chart[timeframe] ?? [];
+  const chartUnavailable =
+    !chartUsesProvider &&
+    (chartResource?.phase === "error" ||
+      (chartResource?.phase === "ready" && providerChartData.length === 0));
+  const positive = snapshot ? snapshot.change >= 0 : true;
   const chartColor = positive ? "#22d3a7" : "#ff6b7d";
 
   async function persistWatchlistMutation(
@@ -724,12 +1164,21 @@ export function MarketDashboard({
     }
   }
 
+  function persistAnonymousPreferences(
+    instruments: DashboardInstrument[],
+    symbol: CanonicalSymbol,
+    nextTimeframe: Timeframe,
+  ) {
+    if (session.isAuthenticated) return;
+    writeDashboardPreferences(instruments, symbol, nextTimeframe);
+  }
+
   function selectStock(symbol: CanonicalSymbol) {
     preferencesTouchedRef.current = true;
     setSelectedSymbol(symbol);
     setShowSearch(false);
     setShowMobileWatchlist(false);
-    writeDashboardPreferences(watchlist, symbol, timeframe);
+    persistAnonymousPreferences(watchlist, symbol, timeframe);
   }
 
   function openStockSearch() {
@@ -737,52 +1186,65 @@ export function MarketDashboard({
     window.requestAnimationFrame(() => searchInputRef.current?.focus());
   }
 
-  function addStock(symbol: CanonicalSymbol) {
+  function addStock(instrument: DashboardInstrument) {
     if (watchlistSyncPhase === "saving") return;
+    if (session.isAuthenticated && !accountPersistenceEnabled) {
+      setWatchlistSyncMessage(
+        "Your account watchlist is unavailable, so this change was not applied.",
+      );
+      return;
+    }
+    const symbol = instrument.id;
     preferencesTouchedRef.current = true;
     const previousWatchlist = watchlist;
     const previousSelected = selectedSymbol;
-    const nextWatchlist = watchlist.includes(symbol)
+    const nextWatchlist = watchlistIds.has(symbol)
       ? watchlist
-      : [...watchlist, symbol];
+      : [...watchlist, instrument];
     setWatchlist(nextWatchlist);
     setSelectedSymbol(symbol);
     setShowSearch(false);
     setShowMobileWatchlist(false);
-    writeDashboardPreferences(nextWatchlist, symbol, timeframe);
-    if (!watchlist.includes(symbol)) {
+    persistAnonymousPreferences(nextWatchlist, symbol, timeframe);
+    if (!watchlistIds.has(symbol)) {
       void persistWatchlistMutation("add", symbol, () => {
         setWatchlist(previousWatchlist);
         setSelectedSymbol(previousSelected);
-        writeDashboardPreferences(previousWatchlist, previousSelected, timeframe);
+        persistAnonymousPreferences(previousWatchlist, previousSelected, timeframe);
       });
     }
   }
 
   function removeStock(symbol: CanonicalSymbol) {
     if (watchlistSyncPhase === "saving") return;
+    if (session.isAuthenticated && !accountPersistenceEnabled) {
+      setWatchlistSyncMessage(
+        "Your account watchlist is unavailable, so this change was not applied.",
+      );
+      return;
+    }
     preferencesTouchedRef.current = true;
     const previousWatchlist = watchlist;
     const previousSelected = selectedSymbol;
-    const nextWatchlist = watchlist.filter((item) => item !== symbol);
+    const nextWatchlist = watchlist.filter((item) => item.id !== symbol);
     const nextSelected =
       symbol === selectedSymbol && nextWatchlist[0]
-        ? nextWatchlist[0]
+        ? nextWatchlist[0].id
         : selectedSymbol;
     setWatchlist(nextWatchlist);
     if (nextSelected !== selectedSymbol) setSelectedSymbol(nextSelected);
-    writeDashboardPreferences(nextWatchlist, nextSelected, timeframe);
+    persistAnonymousPreferences(nextWatchlist, nextSelected, timeframe);
     void persistWatchlistMutation("remove", symbol, () => {
       setWatchlist(previousWatchlist);
       setSelectedSymbol(previousSelected);
-      writeDashboardPreferences(previousWatchlist, previousSelected, timeframe);
+      persistAnonymousPreferences(previousWatchlist, previousSelected, timeframe);
     });
   }
 
   function chooseTimeframe(nextTimeframe: Timeframe) {
     preferencesTouchedRef.current = true;
     setTimeframe(nextTimeframe);
-    writeDashboardPreferences(watchlist, selectedSymbol, nextTimeframe);
+    persistAnonymousPreferences(watchlist, selectedSymbol, nextTimeframe);
   }
 
   return (
@@ -822,9 +1284,15 @@ export function MarketDashboard({
           <kbd>⌘ K</kbd>
 
           {showSearch && (
-            <div className="search-results" role="listbox">
+            <div className="search-results" role="listbox" aria-label="Stock search results">
               <div className="search-results-header">
-                <span>Stocks · demo search universe</span>
+                <span>
+                  {normalizedSearchQuery
+                    ? catalogSearch.meta?.freshness.state === "stale" && catalogMatchesQuery
+                      ? "Stocks · cached catalog"
+                      : "Stocks · active US equities"
+                    : "Starter symbols · demo fixtures"}
+                </span>
                 <button
                   type="button"
                   aria-label="Close search"
@@ -833,36 +1301,69 @@ export function MarketDashboard({
                   <X size={15} />
                 </button>
               </div>
-              {searchResults.length > 0 ? (
-                searchResults.map(({ instrument, snapshot }) => {
-                  const alreadyWatched = watchlist.includes(instrument.id);
-                  return (
+              {normalizedSearchQuery && activeSearchPhase === "loading" ? (
+                <div className="search-empty-state" role="status" aria-live="polite">
+                  <RefreshCw className="sync-spinner" size={17} />
+                  <div>
+                    <strong>Searching the active catalog</strong>
+                    <span>Checking symbols and company names…</span>
+                  </div>
+                </div>
+              ) : normalizedSearchQuery && activeSearchPhase === "error" ? (
+                <div className="search-empty-state search-error-state" role="status" aria-live="polite">
+                  <WifiOff size={17} />
+                  <div>
+                    <strong>Stock search is temporarily unavailable</strong>
+                    <span>{catalogSearch.error ?? "No catalog results are being substituted."}</span>
                     <button
-                      key={instrument.id}
                       type="button"
-                      role="option"
-                      aria-selected={alreadyWatched}
-                      className="search-result-row"
-                      disabled={watchlistSyncPhase === "saving"}
-                      onClick={() => addStock(instrument.id)}
+                      onClick={() => setSearchGeneration((current) => current + 1)}
                     >
-                      <span className="symbol-avatar">{instrument.ticker[0]}</span>
-                      <span className="search-result-name">
-                        <strong>{instrument.ticker}</strong>
-                        <small>{instrument.name}</small>
-                      </span>
-                      <span className={movementClass(snapshot.change)}>
-                        {snapshot.changePercent >= 0 ? "+" : ""}
-                        {snapshot.changePercent.toFixed(2)}%
-                      </span>
-                      {alreadyWatched ? <Star size={14} fill="currentColor" /> : <Plus size={15} />}
+                      Retry search
                     </button>
-                  );
-                })
+                  </div>
+                </div>
+              ) : searchResults.length > 0 ? (
+                <>
+                  {normalizedSearchQuery && catalogSearch.meta?.freshness.state === "stale" && (
+                    <div className="search-catalog-notice" role="status">
+                      <Clock3 size={13} /> Catalog refresh delayed; showing the last verified list ({formatFreshness(catalogSearch.meta.catalogAsOf, now)}).
+                    </div>
+                  )}
+                  {searchResults.map((instrument) => {
+                    const alreadyWatched = watchlistIds.has(instrument.id);
+                    const fixture = workspaceBySymbol.get(instrument.id);
+                    return (
+                      <button
+                        key={instrument.id}
+                        type="button"
+                        role="option"
+                        aria-selected={alreadyWatched}
+                        className="search-result-row"
+                        disabled={watchlistSyncPhase === "saving"}
+                        onClick={() => addStock(instrument)}
+                      >
+                        <span className="symbol-avatar">{instrument.ticker[0]}</span>
+                        <span className="search-result-name">
+                          <strong>{instrument.ticker}</strong>
+                          <small>{instrument.name}</small>
+                        </span>
+                        <span className="search-result-meta">
+                          {normalizedSearchQuery
+                            ? instrument.exchange
+                            : fixture
+                              ? "DEMO"
+                              : instrument.exchange}
+                        </span>
+                        {alreadyWatched ? <Star size={14} fill="currentColor" /> : <Plus size={15} />}
+                      </button>
+                    );
+                  })}
+                </>
               ) : (
                 <div className="search-empty-state" role="status">
                   <Search size={17} />
-                  <div><strong>No matching stocks</strong><span>Try a company name or ticker from the demo universe.</span></div>
+                  <div><strong>No matching stocks</strong><span>Try another active US ticker or company name.</span></div>
                 </div>
               )}
             </div>
@@ -872,8 +1373,22 @@ export function MarketDashboard({
         <div className="topbar-actions">
           <div className="market-status">
             <span className={`status-dot ${sourceState}`} />
-            <span>{sourceState === "provider" ? sessionLabel(snapshot.session) : "Demo market context"}</span>
-            <small>{sourceState === "provider" ? freshness : "not live"}</small>
+            <span>
+              {sourceState === "provider" && snapshot
+                ? sessionLabel(snapshot.session)
+                : sourceState === "stale"
+                  ? "Last known provider quote"
+                : sourceState === "unavailable"
+                  ? "Quote unavailable"
+                  : sourceState === "loading" && !selectedWorkspace
+                    ? "Loading market context"
+                    : "Demo market context"}
+            </span>
+            <small>
+              {sourceState === "provider" || sourceState === "stale"
+                ? freshness
+                : "not live"}
+            </small>
           </div>
           <button
             type="button"
@@ -909,7 +1424,9 @@ export function MarketDashboard({
       </header>
 
       <div className={`demo-banner ${sourceState}`} role="status" aria-live="polite">
-        {sourceState === "fallback" ? (
+        {sourceState === "fallback" ||
+        sourceState === "unavailable" ||
+        sourceState === "stale" ? (
           <WifiOff size={14} />
         ) : sourceState === "provider" ? (
           <RefreshCw size={14} />
@@ -920,11 +1437,17 @@ export function MarketDashboard({
         )}
         <span>
           {sourceState === "provider"
-            ? `${snapshot.provider} · ${snapshot.isDelayed ? `delayed ${Math.max(1, Math.ceil(snapshot.delaySeconds / 60))}m` : "provider-reported quote"} · ${freshness}`
+            ? `${snapshot?.provider} · ${snapshot?.isDelayed ? `delayed ${Math.max(1, Math.ceil(snapshot.delaySeconds / 60))}m` : "provider-reported quote"} · ${freshness}`
+            : sourceState === "stale"
+              ? `${snapshot?.provider ?? "Provider"} · last known quote · ${selectedSnapshotResource?.phase === "error" ? "refresh failed" : "provider marked stale or freshness is unknown"} · ${freshness}`
             : sourceState === "fallback"
               ? "Provider API unavailable — bundled demo fixture shown. This is not live market data."
+              : sourceState === "unavailable"
+                ? `Live quote unavailable for ${selectedInstrument.ticker} — Omnigaze is not substituting another company's data.`
               : sourceState === "loading"
-                ? "Checking market data API — bundled demo fixture shown meanwhile. This is not live market data."
+                ? selectedWorkspace
+                  ? "Checking market data API — this symbol's bundled demo fixture is shown meanwhile. It is not live market data."
+                  : `Loading a provider quote for ${selectedInstrument.ticker}. No substitute quote is being shown.`
                 : "Demo fixture data — prices, chart history, and analysis are illustrative, not live."}
         </span>
         <button
@@ -959,8 +1482,12 @@ export function MarketDashboard({
               <dd><span className={`health-dot ${sourceState}`} />{sourceLabel}</dd>
               <small>
                 {sourceState === "provider"
-                  ? `${freshness} · ${snapshot.marketCoverage.replaceAll("-", " ")} coverage`
-                  : "Fixture values are never presented as live."}
+                  ? `${freshness} · ${snapshot?.marketCoverage.replaceAll("-", " ")} coverage`
+                  : sourceState === "stale"
+                    ? `${freshness} · retained for context after freshness degraded; this is not a current quote.`
+                  : sourceState === "unavailable"
+                    ? `No quote is displayed for ${selectedInstrument.ticker}; another symbol's fixture is never substituted.`
+                    : "Fixture values are never presented as live."}
               </small>
             </div>
             <div>
@@ -981,11 +1508,15 @@ export function MarketDashboard({
                 <span className={`health-dot ${intelligencePhase}`} />
                 {intelligencePhase === "ready"
                   ? intelligenceResource.meta?.dataMode === "demo"
-                    ? "Demo intelligence adapter"
+                    ? selectedWorkspace
+                      ? "Demo intelligence adapter"
+                      : "Awaiting provider evidence"
                     : "API connected"
                   : intelligencePhase === "loading"
                     ? "Checking"
-                    : "Bundled fallback"}
+                    : selectedWorkspace
+                      ? "Bundled fallback"
+                      : "Unavailable"}
               </dd>
               <small>
                 {(intelligenceMatchesSelection ? intelligenceResource.error : undefined) ??
@@ -1076,7 +1607,8 @@ export function MarketDashboard({
                     ? "Synced across your devices"
                     : watchlistSyncPhase === "error"
                       ? watchlistSyncMessage ?? "Account sync failed; change rolled back."
-                      : "Account sync unavailable; using this device."}
+                      : watchlistSyncMessage ??
+                        "Account sync unavailable; local account data is not shown."}
             </span>
             {!session.isAuthenticated && (
               <a href={session.signInPath} target="_top">Sync across devices</a>
@@ -1098,12 +1630,22 @@ export function MarketDashboard({
                 <button type="button" onClick={openStockSearch}>Choose stocks</button>
               </div>
             )}
-            {watchedStocks.map(({ instrument, snapshot: fallbackSnapshot }) => {
-              const rowSnapshot = snapshotResources[instrument.id]?.data ?? fallbackSnapshot;
-              const rowUsesFixture = isFixtureSource(
-                snapshotResources[instrument.id]?.meta,
-                rowSnapshot,
-              );
+            {watchedStocks.map(({ instrument, workspace, holding }) => {
+              const rowResource = snapshotResources[instrument.id];
+              const rowSnapshot = rowResource?.data ?? workspace?.snapshot;
+              const rowUsesFixture = rowSnapshot
+                ? isFixtureSource(rowResource?.meta, rowSnapshot)
+                : false;
+              const rowIsStale =
+                Boolean(rowResource?.data) &&
+                !rowUsesFixture &&
+                (rowResource?.phase === "error" ||
+                  rowResource?.meta?.freshness.state !== "fresh");
+              const rowQuoteLabel = rowSnapshot
+                ? `${formatPrice(rowSnapshot.price)}, ${rowUsesFixture ? "demo fixture" : rowIsStale ? "last known provider quote, refresh failed or stale" : "provider quote"}`
+                : rowResource?.phase === "error"
+                  ? "quote unavailable"
+                  : "quote loading";
 
               return (
                 <div
@@ -1117,31 +1659,54 @@ export function MarketDashboard({
                     className="watchlist-select"
                     onClick={() => selectStock(instrument.id)}
                     aria-pressed={selectedSymbol === instrument.id}
-                    aria-label={`${instrument.ticker}, ${formatPrice(rowSnapshot.price)}, ${rowUsesFixture ? "demo fixture" : "provider quote"}`}
+                    aria-label={`${instrument.ticker}, ${rowQuoteLabel}`}
                   >
                     <span className="symbol-cell">
                       <span className="symbol-avatar small">{instrument.ticker[0]}</span>
                       <span>
                         <strong>{instrument.ticker}</strong>
-                        <small>{rowUsesFixture ? "DEMO" : instrument.exchange}</small>
+                        <small>
+                          {rowUsesFixture
+                            ? "DEMO"
+                            : rowIsStale
+                              ? "STALE"
+                            : rowSnapshot
+                              ? instrument.exchange
+                              : rowResource?.phase === "error"
+                                ? "NO QUOTE"
+                                : "LOADING"}
+                        </small>
+                        {holding && (
+                          <span className="holding-badge">
+                            Owned · {holding.quantity}
+                          </span>
+                        )}
                       </span>
                     </span>
-                    <span className="price-cell">{rowSnapshot.price.toFixed(2)}</span>
-                    <span className={movementClass(rowSnapshot.change)}>
-                      <span aria-hidden="true">{rowSnapshot.change >= 0 ? "↗" : "↘"}</span>{" "}
-                      {rowSnapshot.changePercent >= 0 ? "+" : ""}
-                      {rowSnapshot.changePercent.toFixed(2)}%
+                    <span className="price-cell">
+                      {rowSnapshot ? rowSnapshot.price.toFixed(2) : "—"}
                     </span>
+                    {rowSnapshot ? (
+                      <span className={movementClass(rowSnapshot.change)}>
+                        <span aria-hidden="true">{rowSnapshot.change >= 0 ? "↗" : "↘"}</span>{" "}
+                        {rowSnapshot.changePercent >= 0 ? "+" : ""}
+                        {rowSnapshot.changePercent.toFixed(2)}%
+                      </span>
+                    ) : (
+                      <span className="market-awaiting">Awaiting</span>
+                    )}
                   </button>
-                  <button
-                    type="button"
-                    className="remove-stock"
-                    aria-label={`Remove ${instrument.ticker} from watchlist`}
-                    disabled={watchlistSyncPhase === "saving"}
-                    onClick={() => removeStock(instrument.id)}
-                  >
-                    <X size={13} />
-                  </button>
+                  {watchlistIds.has(instrument.id) && (
+                    <button
+                      type="button"
+                      className="remove-stock"
+                      aria-label={`Remove ${instrument.ticker} from watchlist`}
+                      disabled={watchlistSyncPhase === "saving"}
+                      onClick={() => removeStock(instrument.id)}
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
                 </div>
               );
             })}
@@ -1159,7 +1724,7 @@ export function MarketDashboard({
             <div className="summary-stat-grid">
               <div><strong>{materialEventCount}</strong><span>material events</span></div>
               <div><strong>{positiveMovers}</strong><span>positive movers</span></div>
-              <div><strong>{sourceState === "provider" ? "API" : "DEMO"}</strong><span>quote source</span></div>
+              <div><strong>{sourceState === "provider" ? "API" : sourceState === "stale" ? "STALE" : sourceState === "unavailable" ? "—" : "DEMO"}</strong><span>quote source</span></div>
               <div><strong>{watchlist.length}</strong><span>tracked symbols</span></div>
             </div>
           </div>
@@ -1167,7 +1732,7 @@ export function MarketDashboard({
           <nav className="side-nav" aria-label="Application">
             <button type="button"><Layers3 size={16} /> Intelligence feed</button>
             <button type="button"><MessageSquareText size={16} /> Ask Omnigaze</button>
-            <button type="button"><Settings2 size={16} /> Preferences</button>
+            <Link href="/onboarding"><Settings2 size={16} /> Preferences</Link>
             {session.isAuthenticated && (
               <a href={session.signOutPath} target="_top">
                 <LogOut size={16} /> Sign out
@@ -1203,15 +1768,24 @@ export function MarketDashboard({
               >
                 <ShieldCheck size={15} /> Data status
               </button>
+              <Link className="secondary-action" href="/onboarding">
+                <Settings2 size={15} /> Edit setup
+              </Link>
             </div>
             <div className="overview-metrics" aria-label="Watchlist overview">
               <span><strong>{watchlist.length}</strong> tracked</span>
+              <span>
+                <strong>{accountPortfolioUnavailable ? "—" : holdings.length}</strong> held
+              </span>
               <span><strong>{materialEventCount}</strong> material events</span>
               <span className={`overview-source ${sourceState}`}><i />{dataModeLabel}</span>
+              {session.isAuthenticated && accountPortfolioUnavailable && (
+                <span><TriangleAlert size={11} /> Holdings sync unavailable</span>
+              )}
             </div>
           </section>
 
-          {watchlist.length === 0 ? (
+          {visibleInstruments.length === 0 ? (
             <section className="dashboard-empty-state" aria-labelledby="empty-watchlist-title">
               <span className="empty-illustration" aria-hidden="true"><Layers3 size={25} /></span>
               <span className="eyebrow">BUILD YOUR DASHBOARD</span>
@@ -1222,48 +1796,68 @@ export function MarketDashboard({
               <button type="button" className="primary-action" onClick={openStockSearch}>
                 <Plus size={16} /> Add your first stock <ArrowRight size={15} />
               </button>
-              <small>Start with NVDA, MSFT, AMD, AAPL, or TSLA in the current demo universe.</small>
+              <small>Search any active US equity by ticker or company name.</small>
             </section>
           ) : (
           <>
           <div className="symbol-header">
             <div className="symbol-identity">
-              <span className="symbol-avatar large">{selected.instrument.ticker[0]}</span>
+              <span className="symbol-avatar large">{selectedInstrument.ticker[0]}</span>
               <div>
                 <div className="ticker-line">
-                  <h2>{selected.instrument.ticker}</h2>
-                  <span>{selected.instrument.exchange}</span>
-                  <button type="button" aria-label={`Favorite ${selected.instrument.ticker}`}>
+                  <h2>{selectedInstrument.ticker}</h2>
+                  <span>{selectedInstrument.exchange}</span>
+                  <button type="button" aria-label={`Favorite ${selectedInstrument.ticker}`}>
                     <Star size={16} />
                   </button>
                 </div>
-                <p>{selected.instrument.name}</p>
+                <p>{selectedInstrument.name}</p>
+                {selectedHolding && (
+                  <span className="position-context">
+                    Own {selectedHolding.quantity} shares
+                    {hasSelectedAverageCost
+                      ? ` · ${formatPrice(selectedAverageCost)} average cost`
+                      : ""}
+                  </span>
+                )}
               </div>
             </div>
             <div className="quote-block">
-              <strong>{formatPrice(snapshot.price)}</strong>
-              <span className={movementClass(snapshot.change)}>
-                {snapshot.change >= 0 ? (
-                  <TrendingUp size={16} aria-hidden="true" />
-                ) : (
-                  <TrendingDown size={16} aria-hidden="true" />
-                )}
-                {snapshot.change >= 0 ? "+" : ""}
-                {snapshot.change.toFixed(2)} ({snapshot.changePercent.toFixed(2)}%)
-              </span>
+              <strong>{snapshot ? formatPrice(snapshot.price) : "—"}</strong>
+              {snapshot ? (
+                <span className={movementClass(snapshot.change)}>
+                  {snapshot.change >= 0 ? (
+                    <TrendingUp size={16} aria-hidden="true" />
+                  ) : (
+                    <TrendingDown size={16} aria-hidden="true" />
+                  )}
+                  {snapshot.change >= 0 ? "+" : ""}
+                  {snapshot.change.toFixed(2)} ({snapshot.changePercent.toFixed(2)}%)
+                </span>
+              ) : (
+                <span className="market-awaiting">
+                  {selectedSnapshotResource?.phase === "error"
+                    ? "Quote unavailable"
+                    : "Loading quote"}
+                </span>
+              )}
               <small>
-                {sourceState === "provider"
+                {sourceState === "provider" && snapshot
                   ? `${snapshot.isDelayed ? `Delayed ${Math.max(1, Math.ceil(snapshot.delaySeconds / 60))} min` : "Provider timestamp"} · ${freshness}`
+                  : sourceState === "stale"
+                    ? `Last known provider quote · ${freshness} · not current`
+                  : sourceState === "unavailable"
+                    ? `No substitute data shown for ${selectedInstrument.ticker}`
                   : `${sourceLabel} · not live`}
               </small>
             </div>
           </div>
 
           <div className="metric-strip">
-            <div><span>Previous close</span><strong>{formatPrice(snapshot.previousClose)}</strong></div>
-            <div><span>Volume</span><strong>{formatCompact(snapshot.volume)}</strong></div>
-            <div><span>Market cap</span><strong>{snapshot.marketCap}</strong></div>
-            <div><span>Sector</span><strong>{selected.instrument.sector}</strong></div>
+            <div><span>Previous close</span><strong>{snapshot ? formatPrice(snapshot.previousClose) : "Unavailable"}</strong></div>
+            <div><span>Volume</span><strong>{snapshot ? formatCompact(snapshot.volume) : "Unavailable"}</strong></div>
+            <div><span>Market cap</span><strong>{snapshot?.marketCap ?? "Unavailable"}</strong></div>
+            <div><span>Sector</span><strong>{selectedInstrument.sector ?? "Unavailable"}</strong></div>
           </div>
 
           <section className="chart-panel" aria-labelledby="price-chart-title">
@@ -1271,7 +1865,15 @@ export function MarketDashboard({
               <div>
                 <span className="eyebrow">PRICE</span>
                 <h2 id="price-chart-title">Market movement</h2>
-                <small className="chart-source-note">Illustrative fixture history · not live</small>
+                <small className="chart-source-note">
+                  {chartUsesProvider
+                    ? `${chartResource?.data?.provider} · ${chartIsStale ? "last known history; refresh failed" : "corporate-action adjusted"} · ${formatFreshness(chartResource?.data?.asOf ?? undefined, now)}`
+                    : !chartResource || chartResource.phase === "loading"
+                      ? "Loading provider history…"
+                      : chartUsesFixture
+                        ? "Provider history unavailable · this symbol's illustrative fixture history is shown"
+                        : `History unavailable for ${selectedInstrument.ticker} · no substitute series is shown`}
+                </small>
               </div>
               <div className="timeframe-control" aria-label="Chart timeframe">
                 {timeframes.map((range) => (
@@ -1288,47 +1890,63 @@ export function MarketDashboard({
               </div>
             </div>
 
-            <div className="chart-wrap" aria-label={`${selected.instrument.ticker} ${timeframe} price chart`}>
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData} margin={{ top: 10, right: 8, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={chartColor} stopOpacity={0.24} />
-                      <stop offset="100%" stopColor={chartColor} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke="#172331" strokeDasharray="2 5" vertical={false} />
-                  <XAxis
-                    dataKey="label"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: "#677688", fontSize: 10 }}
-                    minTickGap={28}
-                  />
-                  <YAxis
-                    orientation="right"
-                    axisLine={false}
-                    tickLine={false}
-                    tick={{ fill: "#677688", fontSize: 10 }}
-                    domain={["dataMin - 2", "dataMax + 2"]}
-                    tickFormatter={(value) => `$${Number(value).toFixed(0)}`}
-                    width={48}
-                  />
-                  <Tooltip content={<ChartTooltip />} cursor={{ stroke: "#3a4b5f" }} />
-                  <Area
-                    type="monotone"
-                    dataKey="price"
-                    stroke={chartColor}
-                    strokeWidth={2}
-                    fill="url(#priceFill)"
-                    isAnimationActive={false}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+            <div className="chart-wrap" aria-label={`${selectedInstrument.ticker} ${timeframe} price chart`}>
+              {chartData.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData} margin={{ top: 10, right: 8, left: 0, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="priceFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={chartColor} stopOpacity={0.24} />
+                        <stop offset="100%" stopColor={chartColor} stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke="#172331" strokeDasharray="2 5" vertical={false} />
+                    <XAxis
+                      dataKey="label"
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: "#677688", fontSize: 10 }}
+                      minTickGap={28}
+                    />
+                    <YAxis
+                      orientation="right"
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: "#677688", fontSize: 10 }}
+                      domain={["dataMin - 2", "dataMax + 2"]}
+                      tickFormatter={(value) => `$${Number(value).toFixed(0)}`}
+                      width={48}
+                    />
+                    <Tooltip content={<ChartTooltip />} cursor={{ stroke: "#3a4b5f" }} />
+                    <Area
+                      type="monotone"
+                      dataKey="price"
+                      stroke={chartColor}
+                      strokeWidth={2}
+                      fill="url(#priceFill)"
+                      isAnimationActive={false}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="chart-unavailable-state" role="status">
+                  {chartUnavailable ? <WifiOff size={20} /> : <Clock3 size={20} />}
+                  <strong>
+                    {chartUnavailable ? "Historical data unavailable" : "Loading price history"}
+                  </strong>
+                  <span>
+                    {chartUnavailable
+                      ? `No substitute series is shown for ${selectedInstrument.ticker}.`
+                      : `Checking the provider for ${selectedInstrument.ticker}.`}
+                  </span>
+                </div>
+              )}
             </div>
 
             <table className="sr-only">
-              <caption>{selected.instrument.ticker} price observations</caption>
+              <caption>
+                {selectedInstrument.ticker} price observations · {chartUsesProvider ? chartIsStale ? "last known provider history; refresh failed" : "provider history" : chartUsesFixture ? "illustrative fixture" : "unavailable"}
+              </caption>
               <thead><tr><th>Time</th><th>Price</th><th>Volume</th></tr></thead>
               <tbody>
                 {chartData.map((point) => (
@@ -1389,8 +2007,23 @@ export function MarketDashboard({
                 })
               ) : (
                 <div className="event-empty-state">
-                  <Globe2 size={18} />
-                  <div><strong>No recent provider events</strong><span>Omnigaze will keep checking this symbol.</span></div>
+                  {intelligencePhase === "error" ? <WifiOff size={18} /> : <Globe2 size={18} />}
+                  <div>
+                    <strong>
+                      {intelligencePhase === "loading"
+                        ? "Checking for relevant evidence"
+                        : intelligencePhase === "error"
+                          ? "Intelligence temporarily unavailable"
+                          : !selectedWorkspace && intelligenceResource.meta?.dataMode === "demo"
+                            ? "Awaiting verified provider evidence"
+                            : "No recent provider events"}
+                    </strong>
+                    <span>
+                      {!selectedWorkspace
+                        ? `No fixture events are substituted for ${selectedInstrument.ticker}.`
+                        : "Omnigaze will keep checking this symbol."}
+                    </span>
+                  </div>
                 </div>
               )}
             </div>
@@ -1404,13 +2037,20 @@ export function MarketDashboard({
             <div className="ai-orb"><Bot size={20} /></div>
             <div>
               <span className="eyebrow">OMNIGAZE VIEW</span>
-              <strong>Illustrative foundation analysis</strong>
+              <strong>
+                {selectedWorkspace
+                  ? "Illustrative foundation analysis"
+                  : "Awaiting evidence-backed analysis"}
+              </strong>
             </div>
             <button type="button" aria-label="About Omnigaze views"><CircleHelp size={16} /></button>
           </div>
 
           <div className="view-source-note">
-            <Sparkles size={13} /> Demo fixture analysis · not generated from the current provider feed
+            {selectedWorkspace ? <Sparkles size={13} /> : <Clock3 size={13} />}
+            {selectedWorkspace
+              ? "Demo fixture analysis · not generated from the current provider feed"
+              : `No Omnigaze View yet for ${selectedInstrument.ticker} · no fixture analysis substituted`}
           </div>
 
           <div className="insight-tabs" role="tablist" aria-label="Omnigaze analysis">
@@ -1430,38 +2070,53 @@ export function MarketDashboard({
               className={insightTab === "evidence" ? "active" : ""}
               onClick={() => setInsightTab("evidence")}
             >
-              Evidence ({selected.evidence.length})
+              Evidence ({selectedWorkspace?.evidence.length ?? 0})
             </button>
           </div>
 
-          {insightTab === "view" ? (
+          {!selectedWorkspace ? (
+            <div className="view-unavailable-state" role="status">
+              <span className="empty-icon"><Clock3 size={19} /></span>
+              <strong>
+                {insightTab === "view"
+                  ? "Omnigaze View awaiting evidence"
+                  : "No verified evidence collected yet"}
+              </strong>
+              <p>
+                {insightTab === "view"
+                  ? `A view for ${selectedInstrument.ticker} will appear after provider evidence is available for analysis.`
+                  : `Omnigaze is still collecting attributable sources for ${selectedInstrument.ticker}.`}
+              </p>
+              <small>No analysis or evidence from another company is substituted.</small>
+            </div>
+          ) : insightTab === "view" ? (
             <div className="view-content">
               <div className="stance-row">
                 <div>
                   <span>Near-term stance</span>
-                  <strong className={`stance ${selected.view.stance}`}>
-                    {selected.view.stance}
+                  <strong className={`stance ${selectedWorkspace.view.stance}`}>
+                    {selectedWorkspace.view.stance}
                   </strong>
                 </div>
-                <div className="confidence-ring" style={{ "--confidence": `${selected.view.confidence * 100}%` } as React.CSSProperties}>
-                  <span>{Math.round(selected.view.confidence * 100)}%</span>
+                <div className="confidence-ring" style={{ "--confidence": `${selectedWorkspace.view.confidence * 100}%` } as React.CSSProperties}>
+                  <span>{Math.round(selectedWorkspace.view.confidence * 100)}%</span>
                   <small>confidence</small>
                 </div>
               </div>
 
               <div className="view-summary">
                 <h2>{viewHeadline}</h2>
-                <p>{selected.view.summary}</p>
+                <p>{selectedWorkspace.view.summary}</p>
               </div>
 
               <div className="why-now-card">
                 <div><Clock3 size={15} /><span>Why now</span></div>
-                <p>{selected.view.whyNow}</p>
+                <p>{selectedWorkspace.view.whyNow}</p>
               </div>
 
               <div className="driver-list">
                 <div className="mini-heading"><span>Key drivers</span><small>2 signals</small></div>
-                {selected.view.drivers.map((driver) => (
+                {selectedWorkspace.view.drivers.map((driver) => (
                   <div className="driver-row" key={driver.label}>
                     <span className={`driver-dot ${driver.direction}`} />
                     <div><strong>{driver.label}</strong><p>{driver.explanation}</p></div>
@@ -1471,18 +2126,18 @@ export function MarketDashboard({
 
               <div className="unknowns">
                 <div className="mini-heading"><span>What remains unknown</span></div>
-                {selected.view.unknowns.map((unknown) => (
+                {selectedWorkspace.view.unknowns.map((unknown) => (
                   <p key={unknown}><span>?</span>{unknown}</p>
                 ))}
               </div>
 
               <button type="button" className="ask-button">
-                <Sparkles size={16} /> Ask Omnigaze about {selected.instrument.ticker}
+                <Sparkles size={16} /> Ask Omnigaze about {selectedInstrument.ticker}
               </button>
             </div>
           ) : (
             <div className="evidence-list">
-              {selected.evidence.map((evidence) => (
+              {selectedWorkspace.evidence.map((evidence) => (
                 <article key={evidence.id} className="evidence-card">
                   <div className="evidence-card-top">
                     <span className={`evidence-type ${evidence.classification}`}>
@@ -1509,7 +2164,12 @@ export function MarketDashboard({
       {watchlist.length > 0 && (
         <section className="mobile-intelligence-summary">
           <div className="ai-orb"><Bot size={18} /></div>
-          <div><span className="eyebrow">OMNIGAZE VIEW · DEMO</span><strong>{viewHeadline}</strong></div>
+          <div>
+            <span className="eyebrow">
+              {selectedWorkspace ? "OMNIGAZE VIEW · DEMO" : "OMNIGAZE VIEW · AWAITING EVIDENCE"}
+            </span>
+            <strong>{viewHeadline}</strong>
+          </div>
           <button type="button"><ChevronRight size={18} /></button>
         </section>
       )}

@@ -4,9 +4,14 @@ import {
   chatGPTSignOutPath,
   getChatGPTUser,
 } from "@/app/chatgpt-auth";
-import { MarketDashboard } from "@/components/market-dashboard";
+import {
+  MarketDashboard,
+  type DashboardHolding,
+  type DashboardInstrument,
+} from "@/components/market-dashboard";
 import { extractCanonicalSymbols } from "@/lib/api/personal-intelligence";
 import type { CanonicalSymbol } from "@/lib/market-types";
+import { getUserPortfolio } from "@/lib/repositories/portfolio";
 import { listUserWatchlists } from "@/lib/repositories/watchlists";
 
 export const dynamic = "force-dynamic";
@@ -50,22 +55,57 @@ export default async function DashboardPage() {
   let accountWatchlist: {
     id: string;
     name: string;
-    symbols: CanonicalSymbol[];
+    instruments: DashboardInstrument[];
   } | null = null;
   let accountSyncUnavailable = false;
+  let accountHoldings: DashboardHolding[] | null = null;
+  let accountPortfolioUnavailable = false;
 
   try {
     const watchlists = await listUserWatchlists(user.userId);
     const primary = watchlists.find((watchlist) => watchlist.isDefault) ?? watchlists[0];
+    const canonicalSymbols = new Set(
+      primary ? extractCanonicalSymbols([primary]) : [],
+    );
     accountWatchlist = primary
       ? {
           id: primary.id,
           name: primary.name,
-          symbols: extractCanonicalSymbols([primary]),
+          instruments: primary.items.flatMap((item) => {
+            if (!canonicalSymbols.has(item.symbolId as CanonicalSymbol)) return [];
+            return [
+              {
+                id: item.symbolId as CanonicalSymbol,
+                ticker: item.ticker,
+                exchange: item.exchange,
+                name: item.name,
+                sector: null,
+                currency: "USD" as const,
+              },
+            ];
+          }),
         }
       : null;
   } catch {
     accountSyncUnavailable = true;
+  }
+
+  try {
+    const portfolio = await getUserPortfolio(user.userId);
+    accountHoldings = portfolio.holdings.map((holding) => ({
+      symbolId: holding.symbolId,
+      ticker: holding.ticker,
+      exchange: holding.exchange,
+      name: holding.name,
+      quantity: holding.quantity,
+      averageCost: holding.averageCost,
+      totalCostBasis: holding.totalCostBasis,
+      costCurrency: holding.costCurrency,
+      quantityAsOf: holding.quantityAsOf,
+      version: holding.version,
+    }));
+  } catch {
+    accountPortfolioUnavailable = true;
   }
 
   return (
@@ -73,6 +113,8 @@ export default async function DashboardPage() {
       session={session}
       accountWatchlist={accountWatchlist}
       accountSyncUnavailable={accountSyncUnavailable}
+      accountHoldings={accountHoldings}
+      accountPortfolioUnavailable={accountPortfolioUnavailable}
     />
   );
 }

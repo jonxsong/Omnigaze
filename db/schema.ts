@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  check,
   index,
   integer,
   primaryKey,
@@ -53,6 +54,80 @@ export const watchlistItems = sqliteTable(
   (table) => [
     primaryKey({ columns: [table.watchlistId, table.symbolId] }),
     index("watchlist_items_symbol_idx").on(table.symbolId),
+  ],
+);
+
+export const portfolioProfiles = sqliteTable(
+  "portfolio_profiles",
+  {
+    ownerId: text("owner_id").primaryKey(),
+    baseCurrency: text("base_currency").notNull().default("USD"),
+    experienceLevel: text("experience_level").notNull().default("unspecified"),
+    riskComfort: text("risk_comfort").notNull().default("unspecified"),
+    timeHorizon: text("time_horizon").notNull().default("unspecified"),
+    objective: text("objective").notNull().default("unspecified"),
+    maxSinglePositionBps: integer("max_single_position_bps"),
+    onboardingCompletedAt: text("onboarding_completed_at"),
+    version: integer("version").notNull().default(1),
+    createdAt: text("created_at").notNull().default(sql.raw("CURRENT_TIMESTAMP")),
+    updatedAt: text("updated_at").notNull().default(sql.raw("CURRENT_TIMESTAMP")),
+  },
+  () => [
+    check("portfolio_profiles_base_currency_check", sql.raw("base_currency = 'USD'")),
+    check(
+      "portfolio_profiles_experience_level_check",
+      sql.raw("experience_level IN ('unspecified', 'beginner', 'intermediate', 'advanced')"),
+    ),
+    check(
+      "portfolio_profiles_risk_comfort_check",
+      sql.raw("risk_comfort IN ('unspecified', 'low', 'medium', 'high')"),
+    ),
+    check(
+      "portfolio_profiles_time_horizon_check",
+      sql.raw("time_horizon IN ('unspecified', 'under_1y', '1_to_3y', '3_to_7y', 'over_7y')"),
+    ),
+    check(
+      "portfolio_profiles_objective_check",
+      sql.raw("objective IN ('unspecified', 'capital_preservation', 'income', 'balanced_growth', 'growth', 'learning')"),
+    ),
+    check(
+      "portfolio_profiles_max_position_check",
+      sql.raw("max_single_position_bps IS NULL OR max_single_position_bps BETWEEN 100 AND 10000"),
+    ),
+    check("portfolio_profiles_version_check", sql.raw("version >= 1")),
+  ],
+);
+
+export const portfolioHoldings = sqliteTable(
+  "portfolio_holdings",
+  {
+    ownerId: text("owner_id").notNull(),
+    symbolId: text("symbol_id")
+      .notNull()
+      .references(() => instruments.id),
+    quantityMicros: integer("quantity_micros").notNull(),
+    averageCostMicros: integer("average_cost_micros"),
+    costCurrency: text("cost_currency").notNull().default("USD"),
+    quantityAsOf: text("quantity_as_of").notNull(),
+    entrySource: text("entry_source").notNull().default("user_entered"),
+    version: integer("version").notNull().default(1),
+    createdAt: text("created_at").notNull().default(sql.raw("CURRENT_TIMESTAMP")),
+    updatedAt: text("updated_at").notNull().default(sql.raw("CURRENT_TIMESTAMP")),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.symbolId] }),
+    index("portfolio_holdings_symbol_idx").on(table.symbolId),
+    check(
+      "portfolio_holdings_quantity_check",
+      sql.raw("quantity_micros BETWEEN 1 AND 1000000000000000"),
+    ),
+    check(
+      "portfolio_holdings_average_cost_check",
+      sql.raw("average_cost_micros IS NULL OR average_cost_micros BETWEEN 0 AND 10000000000000"),
+    ),
+    check("portfolio_holdings_currency_check", sql.raw("cost_currency = 'USD'")),
+    check("portfolio_holdings_source_check", sql.raw("entry_source = 'user_entered'")),
+    check("portfolio_holdings_version_check", sql.raw("version >= 1")),
   ],
 );
 

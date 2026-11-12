@@ -107,6 +107,7 @@ const LIVE_NOTICE =
   "Live public or licensed provider data. Verify source timestamps before relying on time-sensitive information.";
 const DEMO_NOTICE =
   "Demo fixture data is being shown because live providers are unavailable. It is not current market data.";
+const MAX_PROVIDER_CLOCK_SKEW_MS = 5 * 60 * 1_000;
 
 function errorMessage(provider: string) {
   return `${provider} could not be reached. Omnigaze did not treat fixture data as live.`;
@@ -134,6 +135,9 @@ function freshnessFor(
 
   const timestamp = Date.parse(asOf);
   if (!Number.isFinite(timestamp)) return { state: "unknown", asOf, ageSeconds: null };
+  if (timestamp > now.getTime() + MAX_PROVIDER_CLOCK_SKEW_MS) {
+    return { state: "unknown", asOf, ageSeconds: null };
+  }
 
   const ageSeconds = Math.max(0, Math.round((now.getTime() - timestamp) / 1_000));
   return {

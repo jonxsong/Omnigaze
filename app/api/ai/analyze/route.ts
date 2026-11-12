@@ -1,24 +1,38 @@
 import { z } from "zod";
+import { getChatGPTUser } from "@/app/chatgpt-auth";
 import {
   analyzeEvidence,
   OMNIGAZE_ANALYSIS_PROMPT_VERSION,
 } from "@/lib/ai/analyze-evidence";
 import { buildAnalysisContextFromFeed } from "@/lib/ai/build-analysis-context";
-import { workspaceBySymbol } from "@/lib/demo-market-data";
 import type { CanonicalSymbol } from "@/lib/market-types";
 import { liveMarketData } from "@/lib/services/live-market-data";
+import {
+  InstrumentResolutionError,
+  resolveCanonicalInstrument,
+} from "@/lib/services/instrument-resolution";
 
 export const dynamic = "force-dynamic";
 
-const requestSchema = z.object({
-  symbol_id: z
-    .string()
-    .trim()
-    .toUpperCase()
-    .regex(/^[A-Z0-9._-]+:[A-Z0-9._-]+$/),
-});
+const requestSchema = z
+  .object({
+    symbol_id: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(/^[A-Z0-9._-]+:[A-Z0-9._-]+$/),
+  })
+  .strict();
 
 export async function POST(request: Request) {
+  const user = await getChatGPTUser();
+  if (!user) {
+    return Response.json(
+      { error: "Authentication required.", code: "auth_required" },
+      { status: 401, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+
   if (!process.env.OPENAI_API_KEY) {
     return Response.json(
       {
@@ -42,8 +56,35 @@ export async function POST(request: Request) {
 
   const symbolId = parsed.data.symbol_id as CanonicalSymbol;
 
-  const workspace = workspaceBySymbol.get(symbolId);
-  if (!workspace) return Response.json({ error: "Symbol not found." }, { status: 404 });
+  let instrument;
+  try {
+    const resolved = await resolveCanonicalInstrument(symbolId);
+    instrument = {
+      id: resolved.id,
+      ticker: resolved.ticker,
+      exchange: resolved.exchange,
+      name: resolved.name,
+      sector: resolved.sector ?? "Unclassified",
+      currency: resolved.currency,
+    };
+  } catch (error) {
+    if (
+      error instanceof InstrumentResolutionError &&
+      error.code === "asset_catalog_unavailable"
+    ) {
+      return Response.json(
+        {
+          error: "The asset catalog is temporarily unavailable.",
+          code: "asset_catalog_unavailable",
+        },
+        { status: 503, headers: { "Cache-Control": "no-store" } },
+      );
+    }
+    return Response.json(
+      { error: "Symbol not found.", code: "symbol_not_supported" },
+      { status: 404, headers: { "Cache-Control": "no-store" } },
+    );
+  }
 
   try {
     const feed = await liveMarketData.getIntelligenceFeed({
@@ -52,7 +93,7 @@ export async function POST(request: Request) {
       limit: 30,
     });
     const context = buildAnalysisContextFromFeed({
-      instrument: workspace.instrument,
+      instrument,
       items: feed.data,
       meta: feed.meta,
     });

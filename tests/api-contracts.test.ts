@@ -47,17 +47,33 @@ describe("browser API response contracts", () => {
 
     expect(malformed.status).toBe(400);
     expect(await malformed.json()).toEqual({
+      code: "invalid_symbol",
       error: "A canonical symbol such as NASDAQ:NVDA is required.",
     });
-    expect(unknown.status).toBe(503);
+    expect([422, 503]).toContain(unknown.status);
     expect(await unknown.json()).toMatchObject({
-      error: "Market data is unavailable for this symbol.",
-      meta: {
-        dataMode: "demo",
-        providerCoverage: "demo",
-        freshness: { state: "fixture", asOf: null, ageSeconds: null },
-      },
+      code:
+        unknown.status === 422
+          ? "symbol_not_supported"
+          : "asset_catalog_unavailable",
     });
+  });
+
+  it("never serves a known ticker under a forged exchange identity", async () => {
+    const response = await getSnapshot(
+      new Request("https://omnigaze.test/api/market/snapshot?symbol=NYSE:NVDA"),
+    );
+    const body = await response.json();
+
+    expect([422, 503]).toContain(response.status);
+    expect(body).toMatchObject({
+      code:
+        response.status === 422
+          ? "symbol_not_supported"
+          : "asset_catalog_unavailable",
+    });
+    expect(body).not.toHaveProperty("data");
+    expect(JSON.stringify(body)).not.toContain('"symbolId":"NYSE:NVDA"');
   });
 
   it("keeps intelligence responses bounded when query values are invalid", async () => {

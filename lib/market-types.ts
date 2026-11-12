@@ -42,6 +42,29 @@ export interface MarketPoint {
   volume: number;
 }
 
+export interface HistoricalBar {
+  timestamp: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  tradeCount: number | null;
+  volumeWeightedPrice: number | null;
+}
+
+export interface HistoricalMarketSeries {
+  symbolId: CanonicalSymbol;
+  timeframe: "1D" | "1W" | "1M" | "3M" | "1Y";
+  asOf: string | null;
+  provider: string;
+  marketCoverage: "limited-exchange" | "consolidated";
+  isDelayed: boolean;
+  delaySeconds: number;
+  adjustment: "all";
+  bars: HistoricalBar[];
+}
+
 export interface MarketSnapshot {
   symbolId: CanonicalSymbol;
   asOf: string;
