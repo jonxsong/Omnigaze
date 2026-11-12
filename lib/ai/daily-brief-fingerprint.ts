@@ -1,5 +1,6 @@
 import type { CanonicalSymbol } from "@/lib/market-types";
 import type { DailyBriefEvidenceItem } from "@/lib/services/personal-today-evidence";
+import { isCredentialFreePublicHttpUrl } from "@/lib/security/public-http-url";
 
 export const DAILY_BRIEF_CACHE_NAMESPACE = "omnigaze_daily_brief_v1";
 const sha256Pattern = /^[a-f0-9]{64}$/;
@@ -36,17 +37,7 @@ function validTimestamp(value: string) {
 }
 
 function validSourceUrl(value: string | null) {
-  if (value === null) return true;
-  try {
-    const url = new URL(value);
-    return (
-      (url.protocol === "https:" || url.protocol === "http:") &&
-      !url.username &&
-      !url.password
-    );
-  } catch {
-    return false;
-  }
+  return value === null || isCredentialFreePublicHttpUrl(value);
 }
 
 export async function fingerprintDailyBriefWatchlist(

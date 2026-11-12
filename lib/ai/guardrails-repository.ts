@@ -1,9 +1,11 @@
 import { and, eq, inArray, lte, lt, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
+  aiDailyBriefCacheEntries,
   aiModelBudgetReservations,
   aiViewCacheEntries,
 } from "@/db/schema";
+import { buildDailyBriefCacheKey } from "@/lib/ai/daily-brief-fingerprint";
 import type {
   AiBudgetCompletion,
   AiBudgetReservation,
@@ -15,7 +17,10 @@ import type {
 
 export const AI_VIEW_CACHE_MAX_PAYLOAD_BYTES = 64 * 1_024;
 export const AI_VIEW_CACHE_MAX_TTL_MS = 24 * 60 * 60 * 1_000;
+export const DAILY_BRIEF_CACHE_MAX_PAYLOAD_BYTES = 64 * 1_024;
+export const DAILY_BRIEF_CACHE_MAX_TTL_MS = 24 * 60 * 60 * 1_000;
 export const AI_BUDGET_RESERVATION_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
+export const AI_GUARDRAILS_OPPORTUNISTIC_PRUNE_LIMIT = 25;
 
 const canonicalSymbolPattern = /^[A-Z0-9._-]+:[A-Z0-9._-]+$/;
 const hexDigestPattern = /^[a-f0-9]{64}$/;
@@ -59,11 +64,58 @@ export interface AiBudgetUsageSnapshot {
   resetAt: string;
 }
 
+export type AiGuardrailsBudgetOperation =
+  | AiBudgetReservationInput["operation"]
+  | "daily_brief";
+
+export type AiGuardrailsBudgetReservationInput = Omit<
+  AiBudgetReservationInput,
+  "operation"
+> & {
+  operation: AiGuardrailsBudgetOperation;
+};
+
+export interface DailyBriefCacheLookup {
+  ownerId: string;
+  cacheKey: string;
+  now: string;
+}
+
+export interface DailyBriefCacheWrite {
+  ownerId: string;
+  cacheKey: string;
+  briefDate: string;
+  promptVersion: string;
+  modelConfig: string;
+  watchlistFingerprint: string;
+  evidenceFingerprint: string;
+  payload: unknown;
+  generatedAt: string;
+  expiresAt: string;
+}
+
+export interface DailyBriefCacheRecord {
+  ownerId: string;
+  cacheKey: string;
+  payload: unknown;
+  generatedAt: string;
+  expiresAt: string;
+}
+
 export interface AiGuardrailsOperationalRepository
-  extends OmnigazeAiGuardRepository {
+  extends Omit<OmnigazeAiGuardRepository, "reserveBudget"> {
+  findCachedDailyBrief(
+    lookup: DailyBriefCacheLookup,
+  ): Promise<DailyBriefCacheRecord | null>;
+  putCachedDailyBrief(record: DailyBriefCacheWrite): Promise<void>;
+  reserveBudget(
+    input: AiGuardrailsBudgetReservationInput,
+  ): Promise<AiBudgetReservation>;
   getBudgetUsage(ownerId: string, at: string): Promise<AiBudgetUsageSnapshot>;
+  pruneDailyBriefCache(now: string, limit?: number): Promise<number>;
   prune(now: string, limit?: number): Promise<{
     cacheEntriesPruned: number;
+    dailyBriefCacheEntriesPruned: number;
     budgetReservationsPruned: number;
   }>;
 }
@@ -77,7 +129,7 @@ type Policy = {
 
 type ReservationInput = {
   ownerId: string;
-  operation: "omnigaze_view";
+  operation: AiGuardrailsBudgetOperation;
   operationKeyHash: string;
   requestKeyHash: string;
   cost: number;
@@ -166,6 +218,32 @@ function normalizeLookup(input: AiViewCacheLookup) {
   };
 }
 
+function normalizeDailyBriefLookup(input: DailyBriefCacheLookup) {
+  const ownerId = boundedText(input.ownerId, 1, 256);
+  const cacheKey = boundedText(input.cacheKey, 64, 64);
+  if (!hexDigestPattern.test(cacheKey)) invalid();
+  return { ownerId, cacheKey, now: iso(input.now) };
+}
+
+function normalizeBriefDate(value: string) {
+  const briefDate = boundedText(value, 10, 10);
+  const parsed = Date.parse(`${briefDate}T00:00:00.000Z`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/.test(briefDate) ||
+    !Number.isFinite(parsed) ||
+    !new Date(parsed).toISOString().startsWith(briefDate)
+  ) {
+    invalid();
+  }
+  return briefDate;
+}
+
+function normalizeDigest(value: string) {
+  const digest = boundedText(value, 64, 64);
+  if (!hexDigestPattern.test(digest)) invalid();
+  return digest;
+}
+
 export async function createAiViewCacheKey(input: AiViewCacheLookup) {
   const value = normalizeLookup(input);
   return sha256(
@@ -177,6 +255,44 @@ export async function createAiViewCacheKey(input: AiViewCacheLookup) {
       value.evidenceFingerprint,
     ]),
   );
+}
+
+async function normalizeDailyBriefWrite(input: DailyBriefCacheWrite) {
+  const ownerId = boundedText(input.ownerId, 1, 256);
+  const cacheKey = normalizeDigest(input.cacheKey);
+  const briefDate = normalizeBriefDate(input.briefDate);
+  const promptVersion = boundedText(input.promptVersion, 1, 128);
+  const modelConfig = boundedText(input.modelConfig, 1, 128);
+  const watchlistFingerprint = normalizeDigest(input.watchlistFingerprint);
+  const evidenceFingerprint = normalizeDigest(input.evidenceFingerprint);
+  let expectedCacheKey: string;
+  try {
+    expectedCacheKey = await buildDailyBriefCacheKey({
+      promptVersion,
+      modelKey: modelConfig,
+      briefDate,
+      watchlistFingerprint,
+      evidenceFingerprint,
+    });
+  } catch {
+    invalid();
+  }
+  if (cacheKey !== expectedCacheKey) invalid();
+  const generatedAt = iso(input.generatedAt);
+  const expiresAt = iso(input.expiresAt);
+  const ttl = Date.parse(expiresAt) - Date.parse(generatedAt);
+  if (ttl <= 0 || ttl > DAILY_BRIEF_CACHE_MAX_TTL_MS) invalid();
+  return {
+    ownerId,
+    cacheKey,
+    briefDate,
+    promptVersion,
+    modelConfig,
+    watchlistFingerprint,
+    evidenceFingerprint,
+    generatedAt,
+    expiresAt,
+  };
 }
 
 function forbiddenField(value: unknown): boolean {
@@ -192,7 +308,10 @@ function forbiddenField(value: unknown): boolean {
   );
 }
 
-function serializePayload(value: unknown) {
+function serializePayload(
+  value: unknown,
+  maximumBytes = AI_VIEW_CACHE_MAX_PAYLOAD_BYTES,
+) {
   if (forbiddenField(value)) {
     throw new AiGuardrailsRepositoryError("cache_payload_invalid");
   }
@@ -205,7 +324,7 @@ function serializePayload(value: unknown) {
   if (
     !serialized ||
     serialized.length < 2 ||
-    new TextEncoder().encode(serialized).byteLength > AI_VIEW_CACHE_MAX_PAYLOAD_BYTES
+    new TextEncoder().encode(serialized).byteLength > maximumBytes
   ) {
     throw new AiGuardrailsRepositoryError("cache_payload_invalid");
   }
@@ -223,11 +342,16 @@ function parsePayload(value: string) {
 }
 
 async function normalizeReservation(
-  input: AiBudgetReservationInput,
+  input: AiGuardrailsBudgetReservationInput,
   policy: Policy,
 ): Promise<ReservationInput> {
   const ownerId = boundedText(input.ownerId, 1, 256);
-  if (input.operation !== "omnigaze_view") invalid();
+  if (
+    input.operation !== "omnigaze_view" &&
+    input.operation !== "daily_brief"
+  ) {
+    invalid();
+  }
   const operationKey = boundedText(input.operationKey, 1, 512);
   const requestId = boundedText(input.requestId, 1, 128);
   const cost = integer(input.cost, 1, 1, 10);
@@ -344,9 +468,25 @@ async function capacityRetryAt(
   ).toISOString();
 }
 
+async function activeOperationLease(
+  db: GuardrailsDatabase,
+  input: ReservationInput,
+) {
+  const lease = await db.values<[string]>(sql`
+    SELECT lease_expires_at FROM ${aiModelBudgetReservations}
+    WHERE owner_id = ${input.ownerId}
+      AND operation = ${input.operation}
+      AND operation_key_hash = ${input.operationKeyHash}
+      AND status = 'reserved'
+      AND julianday(lease_expires_at) > julianday(${input.requestedAt})
+    ORDER BY lease_expires_at DESC LIMIT 1
+  `);
+  return lease[0]?.[0] ? iso(lease[0][0]) : null;
+}
+
 async function reserve(
   db: GuardrailsDatabase,
-  rawInput: AiBudgetReservationInput,
+  rawInput: AiGuardrailsBudgetReservationInput,
   policy: Policy,
   createId: () => string,
 ): Promise<AiBudgetReservation> {
@@ -372,6 +512,14 @@ async function reserve(
         WHERE active.owner_id = ${input.ownerId} AND active.status = 'reserved'
           AND julianday(active.lease_expires_at) > julianday(${input.requestedAt}))
         < ${policy.concurrencyLimit}
+      AND NOT EXISTS (
+        SELECT 1 FROM ${aiModelBudgetReservations} duplicate
+        WHERE duplicate.owner_id = ${input.ownerId}
+          AND duplicate.operation = ${input.operation}
+          AND duplicate.operation_key_hash = ${input.operationKeyHash}
+          AND duplicate.status = 'reserved'
+          AND julianday(duplicate.lease_expires_at) > julianday(${input.requestedAt})
+      )
     ON CONFLICT (owner_id, request_key_hash) DO NOTHING
     RETURNING reservation_id
   `);
@@ -423,6 +571,15 @@ async function reserve(
             AND active.status = 'reserved'
             AND julianday(active.lease_expires_at) > julianday(${input.requestedAt}))
           < ${policy.concurrencyLimit}
+        AND NOT EXISTS (
+          SELECT 1 FROM ${aiModelBudgetReservations} duplicate
+          WHERE duplicate.owner_id = ${input.ownerId}
+            AND duplicate.operation = ${input.operation}
+            AND duplicate.operation_key_hash = ${input.operationKeyHash}
+            AND duplicate.reservation_id <> ${row.reservationId}
+            AND duplicate.status = 'reserved'
+            AND julianday(duplicate.lease_expires_at) > julianday(${input.requestedAt})
+        )
       RETURNING reservation_id
     `);
     row = await byRequest(db, input.ownerId, input.requestKeyHash);
@@ -439,6 +596,17 @@ async function reserve(
         retryAt: row.leaseExpiresAt,
       };
     }
+  }
+  const duplicateLease = await activeOperationLease(db, input);
+  if (duplicateLease) {
+    const state = await usage(db, input.ownerId, input.requestedAt, policy);
+    return {
+      granted: false,
+      reason: "concurrency_limit",
+      remaining: state.dailyRemaining,
+      limit: state.dailyLimit,
+      retryAt: duplicateLease,
+    };
   }
   const state = await usage(db, input.ownerId, input.requestedAt, policy);
   const reason =
@@ -479,6 +647,67 @@ async function complete(db: GuardrailsDatabase, input: AiBudgetCompletion) {
   if (!existing) throw new AiGuardrailsRepositoryError("reservation_not_found");
   if (existing.status === target) return;
   throw new AiGuardrailsRepositoryError("reservation_terminal_conflict");
+}
+
+function normalizedPruneLimit(rawLimit: number) {
+  if (!Number.isFinite(rawLimit)) invalid();
+  return Math.max(1, Math.min(Math.trunc(rawLimit), MAX_PRUNE_LIMIT));
+}
+
+async function pruneDailyBriefEntries(
+  db: GuardrailsDatabase,
+  checkedAt: string,
+  limit: number,
+) {
+  const rows = await db.values<[string, string]>(sql`
+    DELETE FROM ${aiDailyBriefCacheEntries}
+    WHERE (owner_id, cache_key) IN (
+      SELECT owner_id, cache_key FROM ${aiDailyBriefCacheEntries}
+      WHERE expires_at <= ${checkedAt}
+      ORDER BY expires_at ASC, owner_id ASC, cache_key ASC
+      LIMIT ${limit}
+    )
+    RETURNING owner_id, cache_key
+  `);
+  return rows.length;
+}
+
+async function pruneGuardrailEntries(
+  db: GuardrailsDatabase,
+  checkedAt: string,
+  limit: number,
+) {
+  const cacheKeys = db
+    .select({ cacheKey: aiViewCacheEntries.cacheKey })
+    .from(aiViewCacheEntries)
+    .where(lte(aiViewCacheEntries.expiresAt, checkedAt))
+    .limit(limit);
+  const cacheRows = await db
+    .delete(aiViewCacheEntries)
+    .where(inArray(aiViewCacheEntries.cacheKey, cacheKeys))
+    .returning({ cacheKey: aiViewCacheEntries.cacheKey });
+  const dailyBriefCacheEntriesPruned = await pruneDailyBriefEntries(
+    db,
+    checkedAt,
+    limit,
+  );
+  const cutoff = new Date(
+    Date.parse(checkedAt) - AI_BUDGET_RESERVATION_RETENTION_MS,
+  ).toISOString();
+  const reservationIds = db
+    .select({ reservationId: aiModelBudgetReservations.reservationId })
+    .from(aiModelBudgetReservations)
+    .where(lt(aiModelBudgetReservations.reservedAt, cutoff))
+    .limit(limit);
+  const budgetRows = await db
+    .delete(aiModelBudgetReservations)
+    .where(inArray(aiModelBudgetReservations.reservationId, reservationIds))
+    .returning({ reservationId: aiModelBudgetReservations.reservationId });
+  return {
+    cacheEntriesPruned: cacheRows.length,
+    dailyBriefCacheEntriesPruned,
+    budgetReservationsPruned: budgetRows.length,
+  };
 }
 
 export function createAiGuardrailsRepository(
@@ -544,8 +773,98 @@ export function createAiGuardrailsRepository(
       });
     },
 
-    reserveBudget(input) {
-      return reserve(databaseFactory(), input, policy, createId);
+    async findCachedDailyBrief(rawLookup) {
+      const lookup = normalizeDailyBriefLookup(rawLookup);
+      const db = databaseFactory();
+      const row = (
+        await db
+          .select()
+          .from(aiDailyBriefCacheEntries)
+          .where(
+            and(
+              eq(aiDailyBriefCacheEntries.ownerId, lookup.ownerId),
+              eq(aiDailyBriefCacheEntries.cacheKey, lookup.cacheKey),
+              sql`julianday(${aiDailyBriefCacheEntries.expiresAt}) > julianday(${lookup.now})`,
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!row) return null;
+      await db
+        .update(aiDailyBriefCacheEntries)
+        .set({
+          lastAccessedAt: lookup.now,
+          hitCount: sql`${aiDailyBriefCacheEntries.hitCount} + 1`,
+        })
+        .where(
+          and(
+            eq(aiDailyBriefCacheEntries.ownerId, lookup.ownerId),
+            eq(aiDailyBriefCacheEntries.cacheKey, lookup.cacheKey),
+          ),
+        );
+      return {
+        ownerId: row.ownerId,
+        cacheKey: row.cacheKey,
+        payload: parsePayload(row.responseJson),
+        generatedAt: row.generatedAt,
+        expiresAt: row.expiresAt,
+      };
+    },
+
+    async putCachedDailyBrief(rawRecord) {
+      const record = await normalizeDailyBriefWrite(rawRecord);
+      const responseJson = serializePayload(
+        rawRecord.payload,
+        DAILY_BRIEF_CACHE_MAX_PAYLOAD_BYTES,
+      );
+      await databaseFactory()
+        .insert(aiDailyBriefCacheEntries)
+        .values({
+          ownerId: record.ownerId,
+          cacheKey: record.cacheKey,
+          briefDate: record.briefDate,
+          promptVersion: record.promptVersion,
+          modelKey: record.modelConfig,
+          watchlistFingerprint: record.watchlistFingerprint,
+          evidenceFingerprint: record.evidenceFingerprint,
+          responseJson,
+          generatedAt: record.generatedAt,
+          expiresAt: record.expiresAt,
+          lastAccessedAt: record.generatedAt,
+        })
+        .onConflictDoUpdate({
+          target: [
+            aiDailyBriefCacheEntries.ownerId,
+            aiDailyBriefCacheEntries.cacheKey,
+          ],
+          set: {
+            responseJson,
+            generatedAt: record.generatedAt,
+            expiresAt: record.expiresAt,
+            lastAccessedAt: record.generatedAt,
+            hitCount: 0,
+          },
+        });
+    },
+
+    async reserveBudget(input) {
+      const db = databaseFactory();
+      const result = await reserve(db, input, policy, createId);
+      if (result.granted) {
+        try {
+          // Admission is already durable. Cleanup is deliberately bounded and
+          // best effort so a maintenance failure cannot bypass or revoke the
+          // budget decision, and no internal error detail reaches the caller.
+          await pruneGuardrailEntries(
+            db,
+            iso(input.requestedAt),
+            AI_GUARDRAILS_OPPORTUNISTIC_PRUNE_LIMIT,
+          );
+        } catch {
+          // A later admitted generation retries cleanup.
+        }
+      }
+      return result;
     },
 
     completeBudget(input) {
@@ -556,29 +875,16 @@ export function createAiGuardrailsRepository(
       return usage(databaseFactory(), boundedText(ownerId, 1, 256), at, policy);
     },
 
+    async pruneDailyBriefCache(rawNow, rawLimit = DEFAULT_PRUNE_LIMIT) {
+      const checkedAt = iso(rawNow);
+      const limit = normalizedPruneLimit(rawLimit);
+      return pruneDailyBriefEntries(databaseFactory(), checkedAt, limit);
+    },
+
     async prune(rawNow, rawLimit = DEFAULT_PRUNE_LIMIT) {
       const checkedAt = iso(rawNow);
-      if (!Number.isFinite(rawLimit)) invalid();
-      const limit = Math.max(1, Math.min(Math.trunc(rawLimit), MAX_PRUNE_LIMIT));
-      const db = databaseFactory();
-      const cacheKeys = db.select({ cacheKey: aiViewCacheEntries.cacheKey })
-        .from(aiViewCacheEntries).where(lte(aiViewCacheEntries.expiresAt, checkedAt)).limit(limit);
-      const cacheRows = await db.delete(aiViewCacheEntries)
-        .where(inArray(aiViewCacheEntries.cacheKey, cacheKeys))
-        .returning({ cacheKey: aiViewCacheEntries.cacheKey });
-      const cutoff = new Date(
-        Date.parse(checkedAt) - AI_BUDGET_RESERVATION_RETENTION_MS,
-      ).toISOString();
-      const reservationIds = db.select({ reservationId: aiModelBudgetReservations.reservationId })
-        .from(aiModelBudgetReservations)
-        .where(lt(aiModelBudgetReservations.reservedAt, cutoff)).limit(limit);
-      const budgetRows = await db.delete(aiModelBudgetReservations)
-        .where(inArray(aiModelBudgetReservations.reservationId, reservationIds))
-        .returning({ reservationId: aiModelBudgetReservations.reservationId });
-      return {
-        cacheEntriesPruned: cacheRows.length,
-        budgetReservationsPruned: budgetRows.length,
-      };
+      const limit = normalizedPruneLimit(rawLimit);
+      return pruneGuardrailEntries(databaseFactory(), checkedAt, limit);
     },
   };
 }

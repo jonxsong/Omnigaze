@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { CanonicalSymbol } from "@/lib/market-types";
+import { isCredentialFreePublicHttpUrl } from "@/lib/security/public-http-url";
 
 const canonicalSymbolSchema = z
   .string()
@@ -12,18 +13,10 @@ const publicHttpUrlSchema = z
   .string()
   .url()
   .max(2_048)
-  .refine((value) => {
-    try {
-      const url = new URL(value);
-      return (
-        (url.protocol === "https:" || url.protocol === "http:") &&
-        !url.username &&
-        !url.password
-      );
-    } catch {
-      return false;
-    }
-  }, "Citation URLs must use credential-free HTTP or HTTPS.");
+  .refine(
+    isCredentialFreePublicHttpUrl,
+    "Citation URLs must use credential-free HTTP or HTTPS.",
+  );
 
 const briefDateSchema = z
   .string()

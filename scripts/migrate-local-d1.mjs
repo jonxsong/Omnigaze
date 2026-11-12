@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -16,6 +17,9 @@ const wranglerPath = resolve(
   "wrangler.js",
 );
 const databaseName = "site-creator-d1";
+const dailyBriefGuardrailsMigration = "0006_daily_brief_guardrails_v1.sql";
+const dailyBriefGuardrailsAuditDigest =
+  "66eddbdaa32440118779c84caa50d2f79a783708f1170413a1d3c70ce9217753";
 
 const migrationTableSql = `CREATE TABLE IF NOT EXISTS d1_migrations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,9 +59,97 @@ export function makeAdditiveStatementIdempotent(statement) {
   );
 }
 
-export function makeMigrationIdempotent(sqlText) {
+function migrationStatements(sqlText) {
   return sqlText
     .split("--> statement-breakpoint")
+    .map((statement) => statement.trim())
+    .filter(Boolean);
+}
+
+function compactStatement(statement) {
+  return statement.replace(/\s+/g, " ").replace(/;$/, "").trim();
+}
+
+function makeAuditedDailyBriefGuardrailsMigration(sqlText) {
+  const statements = migrationStatements(sqlText);
+  const compact = statements.map(compactStatement);
+  const digest = createHash("sha256").update(compact.join("\n")).digest("hex");
+  const checks = [
+    (value) =>
+      value.startsWith("CREATE TABLE `ai_daily_brief_cache_entries` (") &&
+      value.includes("PRIMARY KEY(`owner_id`, `cache_key`)") &&
+      value.includes("json_valid(response_json)"),
+    (value) =>
+      value.startsWith(
+        "CREATE UNIQUE INDEX `ai_daily_brief_cache_entries_identity_idx` ON `ai_daily_brief_cache_entries`",
+      ),
+    (value) =>
+      value.startsWith(
+        "CREATE INDEX `ai_daily_brief_cache_entries_expiry_idx` ON `ai_daily_brief_cache_entries`",
+      ),
+    (value) =>
+      value.startsWith(
+        "CREATE INDEX `ai_daily_brief_cache_entries_owner_date_idx` ON `ai_daily_brief_cache_entries`",
+      ),
+    (value) =>
+      value.startsWith("CREATE TABLE `__new_ai_model_budget_reservations` (") &&
+      value.includes("operation IN ('omnigaze_view', 'daily_brief')") &&
+      value.includes(
+        'CONSTRAINT "ai_model_budget_reservations_terminal_check"',
+      ),
+    (value) =>
+      value.startsWith(
+        "INSERT INTO `__new_ai_model_budget_reservations`(",
+      ) && value.endsWith("FROM `ai_model_budget_reservations`"),
+    (value) => value === "DROP TABLE `ai_model_budget_reservations`",
+    (value) =>
+      value ===
+      "ALTER TABLE `__new_ai_model_budget_reservations` RENAME TO `ai_model_budget_reservations`",
+    (value) =>
+      value.startsWith(
+        "CREATE UNIQUE INDEX `ai_model_budget_reservations_request_idx` ON `ai_model_budget_reservations`",
+      ),
+    (value) =>
+      value.startsWith(
+        "CREATE INDEX `ai_model_budget_reservations_owner_day_idx` ON `ai_model_budget_reservations`",
+      ),
+    (value) =>
+      value.startsWith(
+        "CREATE INDEX `ai_model_budget_reservations_owner_time_idx` ON `ai_model_budget_reservations`",
+      ),
+    (value) =>
+      value.startsWith(
+        "CREATE INDEX `ai_model_budget_reservations_active_lease_idx` ON `ai_model_budget_reservations`",
+      ),
+  ];
+  if (
+    digest !== dailyBriefGuardrailsAuditDigest ||
+    compact.length !== checks.length ||
+    checks.some((check, index) => !check(compact[index] ?? ""))
+  ) {
+    throw new Error(
+      "The audited 0006 AI reservation-table rebuild changed shape; refusing local reconciliation.",
+    );
+  }
+
+  return statements
+    .map((statement, index) =>
+      index < 4 || index >= 8
+        ? makeAdditiveStatementIdempotent(statement)
+        : statement,
+    )
+    .filter(Boolean)
+    .map((statement) =>
+      statement.endsWith(";") ? statement : `${statement};`,
+    )
+    .join("\n");
+}
+
+export function makeMigrationIdempotent(sqlText, migrationName) {
+  if (migrationName === dailyBriefGuardrailsMigration) {
+    return makeAuditedDailyBriefGuardrailsMigration(sqlText);
+  }
+  return migrationStatements(sqlText)
     .map(makeAdditiveStatementIdempotent)
     .filter(Boolean)
     .map((statement) =>
@@ -80,7 +172,7 @@ export async function buildPendingMigrationSql(
     const migration = await readFile(resolve(directory, name), "utf8");
     blocks.push(
       `-- ${name}`,
-      makeMigrationIdempotent(migration),
+      makeMigrationIdempotent(migration, name),
       `INSERT OR IGNORE INTO d1_migrations (name) VALUES (${sqlString(name)});`,
     );
   }

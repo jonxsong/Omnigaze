@@ -21,8 +21,8 @@ flowchart LR
     Domain[Market-intelligence service]
     InboxService[Inbox reconciliation service]
     Scenarios[Deterministic scenario engine]
-    AIGuard[(D1 AI cache + budget leases)]
-    Agent[Evidence-constrained OpenAI agent]
+    AIGuard[(D1 view/brief caches + shared budget leases)]
+    Agent[Evidence-constrained OpenAI agents]
     API[Browser API]
     MCP[MCP 2026-07-28]
   end
@@ -58,7 +58,7 @@ flowchart LR
 - Provider credentials and the OpenAI API key exist only as encrypted server secrets.
 - Browser clients receive normalized data plus explicit source, timestamp, delay, and freshness metadata.
 - AI analysis can cite only evidence IDs supplied by the server and is never treated as an order or recommendation.
-- AI generation is manual and authenticated. A fail-closed D1 guard keys cached output by canonical symbol, prompt version, effective model, and stable evidence revisions; volatile response timestamps are excluded. Cached JSON is bounded and rejects raw prompts, messages, credentials, headers, tokens, and provider payloads.
+- AI generation is manual and authenticated. A fail-closed D1 guard keys single-stock output by canonical symbol, prompt version, effective model, and stable evidence revisions. The owner-scoped Daily Brief key also commits to the exact watchlist and UTC date. Volatile response timestamps are excluded; cached JSON is bounded and rejects raw prompts, messages, credentials, headers, tokens, and provider payloads.
 - Model work requires an atomic owner-scoped reservation. The default policy permits 20 generation attempts per UTC day, 5 per rolling minute, and 2 concurrent leases. Active cross-isolate retries cannot invoke the model twice; an expired lease may be reclaimed with a new reservation identity, so stale completion cannot finalize it.
 - Price zones and share quantities come from deterministic, versioned scenario math. The model can explain supplied evidence, but its schema has no target-price, quantity, or confidence fields.
 - Numeric scenarios are suppressed when quotes are demo, stale, invalid, or lack corroborating evidence. Confidence means evidence coverage—not the probability of a return.
@@ -75,9 +75,9 @@ Historical charts fail independently from current snapshots. If provider history
 
 The intelligence inbox also degrades independently. If a provider fails or returns demo data, Omnigaze skips persistence and alert evaluation. A successful live check that cannot prove event freshness may record activation/check metadata, but it persists no stale event or alert delivery. Every degraded path returns the existing durable inbox with explicit sync metadata and never replaces saved research with fixtures.
 
-AI analysis also degrades independently. Cache and budget reads fail closed before model invocation; a cache hit spends no additional model budget. Cache lifetime is the earlier of five minutes or the current evidence-freshness boundary. The durable ledger stores hashed request and operation keys rather than raw model inputs, and bounded cleanup removes expired cache rows plus old reservation history.
+AI analysis also degrades independently. Cache and budget reads fail closed before model invocation; cache hits and same-isolate followers spend no additional model budget. A single-stock cache lifetime is the earlier of five minutes or the evidence-freshness boundary. A Daily Brief is recomputed whenever its watchlist or selected evidence identity changes and otherwise expires after at most six hours or at the evidence-freshness boundary. Both operations share one atomic owner budget. The durable ledger stores hashed request and operation keys rather than raw model inputs, and bounded cleanup removes expired cache rows plus old reservation history.
 
-`GET /api/health` remains a liveness response but reports `status: degraded` unless both provider checks and the required D1 inbox, ingestion, and AI-guardrail schema markers are ready. The schema probe reads metadata only, exposes no rows or binding details, and catches a missing migration before authenticated traffic reaches a stateful workflow.
+`GET /api/health` remains a liveness response but reports `status: degraded` unless both provider checks and the required D1 inbox, ingestion, single-stock AI, and Daily Brief guardrail schema markers are ready. The schema probe reads metadata only, exposes no rows or binding details, and catches a missing migration before authenticated traffic reaches a stateful workflow.
 
 ## Durable intelligence inbox
 
@@ -112,6 +112,19 @@ This alpha evaluates the inbox when an authenticated client requests or refreshe
 3. Quantities and costs cross API boundaries as decimal strings and are stored as scaled integers, avoiding floating-point drift.
 4. The personalized dashboard joins watchlists, holdings, fresh market observations, and evidence events without requiring an order or brokerage connection.
 5. “Ask Omnigaze” receives only the user-approved scenario, normalized evidence, and deterministic math. Its narrative is validated for citations and non-prescriptive language before display.
+
+## Personalized Daily Brief
+
+1. An authenticated manual request loads and deduplicates canonical symbols across all owned watchlists.
+2. The service selects at most 12 live events from the preceding 24 hours, preferring materiality, newer revisions, and coverage of not-yet-represented symbols.
+3. The cache identity commits to the exact watchlist, selected evidence revisions/content, prompt version, effective model, and UTC brief date. Cache rows are owner-scoped.
+4. On a miss, the shared atomic model budget admits at most one generation lease. The structured agent cannot emit target prices, trade sizes, or an aggregate portfolio stance, and every development must cite evidence carrying each referenced symbol.
+5. The server deterministically attaches source URLs, freshness, tracked/included/omitted counts, cache/dedup state, and budget metadata, then re-validates the final envelope before HTTP or MCP delivery.
+
+| Surface | Purpose |
+| --- | --- |
+| `POST /api/ai/daily-brief` | Explicitly generate or reuse the authenticated owner’s current cited cross-watchlist brief. |
+| MCP `get_daily_brief` | Invoke the same owner-scoped brief contract from an authenticated AI client. |
 
 ## Delivery gates
 

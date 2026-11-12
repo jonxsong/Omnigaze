@@ -5,7 +5,7 @@ export type DatabaseReadinessStatus = "ready" | "unavailable";
 export interface DatabaseReadiness {
   status: DatabaseReadinessStatus;
   checkedAt: string;
-  schema: "ai-guardrails-v1";
+  schema: "daily-brief-guardrails-v1";
 }
 
 export interface ReadinessDatabase {
@@ -18,6 +18,7 @@ export type ReadinessDatabaseFactory =
 const REQUIRED_COLUMN_COUNTS = [
   3, 2, 2, 2, 3, 3, 4,
   15, 12, 5, 2, 9, 10, 12,
+  12, 12, 1,
 ] as const;
 
 async function runtimeDatabaseFactory(): Promise<ReadinessDatabase> {
@@ -83,7 +84,18 @@ export async function checkDatabaseReadiness(
             'reservation_id', 'owner_id', 'request_key_hash', 'operation',
             'operation_key_hash', 'cost', 'day_start', 'status', 'reserved_at',
             'lease_expires_at', 'completed_at', 'safe_error_code'
-          ))
+          )),
+        (SELECT COUNT(*) FROM pragma_table_info('ai_daily_brief_cache_entries')
+          WHERE name IN (
+            'owner_id', 'cache_key', 'brief_date', 'prompt_version', 'model_key',
+            'watchlist_fingerprint', 'evidence_fingerprint', 'response_json',
+            'generated_at', 'expires_at', 'last_accessed_at', 'hit_count'
+          )),
+        (SELECT COUNT(*) FROM pragma_table_info('ai_daily_brief_cache_entries')),
+        (SELECT COUNT(*) FROM sqlite_master
+          WHERE type = 'table'
+            AND name = 'ai_model_budget_reservations'
+            AND sql LIKE '%daily_brief%')
     `)) as number[][];
     const row = rows[0];
     const ready =
@@ -93,13 +105,13 @@ export async function checkDatabaseReadiness(
     return {
       status: ready ? "ready" : "unavailable",
       checkedAt,
-      schema: "ai-guardrails-v1",
+      schema: "daily-brief-guardrails-v1",
     };
   } catch {
     return {
       status: "unavailable",
       checkedAt,
-      schema: "ai-guardrails-v1",
+      schema: "daily-brief-guardrails-v1",
     };
   }
 }

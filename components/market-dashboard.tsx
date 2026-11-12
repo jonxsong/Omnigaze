@@ -83,6 +83,7 @@ import {
 } from "@/components/intelligence-inbox-drawer";
 import type { IntelligenceInboxCounts } from "@/lib/intelligence-inbox/contracts";
 import { OmnigazeViewDialog } from "@/components/omnigaze-view-dialog";
+import { DailyBriefCard } from "@/components/daily-brief-card";
 
 const timeframes = ["1D", "1W", "1M", "3M", "1Y"] as const;
 type Timeframe = (typeof timeframes)[number];
@@ -2236,6 +2237,8 @@ export function MarketDashboard({
               )}
             </div>
           </section>
+
+          <DailyBriefCard session={session} />
 
           {visibleInstruments.length === 0 ? (
             <section className="dashboard-empty-state" aria-labelledby="empty-watchlist-title">

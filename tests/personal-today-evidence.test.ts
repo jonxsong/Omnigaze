@@ -183,6 +183,17 @@ describe("personal Today evidence selection", () => {
       summary: "A summary with normalized spacing.",
       sourceUrl: null,
     });
+
+    const credentialUrl = selectDailyBriefEvidence({
+      trackedSymbols: ["NASDAQ:NVDA"],
+      feed: feed([
+        event("credential-url", ["NASDAQ:NVDA"], {
+          sourceUrl: "https://news.example/story?api_key=top-secret",
+        }),
+      ]),
+      now: NOW,
+    });
+    expect(credentialUrl.items[0]?.sourceUrl).toBeNull();
   });
 
   it("fails closed for demo, stale, unknown, future-dated, or empty evidence", () => {

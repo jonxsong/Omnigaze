@@ -9,6 +9,7 @@ import type {
   IntelligenceFeedItem,
   OrchestratedIntelligenceFeed,
 } from "@/lib/services/live-market-data";
+import { isCredentialFreePublicHttpUrl } from "@/lib/security/public-http-url";
 
 export const DAILY_BRIEF_WINDOW_HOURS = 24;
 export const DAILY_BRIEF_MAX_EVIDENCE = 12;
@@ -101,13 +102,7 @@ function safeSourceUrl(value: unknown) {
   if (!text) return null;
   try {
     const url = new URL(text);
-    if (
-      (url.protocol !== "https:" && url.protocol !== "http:") ||
-      url.username ||
-      url.password
-    ) {
-      return null;
-    }
+    if (!isCredentialFreePublicHttpUrl(url.toString())) return null;
     return url.toString();
   } catch {
     return null;

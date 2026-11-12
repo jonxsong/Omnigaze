@@ -1,6 +1,6 @@
 # Omnigaze
 
-Omnigaze is a personalized market-intelligence workspace. Users search the active U.S. equity universe, track the companies they care about, record holdings, keep a durable intelligence inbox, and inspect an evidence-backed **Omnigaze View** that separates facts, derived observations, and AI inference.
+Omnigaze is a personalized market-intelligence workspace. Users search the active U.S. equity universe, track the companies they care about, record holdings, keep a durable intelligence inbox, generate a cited cross-watchlist **Daily Brief**, and inspect an evidence-backed **Omnigaze View** that separates facts, derived observations, and AI inference.
 
 The public alpha uses provider-backed quotes, chart history, licensed news, and SEC filings whenever those capabilities are configured. Every surface carries source, freshness, delay, and fallback metadata; illustrative fixtures are never labeled as live.
 
@@ -10,8 +10,8 @@ The public alpha uses provider-backed quotes, chart history, licensed news, and 
 2. Provider adapters ingest market data, licensed news, and configured SEC filings.
 3. The pipeline normalizes, timestamps, hashes, and deduplicates every source event.
 4. Deterministic code calculates market changes and freshness.
-5. A fail-closed D1 guard checks a model-aware, evidence-fingerprint cache and atomically reserves the authenticated owner’s generation budget.
-6. On a cache miss, the OpenAI Agents SDK produces a typed interpretation constrained to known evidence IDs; the validated result is cached for at most five minutes and never stores a raw prompt.
+5. A fail-closed D1 guard checks owner-safe, model-aware evidence caches and atomically reserves the authenticated owner’s shared generation budget.
+6. On a cache miss, the OpenAI Agents SDK produces a typed interpretation constrained to known evidence IDs. A single-stock view is cached for at most five minutes; a Daily Brief is keyed by the exact watchlist, evidence revisions, prompt, model, and UTC date and is cached for at most six hours. Neither cache stores a raw prompt.
 7. Deterministic code—not the model—calculates any review zones and hypothetical share scenarios, and suppresses them when data is stale, demo, or insufficiently corroborated.
 8. A fresh live inbox read reconciles normalized events into D1, evaluates explicit in-app alert rules, and preserves per-user read, saved, and dismissed state across sessions.
 9. The dashboard, HTTP API, and MCP tools expose the same owner-scoped domain objects.
@@ -62,10 +62,12 @@ pnpm dev
 ```
 
 The portable Sites runtime serves on `http://127.0.0.1:5173` by default.
-`db:migrate:local` reconciles the additive Drizzle migrations with the persisted
-local D1 database in `.wrangler/state`, records applied filenames, and is safe to
-run again. Run it after pulling or generating a migration; it never deletes local
-rows or resets the database.
+`db:migrate:local` reconciles the reviewed, append-only Drizzle migration history
+with the persisted local D1 database in `.wrangler/state`, records applied
+filenames, and is safe to run again. The reconciler permits additive tables and
+indexes plus the checksum-audited 0006 reservation-table rebuild that preserves
+every existing row; altered destructive SQL is rejected. Run it after pulling or
+generating a migration; it never resets the database.
 
 Useful release checks:
 
@@ -110,7 +112,7 @@ Copy `.env.example` for local development. Never commit `.env` files or API keys
 - Provider corrections retain their stable event identity and user state while exposing a new event revision and an `updated since read` signal.
 - AI may interpret captured evidence but may not invent evidence IDs or act as a trading signal.
 - AI generation is manual, authenticated, and fail-closed behind a durable model-aware cache plus atomic per-owner budgets. The ledger stores hashed request/operation keys, not prompts, credentials, headers, or raw provider payloads.
-- The default generation policy is 20 attempts per UTC day, 5 per rolling minute, and 2 concurrent leases per owner. Exact active retries are denied until the existing lease expires; cache hits spend no additional model budget.
+- Single-stock views and Daily Briefs share the default policy of 20 attempts per UTC day, 5 per rolling minute, and 2 concurrent leases per owner. Exact active retries are denied until the existing lease expires; cache hits and in-isolate followers spend no additional model budget.
 - AI output schemas do not include target-price or share-quantity fields. Scenario math is deterministic, versioned, and never places orders.
 - Portfolio quantities and cost basis cross APIs as decimal strings and persist as scaled integers.
 - Facts, derived values, inferences, and user views remain visibly distinct.
@@ -124,6 +126,7 @@ The initial stateless tool surface includes:
 - `get_market_snapshot`
 - `get_intelligence_feed`
 - `get_omnigaze_view`
+- `get_daily_brief`
 - `get_watchlist_dashboard`
 - `get_intelligence_inbox`
 - `get_alert_rules`
@@ -141,7 +144,7 @@ Use `server/discover`, `tools/list`, and `tools/call` with MCP version `2026-07-
 - SEC ingestion is available on demand but still needs a configured application/contact user agent and scheduled background ingestion.
 - Alert rules currently deliver only inside the Omnigaze inbox during request-time refreshes. Email, SMS, push, browser notifications, and a continuously running background delivery worker are not enabled.
 - Brokerage import and order execution are intentionally not part of this alpha.
-- AI analysis requires an authenticated user, runs only after an explicit user request, and returns `503 ai_unconfigured` when the server secret is absent. The generated cross-watchlist Daily Brief remains an integration milestone; its strict grounded contract, evidence selector, and cache identity are implemented but it is not yet exposed by the dashboard, API, or MCP.
+- AI analysis requires an authenticated user, runs only after an explicit user request, and returns `503 ai_unconfigured` when the server secret is absent. Daily Brief generation is manual rather than scheduled; it fails closed when the watchlist has no eligible fresh live evidence.
 - Omnigaze provides research support, not investment advice or autonomous trading.
 
 See [Scheduled ingestion](docs/scheduled-ingestion.md) for the operator contract, safety invariants, status semantics, and local verification workflow.

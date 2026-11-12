@@ -13,6 +13,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Durable intelligence inbox with read, saved, dismissed, and corrected-since-read state.
 - [x] Explicit in-app alert rules with idempotent delivery records.
 - [x] Responsive desktop and mobile layouts, including a scroll-safe live Omnigaze View.
+- [x] Manual personalized Daily Brief with cited multi-symbol developments, omissions, unknowns, and visible AI-usage provenance.
 - [x] Search discovery foundation: canonical metadata, JSON-LD, `robots.txt`, and `sitemap.xml`.
 
 ## Market data and pipelines
@@ -35,11 +36,10 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Visible interpretation confidence, deterministic evidence coverage, citations, unknowns, prompt version, and generation time.
 - [x] Manual model invocation only; selecting a stock or opening the dialog never spends an AI request automatically.
 - [x] Deterministic review zones and hypothetical share scenarios that withhold numbers when evidence or quotes are inadequate.
-- [x] Browser/API/MCP parity for market data, watchlists, portfolio, inbox, alert rules, provider status, and live Omnigaze Views.
+- [x] Browser/API/MCP parity for market data, watchlists, portfolio, inbox, alert rules, provider status, live Omnigaze Views, and personalized Daily Briefs.
 - [x] Closed operator-only MCP ingestion tool with authenticated identity enforcement.
-- [x] Durable, model-aware AI-result caching with stable evidence fingerprints, five-minute freshness-bounded TTLs, atomic per-owner budgets, rolling limits, and cross-isolate leases.
-- [x] Daily Brief core contracts, grounded evidence selection, and correction-aware cache identity; no model, API, MCP, or dashboard invocation is enabled yet.
-- [ ] Add a generated cross-watchlist daily brief using the existing personal Today feed.
+- [x] Durable, model-aware AI-result caching with stable evidence fingerprints, freshness-bounded TTLs, atomic shared per-owner budgets, rolling limits, and cross-isolate leases.
+- [x] Generated cross-watchlist Daily Brief with deterministic live-evidence selection, strict grounding, owner-scoped caching, HTTP/MCP parity, and a manual dashboard workflow.
 
 ## Engineering and operations
 

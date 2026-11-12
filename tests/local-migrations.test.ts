@@ -29,6 +29,23 @@ describe("local D1 migration reconciliation", () => {
     );
     expect(() => makeMigrationIdempotent("ALTER TABLE t ADD COLUMN value text;"))
       .toThrow(/only supports additive/i);
+    const auditedMigration = readFileSync(
+      resolve(
+        process.cwd(),
+        "drizzle",
+        "0006_daily_brief_guardrails_v1.sql",
+      ),
+      "utf8",
+    );
+    expect(() =>
+      makeMigrationIdempotent(
+        auditedMigration.replace(
+          "DROP TABLE `ai_model_budget_reservations`",
+          "DROP TABLE `instruments`",
+        ),
+        "0006_daily_brief_guardrails_v1.sql",
+      ),
+    ).toThrow(/audited 0006/i);
   });
 
   it("includes only migration files absent from the local ledger", async () => {
@@ -43,6 +60,7 @@ describe("local D1 migration reconciliation", () => {
       "0003_intelligence_inbox_v1.sql",
       "0004_ingestion_control_plane_v1.sql",
       "0005_ai_guardrails_v1.sql",
+      "0006_daily_brief_guardrails_v1.sql",
     ]);
     expect(result.sql).toContain("CREATE TABLE IF NOT EXISTS `inbox_sync_gates`");
     expect(result.sql).toContain(
@@ -53,6 +71,9 @@ describe("local D1 migration reconciliation", () => {
     );
     expect(result.sql).toContain(
       "CREATE TABLE IF NOT EXISTS `ai_model_budget_reservations`",
+    );
+    expect(result.sql).toContain(
+      "CREATE TABLE IF NOT EXISTS `ai_daily_brief_cache_entries`",
     );
     expect(result.sql).not.toContain("CREATE TABLE `portfolio_holdings`");
   });
@@ -138,7 +159,93 @@ describe("local D1 migration reconciliation", () => {
         "0003_intelligence_inbox_v1.sql",
         "0004_ingestion_control_plane_v1.sql",
         "0005_ai_guardrails_v1.sql",
+        "0006_daily_brief_guardrails_v1.sql",
       ]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("applies only the audited 0006 rebuild and preserves deployed reservations", async () => {
+    const sqlite = new DatabaseSync(":memory:");
+    const appliedNames = [
+      "0000_damp_robbie_robertson.sql",
+      "0001_thick_reptil.sql",
+      "0002_portfolio_v1.sql",
+      "0003_intelligence_inbox_v1.sql",
+      "0004_ingestion_control_plane_v1.sql",
+      "0005_ai_guardrails_v1.sql",
+    ];
+    try {
+      for (const name of appliedNames) {
+        sqlite.exec(
+          readFileSync(resolve(process.cwd(), "drizzle", name), "utf8").replaceAll(
+            "--> statement-breakpoint",
+            "",
+          ),
+        );
+      }
+      sqlite
+        .prepare(`
+          INSERT INTO ai_model_budget_reservations (
+            reservation_id, owner_id, request_key_hash, operation,
+            operation_key_hash, cost, day_start, status, reserved_at,
+            lease_expires_at
+          ) VALUES (?, ?, ?, 'omnigaze_view', ?, 1, ?, 'reserved', ?, ?)
+        `)
+        .run(
+          "reservation-preserved",
+          "owner-preserved",
+          "a".repeat(64),
+          "b".repeat(64),
+          "2026-11-12",
+          "2026-11-12T12:00:00.000Z",
+          "2026-11-12T12:01:30.000Z",
+        );
+
+      const pending = await buildPendingMigrationSql(new Set(appliedNames));
+      expect(pending.pendingNames).toEqual([
+        "0006_daily_brief_guardrails_v1.sql",
+      ]);
+      sqlite.exec(pending.sql);
+
+      expect(
+        sqlite
+          .prepare(
+            "SELECT reservation_id, owner_id, operation FROM ai_model_budget_reservations",
+          )
+          .get(),
+      ).toEqual({
+        reservation_id: "reservation-preserved",
+        owner_id: "owner-preserved",
+        operation: "omnigaze_view",
+      });
+      expect(
+        sqlite
+          .prepare("SELECT COUNT(*) AS count FROM pragma_table_info(?)")
+          .get("ai_daily_brief_cache_entries"),
+      ).toEqual({ count: 12 });
+      expect(
+        sqlite
+          .prepare(
+            "SELECT name FROM pragma_index_list(?) WHERE name LIKE 'ai_model_budget_reservations_%' ORDER BY name",
+          )
+          .all("ai_model_budget_reservations")
+          .map(({ name }) => name),
+      ).toEqual([
+        "ai_model_budget_reservations_active_lease_idx",
+        "ai_model_budget_reservations_owner_day_idx",
+        "ai_model_budget_reservations_owner_time_idx",
+        "ai_model_budget_reservations_request_idx",
+      ]);
+      const tableSql = sqlite
+        .prepare(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ai_model_budget_reservations'",
+        )
+        .get()?.sql;
+      expect(tableSql).toContain(
+        "operation IN ('omnigaze_view', 'daily_brief')",
+      );
     } finally {
       sqlite.close();
     }

@@ -123,6 +123,14 @@ describe("Daily Brief cache fingerprints", () => {
       ]),
     ).rejects.toThrow("invalid_evidence");
     await expect(
+      fingerprintDailyBriefEvidence([
+        {
+          ...evidence("one"),
+          sourceUrl: "https://news.example/story?access_token=top-secret",
+        },
+      ]),
+    ).rejects.toThrow("invalid_evidence");
+    await expect(
       buildDailyBriefCacheKey({
         promptVersion: "brief-v1",
         modelKey: "gpt-default-v1",

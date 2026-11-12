@@ -293,6 +293,70 @@ export const aiViewCacheEntries = sqliteTable(
 );
 
 /**
+ * Owner-scoped cache for the generated cross-watchlist Daily Brief. The
+ * externally computed cache key commits to the prompt/model/date/watchlist/
+ * evidence identity, while the composite primary key prevents one owner from
+ * reading or replacing another owner's personalized entry. Only the strict
+ * public response projection belongs in `response_json`.
+ */
+export const aiDailyBriefCacheEntries = sqliteTable(
+  "ai_daily_brief_cache_entries",
+  {
+    ownerId: text("owner_id").notNull(),
+    cacheKey: text("cache_key").notNull(),
+    briefDate: text("brief_date").notNull(),
+    promptVersion: text("prompt_version").notNull(),
+    modelKey: text("model_key").notNull(),
+    watchlistFingerprint: text("watchlist_fingerprint").notNull(),
+    evidenceFingerprint: text("evidence_fingerprint").notNull(),
+    responseJson: text("response_json").notNull(),
+    generatedAt: text("generated_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    lastAccessedAt: text("last_accessed_at").notNull(),
+    hitCount: integer("hit_count").notNull().default(0),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.cacheKey] }),
+    uniqueIndex("ai_daily_brief_cache_entries_identity_idx").on(
+      table.ownerId,
+      table.briefDate,
+      table.promptVersion,
+      table.modelKey,
+      table.watchlistFingerprint,
+      table.evidenceFingerprint,
+    ),
+    index("ai_daily_brief_cache_entries_expiry_idx").on(table.expiresAt),
+    index("ai_daily_brief_cache_entries_owner_date_idx").on(
+      table.ownerId,
+      table.briefDate,
+      table.generatedAt,
+    ),
+    check(
+      "ai_daily_brief_cache_entries_bounded_identity_check",
+      sql.raw(
+        "length(owner_id) BETWEEN 1 AND 256 AND length(cache_key) = 64 AND cache_key NOT GLOB '*[^0-9a-f]*' AND length(brief_date) = 10 AND date(brief_date) = brief_date AND length(prompt_version) BETWEEN 1 AND 128 AND length(model_key) BETWEEN 1 AND 128 AND length(watchlist_fingerprint) = 64 AND watchlist_fingerprint NOT GLOB '*[^0-9a-f]*' AND length(evidence_fingerprint) = 64 AND evidence_fingerprint NOT GLOB '*[^0-9a-f]*'",
+      ),
+    ),
+    check(
+      "ai_daily_brief_cache_entries_payload_check",
+      sql.raw(
+        "length(response_json) BETWEEN 2 AND 65536 AND json_valid(response_json)",
+      ),
+    ),
+    check(
+      "ai_daily_brief_cache_entries_time_check",
+      sql.raw(
+        "julianday(generated_at) IS NOT NULL AND julianday(expires_at) > julianday(generated_at) AND julianday(expires_at) <= julianday(generated_at) + 1 AND julianday(last_accessed_at) IS NOT NULL",
+      ),
+    ),
+    check(
+      "ai_daily_brief_cache_entries_hit_count_check",
+      sql.raw("hit_count >= 0"),
+    ),
+  ],
+);
+
+/**
  * One row is one accepted model-generation attempt. Counting accepted rows in
  * a single INSERT ... SELECT statement makes rolling and UTC-day limits
  * atomic on SQLite/D1. Failed attempts remain in the ledger intentionally so
@@ -336,7 +400,7 @@ export const aiModelBudgetReservations = sqliteTable(
     check(
       "ai_model_budget_reservations_bounded_identity_check",
       sql.raw(
-        "length(reservation_id) BETWEEN 8 AND 128 AND length(owner_id) BETWEEN 1 AND 256 AND length(request_key_hash) = 64 AND operation = 'omnigaze_view' AND length(operation_key_hash) = 64 AND cost BETWEEN 1 AND 10 AND length(day_start) = 10",
+        "length(reservation_id) BETWEEN 8 AND 128 AND length(owner_id) BETWEEN 1 AND 256 AND length(request_key_hash) = 64 AND operation IN ('omnigaze_view', 'daily_brief') AND length(operation_key_hash) = 64 AND cost BETWEEN 1 AND 10 AND length(day_start) = 10",
       ),
     ),
     check(

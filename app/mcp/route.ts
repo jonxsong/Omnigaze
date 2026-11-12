@@ -86,6 +86,25 @@ const tools = [
     },
   },
   {
+    name: "get_daily_brief",
+    description:
+      "Generate the authenticated user's personalized cross-watchlist Daily Brief from fresh live evidence only after an explicit user request. Returns cited developments, tracked-symbol coverage, explicit unknowns, and AI usage metadata; never trading instructions or a background action.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        request_id: {
+          type: "string",
+          minLength: 8,
+          maxLength: 128,
+          pattern: "^[A-Za-z0-9._:-]+$",
+          description:
+            "Optional idempotency key. Reuse only when retrying the same explicit Daily Brief request.",
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_watchlist_dashboard",
     description:
       "Return the authenticated user's watchlist dashboard and latest material events.",
@@ -409,6 +428,60 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
           throw error;
         }
       }
+      case "get_daily_brief": {
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const parsed = z
+          .object({
+            request_id: z
+              .string()
+              .trim()
+              .min(8)
+              .max(128)
+              .regex(/^[A-Za-z0-9._:-]+$/)
+              .optional(),
+          })
+          .strict()
+          .safeParse(args);
+        if (!parsed.success) return validationError(parsed.error);
+        const {
+          DailyBriefServiceError,
+          generatePersonalDailyBrief,
+        } = await import("@/lib/services/personal-daily-brief");
+        try {
+          const brief = await generatePersonalDailyBrief(userId, {
+            requestId: parsed.data.request_id,
+          });
+          return toolContent(brief.data, {
+            ...brief.meta,
+            scope: "personal",
+            identity: "authenticated",
+            tradeExecutionAllowed: false,
+          });
+        } catch (error) {
+          if (error instanceof DailyBriefServiceError) {
+            return toolError(error.message, { code: error.code });
+          }
+          const { OmnigazeAiGuardError } = await import(
+            "@/lib/ai/omnigaze-view-guard"
+          );
+          if (error instanceof OmnigazeAiGuardError) {
+            return toolError(error.message, {
+              code: error.code,
+              ...(error.retryAt ? { retryAt: error.retryAt } : {}),
+              ...(error.retryAfterSeconds
+                ? { retryAfterSeconds: error.retryAfterSeconds }
+                : {}),
+              ...(error.budgetReason
+                ? { budgetReason: error.budgetReason }
+                : {}),
+            });
+          }
+          throw error;
+        }
+      }
       case "get_watchlist_dashboard": {
         const userId = request.headers.get("oai-authenticated-user-id");
         if (!userId) {
@@ -600,6 +673,7 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
     if (
       name === "get_intelligence_inbox" ||
       name === "get_alert_rules" ||
+      name === "get_daily_brief" ||
       name === "run_intelligence_ingestion_tick"
     ) {
       const requestId = reportUnexpectedFailure(`mcp.${name}`, failure);

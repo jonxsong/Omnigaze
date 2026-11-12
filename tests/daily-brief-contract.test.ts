@@ -131,6 +131,72 @@ describe("Daily Brief contracts", () => {
         meta: { ...envelope().meta, omittedSymbolCount: 2 },
       }),
     ).toThrow();
+    expect(() =>
+      parseDailyBriefEnvelope({
+        ...envelope(),
+        meta: {
+          ...envelope().meta,
+          citations: envelope().meta.citations.map((citation, index) =>
+            index === 0
+              ? {
+                  ...citation,
+                  url: "https://news.example/story?api_key=top-secret&access_token=also-secret",
+                }
+              : citation,
+          ),
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      parseDailyBriefEnvelope({
+        ...envelope(),
+        meta: {
+          ...envelope().meta,
+          citations: envelope().meta.citations.map((citation, index) =>
+            index === 0
+              ? { ...citation, url: "https://news.example/story#token=top-secret" }
+              : citation,
+          ),
+        },
+      }),
+    ).toThrow();
+    for (const credentialKey of [
+      "api-secret",
+      "secret_key",
+      "X-Amz-Security-Token",
+      "AWSAccessKeyId",
+      "GoogleAccessId",
+    ]) {
+      expect(() =>
+        parseDailyBriefEnvelope({
+          ...envelope(),
+          meta: {
+            ...envelope().meta,
+            citations: envelope().meta.citations.map((citation, index) =>
+              index === 0
+                ? {
+                    ...citation,
+                    url: `https://news.example/story?${credentialKey}=top-secret`,
+                  }
+                : citation,
+            ),
+          },
+        }),
+      ).toThrow();
+    }
+    expect(
+      parseDailyBriefEnvelope({
+        ...envelope(),
+        meta: {
+          ...envelope().meta,
+          citations: envelope().meta.citations.map((citation, index) =>
+            index === 0
+              ? { ...citation, url: "https://news.example/story?utm_source=brief" }
+              : citation,
+          ),
+        },
+      }).meta.citations[0]?.url,
+    ).toContain("utm_source=brief");
   });
 
   it("prevents cache hits from consuming generation budget", () => {
