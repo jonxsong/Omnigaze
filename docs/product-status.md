@@ -20,6 +20,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Automatic authenticated Today Across Your Watchlist card with strict client validation, bounded cross-symbol evidence, original-language sources, honest live/durable provenance, and zero model requests.
 - [x] Search discovery foundation: canonical metadata, JSON-LD, `robots.txt`, and `sitemap.xml`.
 - [x] One persisted English/Chinese preference across the landing page, onboarding, dashboard, inbox, Daily Brief, Omnigaze View, and portfolio research workspaces.
+- [x] Public bilingual Privacy, Terms, and Data & deletion pages with accessible landing/dashboard links, transparent provider/AI disclosures, and an authenticated owner-scoped deletion control.
 
 ## Market data and pipelines
 
@@ -74,6 +75,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Privacy-bounded production error and latency telemetry across every HTTP API method and MCP, including correlated response headers and uncaught Vinext runtime errors.
 - [x] Deterministic server-only HTTP success sampling with unsampled error/slow paths, fully emitted MCP completions, and a no-application-retention policy for materially higher traffic.
 - [x] Localize product controls, accessibility labels, validation, and safe error states while preserving tickers, company names, and cited source material in their original language.
+- [x] Same-origin, nonce-bound account-data deletion erases owner-scoped D1 records in one batch, clears known device keys, and signs out without claiming permanent account closure or deleting shared evidence.
 
 ## Move Lens limitations
 

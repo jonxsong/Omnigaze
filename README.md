@@ -2,6 +2,8 @@
 
 [Open the public alpha](https://omnigaze.perkyaisle4.chatgpt.site) · [Explore the architecture](docs/architecture.md) · [Review shipped capabilities](docs/product-status.md)
 
+Public trust surfaces: [Privacy](https://omnigaze.perkyaisle4.chatgpt.site/privacy) · [Terms](https://omnigaze.perkyaisle4.chatgpt.site/terms) · [Data & deletion](https://omnigaze.perkyaisle4.chatgpt.site/data-and-deletion)
+
 Omnigaze is a personalized market-intelligence workspace. Users search the active U.S. equity universe, track the companies they care about, record holdings, inspect a live fixed-point **Portfolio Pulse**, follow a provider-backed **Market Pulse** made from honestly labeled ETF proxies, compare a selected security with SPY and QQQ through the deterministic **Move Lens**, scan an automatic evidence-only **Today Across Your Watchlist** view, keep a durable intelligence inbox, generate a cited cross-watchlist **Daily Brief**, and open an evidence-backed **Omnigaze View** that separates facts, derived observations, and AI inference.
 
 The public alpha uses provider-backed quotes, chart history, and licensed news whenever those capabilities are configured. The SEC adapter now has a distributed D1 Fair Access coordinator plus durable recent-filing cursor ingestion, but production egress remains fail-closed until an operator supplies a truthful monitored contact identity and explicitly enables both requested SEC capabilities. Every surface carries source, freshness, delay, and fallback metadata; illustrative fixtures are never labeled as live.
@@ -23,6 +25,8 @@ The diagram links to the detailed trust boundaries, degradation model, data cont
 7. Deterministic code—not the model—calculates any review zones and hypothetical share scenarios, and suppresses them when data is stale, demo, or has fewer than two attributable evidence items. A single provider stream remains explicitly capped at limited evidence confidence; Omnigaze never infers source agreement.
 8. A fresh live inbox read reconciles normalized events into D1, evaluates explicit in-app alert rules, and preserves per-user read, saved, and dismissed state across sessions.
 9. The dashboard, HTTP API, and MCP tools expose the same owner-scoped domain objects. Authenticated MCP clients can also update watchlist membership, upsert holdings, change inbox state, and configure in-app alert rules through the same strict parsers as the browser. Holdings, inbox state, and alert rules retain optimistic versions; watchlist set mutations remain idempotent.
+
+Account-wide data erasure is an intentional browser-only safety boundary rather than an MCP tool. It requires an authenticated same-origin challenge and exact typed confirmation, deletes owner-scoped D1 records in one atomic batch, clears known device keys, and signs out. Shared market evidence and platform-managed identity/logs remain outside that control, and later sign-in can create a new empty workspace.
 
 The authenticated dashboard also loads one bounded Today response on entry and after an explicit refresh. It shows at most four current, non-demo provider events across the saved watchlist, preserves original source language, and labels retained-only, current-only, stale, unknown, truncated, or unavailable evidence without invoking a model. A transient refresh failure keeps the last verified in-memory response visible for that session; it is never persisted in the browser.
 

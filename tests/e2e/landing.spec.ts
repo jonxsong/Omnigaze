@@ -7,7 +7,9 @@ test.describe("Omnigaze public experience", () => {
     await page.goto("/");
 
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-    await expect(page.getByRole("navigation")).toBeVisible();
+    await expect(
+      page.getByRole("navigation", { name: "Primary navigation" }),
+    ).toBeVisible();
     await expect(page.getByRole("link", { name: "Omnigaze home" })).toBeVisible();
 
     const dashboardCta = page
@@ -15,6 +17,104 @@ test.describe("Omnigaze public experience", () => {
       .first();
     await expect(dashboardCta).toBeVisible();
     await expect(dashboardCta).toHaveAttribute("href", "/onboarding");
+  });
+
+  test("public policy navigation stays visible and supports English and Chinese", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+
+    const footerNavigation = page.getByRole("navigation", {
+      name: "Footer navigation",
+    });
+    await expect(footerNavigation).toBeVisible();
+    await expect(footerNavigation.getByRole("link", { name: "Privacy" })).toHaveAttribute(
+      "href",
+      "/privacy",
+    );
+    await expect(footerNavigation.getByRole("link", { name: "Terms" })).toHaveAttribute(
+      "href",
+      "/terms",
+    );
+    await expect(
+      footerNavigation.getByRole("link", { name: "Data & deletion" }),
+    ).toHaveAttribute("href", "/data-and-deletion");
+
+    await footerNavigation.getByRole("link", { name: "Privacy" }).click();
+    await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+    await expect(
+      page.getByRole("heading", { level: 1, name: "Privacy, explained plainly." }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "中文" }).click();
+    await expect(page.locator("main")).toHaveAttribute("lang", "zh-CN");
+    await expect(
+      page.getByRole("heading", { level: 1, name: "用清晰的语言说明隐私。" }),
+    ).toBeVisible();
+
+    await page.goto("/data-and-deletion");
+    await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+    await expect(page.locator("main")).toHaveAttribute("lang", "zh-CN");
+    await expect(page.getByRole("link", { name: "登录并管理数据" })).toHaveAttribute(
+      "href",
+      /\/signin-with-chatgpt\?return_to=%2Fdata-and-deletion/,
+    );
+  });
+
+  test("authenticated data deletion uses the challenge, clears device keys, and signs out", async ({
+    page,
+  }) => {
+    const challenge = "11111111-1111-4111-8111-111111111111";
+    const confirmation = "ERASE MY OMNIGAZE DATA";
+    let deletionBody: unknown = null;
+
+    await page.goto("/signin-with-chatgpt?return_to=/data-and-deletion");
+    await expect(page).toHaveURL(/\/data-and-deletion$/);
+    await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+    await page.evaluate(() => {
+      localStorage.setItem("omnigaze:onboarding-draft", "test");
+      localStorage.setItem("omnigaze:dashboard-preferences", "test");
+      localStorage.setItem("omnigaze:app-locale:v1", "en");
+      localStorage.setItem("omnigaze:landing-locale:v1", "en");
+    });
+    await page.route("**/api/account/data-deletion-challenge", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: { challenge, confirmationPhrase: confirmation },
+        }),
+      });
+    });
+    await page.route("**/api/account/data", async (route) => {
+      deletionBody = route.request().postDataJSON();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ data: { deleted: true } }),
+      });
+    });
+
+    await page.getByLabel(`Type ${confirmation} to confirm`).fill(confirmation);
+    await page.getByRole("button", { name: "Delete my saved Omnigaze data" }).click();
+    await expect(page).toHaveURL(/\/$/);
+
+    expect(deletionBody).toEqual({ challenge, confirmation });
+    await expect
+      .poll(() =>
+        page.evaluate(() => ({
+          onboarding: localStorage.getItem("omnigaze:onboarding-draft"),
+          preferences: localStorage.getItem("omnigaze:dashboard-preferences"),
+          locale: localStorage.getItem("omnigaze:app-locale:v1"),
+          legacyLocale: localStorage.getItem("omnigaze:landing-locale:v1"),
+        })),
+      )
+      .toEqual({
+        onboarding: null,
+        preferences: null,
+        locale: null,
+        legacyLocale: null,
+      });
   });
 
   test("How It Works steps disclose the selected evidence workflow", async ({

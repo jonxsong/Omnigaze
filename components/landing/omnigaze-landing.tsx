@@ -186,10 +186,14 @@ const landingCopy = {
     },
     footer: {
       tagline: "Your market. One intelligent view.",
+      navigation: "Footer navigation",
       product: "Product",
       intelligence: "Intelligence",
       trust: "Trust",
       dashboard: "Dashboard",
+      privacy: "Privacy",
+      terms: "Terms",
+      data: "Data & deletion",
       disclaimer: "Research support only. Not investment advice.",
     },
   },
@@ -333,10 +337,14 @@ const landingCopy = {
     },
     footer: {
       tagline: "你的市场，一个智能视图。",
+      navigation: "页脚导航",
       product: "产品",
       intelligence: "智能引擎",
       trust: "可信设计",
       dashboard: "仪表盘",
+      privacy: "隐私说明",
+      terms: "使用条款",
+      data: "数据与删除",
       disclaimer: "仅供研究参考，不构成投资建议。",
     },
   },
@@ -697,12 +705,15 @@ function OmnigazeLandingContent({ howItWorks }: OmnigazeLandingProps) {
             <BrandMark />
             <span><strong>OMNIGAZE</strong><small>{copy.footer.tagline}</small></span>
           </div>
-          <div className={styles.footerLinks}>
+          <nav className={styles.footerLinks} aria-label={copy.footer.navigation}>
             <a href="#product">{copy.footer.product}</a>
             <a href="#intelligence">{copy.footer.intelligence}</a>
             <a href="#trust">{copy.footer.trust}</a>
             <a href="/dashboard">{copy.footer.dashboard}</a>
-          </div>
+            <a href="/privacy">{copy.footer.privacy}</a>
+            <a href="/terms">{copy.footer.terms}</a>
+            <a href="/data-and-deletion">{copy.footer.data}</a>
+          </nav>
           <p>{copy.footer.disclaimer}</p>
         </footer>
       </main>

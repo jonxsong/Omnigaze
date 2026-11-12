@@ -2665,6 +2665,7 @@ export function MarketDashboard({
               <Gauge size={16} /> {t("researchScenarios")}
             </button>
             <Link href="/onboarding"><Settings2 size={16} /> {t("preferences")}</Link>
+            <Link href="/data-and-deletion"><ShieldCheck size={16} /> {t("dataPrivacy")}</Link>
             {session.isAuthenticated && (
               <a href={session.signOutPath} target="_top">
                 <LogOut size={16} /> {t("signOutPlain")}

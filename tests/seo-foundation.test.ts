@@ -25,13 +25,18 @@ describe("SEO discovery foundation", () => {
     );
   });
 
-  it("publishes only the public landing page in the sitemap", () => {
+  it("publishes the landing page and public trust pages in the sitemap", () => {
     expect(sitemap()).toEqual([
       {
         url: absoluteSiteUrl("/"),
         changeFrequency: "daily",
         priority: 1,
       },
+      ...["/privacy", "/terms", "/data-and-deletion"].map((path) => ({
+        url: absoluteSiteUrl(path),
+        changeFrequency: "monthly",
+        priority: 0.3,
+      })),
     ]);
   });
 
