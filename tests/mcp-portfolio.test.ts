@@ -194,6 +194,9 @@ describe("portfolio MCP tools", () => {
   });
 
   it("does not expose repository or provider exception text", async () => {
+    const errorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
     mocks.getUserPortfolio.mockRejectedValue(
       new Error("sensitive database binding detail"),
     );
@@ -201,10 +204,31 @@ describe("portfolio MCP tools", () => {
     const response = await callTool("get_portfolio", {}, "owner-a");
 
     expect(response.result.isError).toBe(true);
-    expect(response.content).toEqual({
+    expect(response.content).toMatchObject({
       error: "Tool execution failed.",
-      details: { code: "tool_execution_failed" },
+      details: {
+        code: "tool_execution_failed",
+        requestId: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        ),
+      },
     });
     expect(JSON.stringify(response.content)).not.toContain("sensitive");
+    const requestId = (response.content.details as { requestId: string })
+      .requestId;
+    expect(errorSpy).toHaveBeenCalledWith(
+      "omnigaze.unexpected_failure",
+      expect.objectContaining({
+        event: "omnigaze.unexpected_failure",
+        operation: "mcp.get_portfolio",
+        requestId,
+        failureKind: "error",
+      }),
+    );
+    const serializedLogs = JSON.stringify(errorSpy.mock.calls);
+    expect(serializedLogs).not.toContain("sensitive database binding detail");
+    expect(serializedLogs).not.toContain("owner-a");
+
+    errorSpy.mockRestore();
   });
 });

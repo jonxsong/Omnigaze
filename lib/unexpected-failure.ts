@@ -1,12 +1,18 @@
 const EVENT_NAME = "omnigaze.unexpected_failure";
+const SERVER_REQUEST_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type FailureKind = "error" | "unknown";
 
 export function reportUnexpectedFailure(
   operation: string,
   failure: unknown,
+  serverRequestId?: string,
 ) {
-  const requestId = crypto.randomUUID();
+  const requestId =
+    serverRequestId && SERVER_REQUEST_ID_PATTERN.test(serverRequestId)
+      ? serverRequestId
+      : crypto.randomUUID();
   const failureKind: FailureKind = failure instanceof Error ? "error" : "unknown";
 
   // Deliberately omit the thrown message, stack, request body, owner identity,
@@ -28,10 +34,12 @@ export function unexpectedApiError(options: {
   code: string;
   message: string;
   status: number;
+  serverRequestId?: string;
 }) {
   const requestId = reportUnexpectedFailure(
     options.operation,
     options.failure,
+    options.serverRequestId,
   );
 
   return Response.json(

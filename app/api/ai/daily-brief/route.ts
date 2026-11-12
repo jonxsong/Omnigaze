@@ -4,6 +4,7 @@ import {
   OmnigazeAiGuardError,
   omnigazeAiGuardErrorHeaders,
 } from "@/lib/ai/omnigaze-view-guard";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import {
   DailyBriefServiceError,
   generatePersonalDailyBrief,
@@ -43,7 +44,7 @@ function resultHeaders(result: Awaited<ReturnType<typeof generatePersonalDailyBr
   return headers;
 }
 
-export async function POST(request: Request) {
+async function postDailyBrief(request: Request) {
   const user = await getChatGPTUser();
   if (!user) {
     return Response.json(
@@ -89,18 +90,19 @@ export async function POST(request: Request) {
         },
       );
     }
-    const diagnosticRequestId = crypto.randomUUID();
-    console.error("Daily Brief analysis failed", {
-      requestId: diagnosticRequestId,
-      errorName: error instanceof Error ? error.name : "UnknownError",
-    });
-    return Response.json(
-      {
-        error: "The Daily Brief could not be completed.",
-        code: "analysis_failed",
-        requestId: diagnosticRequestId,
-      },
-      { status: 502, headers: noStore },
-    );
+    throw error;
   }
 }
+
+export const POST = instrumentApiRoute(
+  {
+    operation: "api.ai.daily_brief.post",
+    slowMs: 30_000,
+    unexpectedError: {
+      code: "analysis_failed",
+      message: "The Daily Brief could not be completed.",
+      status: 502,
+    },
+  },
+  postDailyBrief,
+);

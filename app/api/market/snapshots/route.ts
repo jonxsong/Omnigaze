@@ -1,4 +1,5 @@
 import type { CanonicalSymbol, MarketSnapshot } from "@/lib/market-types";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import type {
   OrchestratedSnapshot,
   OrchestrationMeta,
@@ -203,4 +204,7 @@ export function createMarketSnapshotsHandler(
   };
 }
 
-export const GET = createMarketSnapshotsHandler();
+export const GET = instrumentApiRoute(
+  { operation: "api.market.snapshots.get", slowMs: 3_000 },
+  createMarketSnapshotsHandler(),
+);

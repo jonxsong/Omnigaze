@@ -171,4 +171,60 @@ describe("Daily Brief HTTP route", () => {
       budgetReason: "rolling_limit",
     });
   });
+
+  it("correlates and sanitizes an unexpected generation failure", async () => {
+    const errorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    mocks.generatePersonalDailyBrief.mockRejectedValue(
+      new Error(
+        "do-not-log-brief-secret owner-route-1 https://provider.test?token=secret",
+      ),
+    );
+
+    const response = await POST(request({ request_id: "valid-request-1" }));
+    const body = (await response.json()) as {
+      code: string;
+      error: string;
+      requestId: string;
+    };
+
+    expect(response.status).toBe(502);
+    expect(body).toMatchObject({
+      code: "analysis_failed",
+      error: "The Daily Brief could not be completed.",
+      requestId: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
+    });
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-request-id")).toBe(body.requestId);
+    expect(response.headers.get("server-timing")).toMatch(
+      /^omnigaze;dur=\d+\.\d$/,
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      "omnigaze.unexpected_failure",
+      expect.objectContaining({
+        event: "omnigaze.unexpected_failure",
+        operation: "api.ai.daily_brief.post",
+        requestId: body.requestId,
+        failureKind: "error",
+      }),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "omnigaze.api_request",
+        operation: "api.ai.daily_brief.post",
+        requestId: body.requestId,
+        status: 502,
+        outcome: "server_error",
+      }),
+    );
+    const serializedLogs = JSON.stringify(errorSpy.mock.calls);
+    expect(serializedLogs).not.toContain("do-not-log-brief-secret");
+    expect(serializedLogs).not.toContain("owner-route-1");
+    expect(serializedLogs).not.toContain("token=secret");
+
+    errorSpy.mockRestore();
+  });
 });

@@ -1,4 +1,5 @@
 import { liveMarketData } from "@/lib/services/live-market-data";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import {
   checkDatabaseReadiness,
   type DatabaseReadiness,
@@ -77,4 +78,7 @@ export function createHealthHandler(
   };
 }
 
-export const GET = createHealthHandler();
+export const GET = instrumentApiRoute(
+  { operation: "api.health.get", slowMs: 500 },
+  createHealthHandler(),
+);

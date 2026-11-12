@@ -5,6 +5,7 @@ import {
   omnigazeAiGuardErrorHeaders,
   omnigazeAiGuardResultHeaders,
 } from "@/lib/ai/omnigaze-view-guard";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import type { CanonicalSymbol } from "@/lib/market-types";
 import {
   generateOmnigazeView,
@@ -32,7 +33,7 @@ const requestSchema = z
   })
   .strict();
 
-export async function POST(request: Request) {
+async function postAnalysis(request: Request) {
   const user = await getChatGPTUser();
   if (!user) {
     return Response.json(
@@ -98,18 +99,19 @@ export async function POST(request: Request) {
         },
       );
     }
-    const diagnosticRequestId = crypto.randomUUID();
-    console.error("Omnigaze analysis failed", {
-      requestId: diagnosticRequestId,
-      errorName: error instanceof Error ? error.name : "UnknownError",
-    });
-    return Response.json(
-      {
-        error: "Analysis could not be completed.",
-        code: "analysis_failed",
-        requestId: diagnosticRequestId,
-      },
-      { status: 502, headers: noStore },
-    );
+    throw error;
   }
 }
+
+export const POST = instrumentApiRoute(
+  {
+    operation: "api.ai.analyze.post",
+    slowMs: 30_000,
+    unexpectedError: {
+      code: "analysis_failed",
+      message: "Analysis could not be completed.",
+      status: 502,
+    },
+  },
+  postAnalysis,
+);

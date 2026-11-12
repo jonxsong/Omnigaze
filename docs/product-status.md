@@ -53,6 +53,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] GitHub Actions runs the locked end-to-end release gates.
 - [ ] Rotate credentials that were ever shared outside the secret manager, then update the deployed secret values.
 - [x] Lazy-load the Recharts workspace and reduce the initial dashboard bundle by roughly one third.
-- [ ] Add production error and latency telemetry.
+- [x] Privacy-bounded production error and latency telemetry for health, batched quotes, explicit AI generation, and MCP, including correlated response headers and uncaught Vinext runtime errors.
+- [ ] Extend telemetry to the remaining HTTP routes and establish a sampling/retention policy before materially higher traffic.
 - [x] Carry one persisted English/Chinese preference from the landing page through the full onboarding journey.
 - [ ] Complete Chinese localization for the dashboard, inbox, and research workspaces.

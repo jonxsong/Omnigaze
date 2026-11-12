@@ -307,4 +307,60 @@ describe("AI analysis route", () => {
     });
     expect(mocks.analyzeEvidence).not.toHaveBeenCalled();
   });
+
+  it("correlates and sanitizes an unexpected analysis failure", async () => {
+    const errorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    mocks.analyzeEvidence.mockRejectedValue(
+      new Error(
+        "do-not-log-analysis-secret owner-a https://provider.test?token=secret",
+      ),
+    );
+
+    const response = await POST(analyzeRequest({ symbol_id: "NYSE:IBM" }));
+    const body = (await response.json()) as {
+      code: string;
+      error: string;
+      requestId: string;
+    };
+
+    expect(response.status).toBe(502);
+    expect(body).toMatchObject({
+      code: "analysis_failed",
+      error: "Analysis could not be completed.",
+      requestId: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
+    });
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-request-id")).toBe(body.requestId);
+    expect(response.headers.get("server-timing")).toMatch(
+      /^omnigaze;dur=\d+\.\d$/,
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      "omnigaze.unexpected_failure",
+      expect.objectContaining({
+        event: "omnigaze.unexpected_failure",
+        operation: "api.ai.analyze.post",
+        requestId: body.requestId,
+        failureKind: "error",
+      }),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "omnigaze.api_request",
+        operation: "api.ai.analyze.post",
+        requestId: body.requestId,
+        status: 502,
+        outcome: "server_error",
+      }),
+    );
+    const serializedLogs = JSON.stringify(errorSpy.mock.calls);
+    expect(serializedLogs).not.toContain("do-not-log-analysis-secret");
+    expect(serializedLogs).not.toContain("owner-a");
+    expect(serializedLogs).not.toContain("token=secret");
+
+    errorSpy.mockRestore();
+  });
 });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { instrumentApiRoute } from "@/lib/api-telemetry";
 import { serviceMeta } from "@/lib/services/market-intelligence";
 import { liveMarketData } from "@/lib/services/live-market-data";
 import {
@@ -670,25 +671,17 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         return toolError(`Unknown tool: ${name}`);
     }
   } catch (failure) {
-    if (
-      name === "get_intelligence_inbox" ||
-      name === "get_alert_rules" ||
-      name === "get_daily_brief" ||
-      name === "run_intelligence_ingestion_tick"
-    ) {
-      const requestId = reportUnexpectedFailure(`mcp.${name}`, failure);
-      return toolError("Tool execution failed.", {
-        code: "tool_execution_failed",
-        requestId,
-      });
-    }
+    const isKnownTool = tools.some((tool) => tool.name === name);
+    const operation = isKnownTool ? `mcp.${name}` : "mcp.unknown_tool";
+    const requestId = reportUnexpectedFailure(operation, failure);
     return toolError("Tool execution failed.", {
       code: "tool_execution_failed",
+      requestId,
     });
   }
 }
 
-export async function POST(request: Request) {
+async function postMcp(request: Request) {
   let body: JsonRpcRequest;
   try {
     body = (await request.json()) as JsonRpcRequest;
@@ -729,3 +722,8 @@ export async function POST(request: Request) {
       return jsonRpcError(body.id, -32601, "Method not found");
   }
 }
+
+export const POST = instrumentApiRoute(
+  { operation: "mcp.post", slowMs: 30_000 },
+  postMcp,
+);

@@ -79,6 +79,16 @@ AI analysis also degrades independently. Cache and budget reads fail closed befo
 
 `GET /api/health` remains a liveness response but reports `status: degraded` unless both provider checks and the required D1 inbox, ingestion, single-stock AI, and Daily Brief guardrail schema markers are ready. The schema probe reads metadata only, exposes no rows or binding details, and catches a missing migration before authenticated traffic reaches a stateful workflow.
 
+### Production telemetry boundary
+
+The alpha emits one structured completion event for every request on five critical boundaries: health, batched market snapshots, single-stock AI analysis, the Daily Brief, and MCP. Logging every completion is intentional and bounded while traffic is at alpha scale; the remaining HTTP routes are not yet represented, and deterministic sampling must be evaluated before expanding this policy to materially higher traffic.
+
+Instrumented responses preserve their existing status, body, cache policy, and application headers while adding a server-generated `X-Request-ID` and a standard `Server-Timing` metric. The request ID is never accepted from an inbound header. An unexpected HTTP failure handled at an instrumented route boundary receives the same opaque ID in its safe response body, response header, unexpected-failure event, and request-completion event. An MCP tool-level failure instead carries its own incident ID in the tool error and matching unexpected-failure event, while the enclosing HTTP exchange retains a separate request-completion ID. Vinext's production-supported `instrumentation.ts` hook reports uncaught render, route, action, and proxy failures outside those wrappers.
+
+Completion events use schema version 1 and contain only `event`, static `operation`, server-generated `requestId`, HTTP `status`, coarse `outcome`, `durationMs`, and `slow`. Static operation labels are length-bounded and syntax-validated at wrapper construction. The telemetry boundary never reads or records URLs, paths, query parameters, request or response bodies, symbols, holdings, owner identity, IP addresses, headers, cookies, credentials, prompts, model output, provider payloads, exception messages or stacks, client idempotency keys, JSON-RPC IDs, or platform request identifiers.
+
+Events go only to the existing Sites/Cloudflare Worker console-log stream. Omnigaze adds no telemetry table, external collector, paid service, or independent retention in this slice; visibility and retention therefore follow the hosting platform's operational-log policy. Server errors are emitted at error level, slow non-server responses at warning level, and other completions at info level.
+
 ## Durable intelligence inbox
 
 The inbox separates a normalized global event projection from private user state:
