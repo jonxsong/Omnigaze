@@ -162,6 +162,7 @@ describe("browser API response contracts", () => {
     expect(body.capabilities).not.toContain("sec-filing-intelligence");
     expect(body.capabilities).toContain("durable-intelligence-inbox");
     expect(body.capabilities).toContain("in-app-alert-rules");
+    expect(body.capabilities).toContain("portfolio-pulse-v1");
     expect(body.readiness.database).toEqual({
       status: "ready",
       checkedAt: "2026-11-12T08:00:00.000Z",

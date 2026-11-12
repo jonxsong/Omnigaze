@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
   instruments,
@@ -18,6 +18,7 @@ import {
   microsToDecimal,
   multiplyMicrosToDecimal,
 } from "@/lib/portfolio/decimal";
+import { MAX_PORTFOLIO_PULSE_POSITIONS } from "@/lib/portfolio/portfolio-pulse";
 import {
   addSymbolToWatchlist,
   ensureDefaultWatchlist,
@@ -213,6 +214,39 @@ export async function getUserPortfolio(ownerId: string) {
     holdings: holdingRows.map(({ holding, instrument }) =>
       serializeHolding(holding, instrument),
     ),
+  };
+}
+
+/**
+ * Reads only the bounded canonical-symbol slice used by Portfolio Pulse while
+ * retaining a separate owner-scoped total for truthful truncation metadata.
+ * The existing full portfolio read intentionally remains unchanged for its
+ * other callers.
+ */
+export async function getPortfolioPulseHoldings(ownerId: string) {
+  const db = getDb();
+  const [countRows, holdingRows] = await Promise.all([
+    db
+      .select({ totalPositions: count() })
+      .from(portfolioHoldings)
+      .where(eq(portfolioHoldings.ownerId, ownerId)),
+    db
+      .select({
+        holding: portfolioHoldings,
+        instrument: instruments,
+      })
+      .from(portfolioHoldings)
+      .innerJoin(instruments, eq(instruments.id, portfolioHoldings.symbolId))
+      .where(eq(portfolioHoldings.ownerId, ownerId))
+      .orderBy(asc(portfolioHoldings.symbolId))
+      .limit(MAX_PORTFOLIO_PULSE_POSITIONS),
+  ]);
+
+  return {
+    holdings: holdingRows.map(({ holding, instrument }) =>
+      serializeHolding(holding, instrument),
+    ),
+    totalPositions: countRows[0]?.totalPositions ?? 0,
   };
 }
 

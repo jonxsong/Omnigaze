@@ -1,6 +1,6 @@
 # Omnigaze
 
-Omnigaze is a personalized market-intelligence workspace. Users search the active U.S. equity universe, track the companies they care about, record holdings, keep a durable intelligence inbox, generate a cited cross-watchlist **Daily Brief**, and inspect an evidence-backed **Omnigaze View** that separates facts, derived observations, and AI inference.
+Omnigaze is a personalized market-intelligence workspace. Users search the active U.S. equity universe, track the companies they care about, record holdings, inspect a live fixed-point **Portfolio Pulse**, keep a durable intelligence inbox, generate a cited cross-watchlist **Daily Brief**, and open an evidence-backed **Omnigaze View** that separates facts, derived observations, and AI inference.
 
 The public alpha uses provider-backed quotes, chart history, and licensed news whenever those capabilities are configured. The SEC adapter now has a distributed D1 Fair Access coordinator plus durable recent-filing cursor ingestion, but production egress remains fail-closed until an operator supplies a truthful monitored contact identity and explicitly enables both requested SEC capabilities. Every surface carries source, freshness, delay, and fallback metadata; illustrative fixtures are never labeled as live.
 
@@ -9,7 +9,7 @@ The public alpha uses provider-backed quotes, chart history, and licensed news w
 1. A user completes a local-first onboarding flow, searches the current asset catalog, and creates a personalized watchlist.
 2. Provider adapters ingest market data and licensed news; the guarded SEC adapter and its separate durable collector remain dormant unless their explicit activation and contact-identity requirements are satisfied.
 3. The pipeline normalizes, timestamps, hashes, and deduplicates every source event.
-4. Deterministic code calculates market changes and freshness.
+4. Deterministic fixed-point code calculates market changes, freshness, portfolio value, daily contribution, unrealized P&L, and concentration. Missing, stale, or demo quotes remain explicit exclusions rather than zero-valued positions.
 5. A fail-closed D1 guard checks owner-safe, model-aware evidence caches and atomically reserves the authenticated owner’s shared generation budget.
 6. On a cache miss, the OpenAI Agents SDK produces a typed interpretation constrained to known evidence IDs. A single-stock view is cached for at most five minutes; a Daily Brief is keyed by the exact watchlist, evidence revisions, prompt, model, and UTC date and is cached for at most six hours. Neither cache stores a raw prompt.
 7. Deterministic code—not the model—calculates any review zones and hypothetical share scenarios, and suppresses them when data is stale, demo, or insufficiently corroborated.
@@ -121,6 +121,7 @@ Copy `.env.example` for local development. Never commit `.env` files or API keys
 - Single-stock views and Daily Briefs share the default policy of 20 attempts per UTC day, 5 per rolling minute, and 2 concurrent leases per owner. Exact active retries are denied until the existing lease expires; cache hits and in-isolate followers spend no additional model budget.
 - AI output schemas do not include target-price or share-quantity fields. Scenario math is deterministic, versioned, and never places orders.
 - Portfolio quantities and cost basis cross APIs as decimal strings and persist as scaled integers.
+- Portfolio Pulse uses BigInt micro-units, returns decimal strings, bounds each calculation to 50 positions, reports omitted and excluded coverage, and never treats a missing quote as zero.
 - Facts, derived values, inferences, and user views remain visibly distinct.
 - A price movement is not treated as proof of causation.
 
@@ -137,6 +138,7 @@ The initial stateless tool surface includes:
 - `get_intelligence_inbox`
 - `get_alert_rules`
 - `get_portfolio`
+- `get_portfolio_pulse`
 - `get_decision_support`
 - `get_provider_status`
 - `run_intelligence_ingestion_tick` (closed operator tool; one provider page per call)

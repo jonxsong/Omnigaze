@@ -134,8 +134,15 @@ This alpha evaluates the inbox when an authenticated client requests or refreshe
 1. The onboarding client collects tracked symbols, owned quantities, optional cost basis, horizon, goals, risk comfort, and liquidity preferences.
 2. The asset catalog resolves ticker/name searches to canonical exchange-qualified IDs before persistence.
 3. Quantities and costs cross API boundaries as decimal strings and are stored as scaled integers, avoiding floating-point drift.
-4. The personalized dashboard joins watchlists, holdings, fresh market observations, and evidence events without requiring an order or brokerage connection.
-5. “Ask Omnigaze” receives only the user-approved scenario, normalized evidence, and deterministic math. Its narrative is validated for citations and non-prescriptive language before display.
+4. Portfolio Pulse loads at most 50 owner-scoped holdings, makes one bounded quote batch, and calculates value, daily contribution, covered cost basis, unrealized P&L, deterministic weights, and contributors in BigInt micro-units. Fresh live quotes are included; missing, stale, demo, fixture, mismatched, or invalid quotes remain visible as exclusions and never become zero-valued positions.
+5. The authenticated HTTP route and closed MCP tool derive owner identity from the session/header and return the same decimal-string contract. The browser applies that same pure calculator to its existing bounded 30-second quote batch for both account and device-local holdings, avoiding a second provider polling lane; no Pulse path invokes a model, gives trade instructions, or places an order.
+6. The personalized dashboard joins watchlists, holdings, fresh market observations, and evidence events without requiring an order or brokerage connection.
+7. “Ask Omnigaze” receives only the user-approved scenario, normalized evidence, and deterministic math. Its narrative is validated for citations and non-prescriptive language before display.
+
+| Surface | Purpose |
+| --- | --- |
+| `GET /api/portfolio/pulse` | Return authenticated owner-scoped Portfolio Pulse math with no-store semantics and explicit coverage. |
+| MCP `get_portfolio_pulse` | Return the identical bounded, non-trading contract to an authenticated AI client. |
 
 ## Personalized Daily Brief
 

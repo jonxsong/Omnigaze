@@ -195,6 +195,16 @@ const tools = [
     },
   },
   {
+    name: "get_portfolio_pulse",
+    description:
+      "Return deterministic mark-to-market portfolio math for the authenticated user's saved holdings. Demo, stale, fixture, and missing quotes remain explicit exclusions; this tool never uses AI, gives trade advice, or places orders.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
     name: "get_decision_support",
     description:
       "Return deterministic, evidence-gated research scenarios for an authenticated user's symbol. This tool never places an order; confidence means evidence coverage, not return probability.",
@@ -700,6 +710,24 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
           scope: "personal",
           identity: "authenticated",
           persistence: "server",
+          generatedAt: new Date().toISOString(),
+        });
+      }
+      case "get_portfolio_pulse": {
+        const parsed = z.object({}).strict().safeParse(args);
+        if (!parsed.success) return validationError(parsed.error);
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const { getPortfolioPulse } = await import(
+          "@/lib/services/portfolio-pulse"
+        );
+        return toolContent(await getPortfolioPulse(userId), {
+          scope: "personal",
+          identity: "authenticated",
+          purpose: "portfolio_pulse",
+          tradeExecutionAllowed: false,
           generatedAt: new Date().toISOString(),
         });
       }

@@ -83,6 +83,7 @@ import {
 import type { IntelligenceInboxCounts } from "@/lib/intelligence-inbox/contracts";
 import { OmnigazeViewDialog } from "@/components/omnigaze-view-dialog";
 import { DailyBriefCard } from "@/components/daily-brief-card";
+import { PortfolioPulseCard } from "@/components/portfolio-pulse-card";
 import { useAppLocale } from "@/components/app-locale";
 import {
   formatMarketDashboardCopy,
@@ -92,6 +93,12 @@ import {
   type WatchlistSyncMessageCode,
 } from "@/components/market-dashboard-copy";
 import type { AppLocale } from "@/lib/app-locale";
+import {
+  calculatePortfolioPulse,
+  MAX_PORTFOLIO_PULSE_POSITIONS,
+  type PortfolioPulseSnapshotInput,
+} from "@/lib/portfolio/portfolio-pulse";
+import { buildPortfolioPulseSnapshotBatches } from "@/lib/portfolio/portfolio-pulse-refresh";
 
 const MarketPriceChart = lazy(() => import("@/components/market-price-chart"));
 
@@ -826,6 +833,7 @@ export function MarketDashboard({
   const [watchlistSyncMessageCode, setWatchlistSyncMessageCode] =
     useState<WatchlistSyncMessageCode | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const marketSymbolHeadingRef = useRef<HTMLHeadingElement>(null);
   const preferencesTouchedRef = useRef(false);
   const intelligenceInboxSaveNonceRef = useRef(0);
   const accountPersistenceEnabled =
@@ -861,6 +869,59 @@ export function MarketDashboard({
     }
     return [...visible.values()];
   }, [holdings, watchlist]);
+  const portfolioPulseState = useMemo(() => {
+    const boundedHoldings = [...holdings]
+      .sort((left, right) =>
+        left.symbolId < right.symbolId
+          ? -1
+          : left.symbolId > right.symbolId
+            ? 1
+            : 0,
+      )
+      .slice(0, MAX_PORTFOLIO_PULSE_POSITIONS);
+    const snapshots = new Map<CanonicalSymbol, PortfolioPulseSnapshotInput>();
+    let loading = false;
+
+    for (const holding of boundedHoldings) {
+      const resource = snapshotResources[holding.symbolId];
+      if (!resource || resource.phase === "loading") loading = true;
+      if (!resource?.data || !resource.meta) continue;
+      const quoteTimestamp = Date.parse(resource.data.asOf);
+      const actualAgeSeconds = Number.isFinite(quoteTimestamp)
+        ? Math.max(0, Math.round((now - quoteTimestamp) / 1_000))
+        : resource.meta.freshness.ageSeconds;
+      snapshots.set(holding.symbolId, {
+        data: resource.data,
+        meta: {
+          ...resource.meta,
+          freshness: {
+            ...resource.meta.freshness,
+            asOf: resource.data.asOf,
+            ageSeconds: actualAgeSeconds,
+            state:
+              resource.phase === "error" &&
+              resource.meta.freshness.state === "fresh"
+                ? "stale"
+                : resource.meta.freshness.state,
+          },
+        },
+      });
+    }
+
+    try {
+      return {
+        data: calculatePortfolioPulse({
+          holdings: boundedHoldings,
+          snapshots,
+          calculatedAt: new Date(now).toISOString(),
+          sourcePositionCount: holdings.length,
+        }),
+        loading,
+      };
+    } catch {
+      return { data: null, loading: false };
+    }
+  }, [holdings, now, snapshotResources]);
   const hasMarketSelection = visibleInstruments.some(
     ({ id }) => id === selectedSymbol,
   );
@@ -1001,13 +1062,15 @@ export function MarketDashboard({
   }, [query, searchGeneration, showSearch]);
 
   useEffect(() => {
-    if (visibleInstruments.length === 0) return;
+    if (visibleInstruments.length === 0 && holdings.length === 0) return;
     let stopped = false;
     let timer: number | undefined;
     let activeController: AbortController | undefined;
-    const symbols = Array.from(
-      new Set([selectedSymbol, ...visibleInstruments.map(({ id }) => id)]),
-    ).slice(0, 12);
+    const batches = buildPortfolioPulseSnapshotBatches({
+      holdingSymbols: holdings.map(({ symbolId }) => symbolId),
+      selectedSymbol,
+      visibleSymbols: visibleInstruments.map(({ id }) => id),
+    });
 
     async function poll() {
       if (document.visibilityState === "hidden") {
@@ -1018,40 +1081,63 @@ export function MarketDashboard({
       activeController = new AbortController();
       const timeout = window.setTimeout(() => activeController?.abort(), 10_000);
       try {
-        const envelope = await fetchApi<SnapshotBatchResponse>(
-          `/api/market/snapshots?symbols=${encodeURIComponent(symbols.join(","))}`,
-          activeController.signal,
+        const results = await Promise.allSettled(
+          batches.map((batch) =>
+            fetchApi<SnapshotBatchResponse>(
+              `/api/market/snapshots?symbols=${encodeURIComponent(batch.join(","))}`,
+              activeController!.signal,
+            ),
+          ),
         );
         if (stopped) return;
 
-        const itemsBySymbol = new Map(
-          envelope.data.map((item) => [item.symbolId, item]),
-        );
         const receivedAt = new Date().toISOString();
         setSnapshotResources((current) => {
           const next = { ...current };
-          for (const symbol of symbols) {
-            const item = itemsBySymbol.get(symbol);
-            if (
-              item?.status === "ready" &&
-              item.data.symbolId === symbol
-            ) {
-              next[symbol] = {
-                data: item.data,
-                meta: item.meta,
-                phase: "ready",
-                receivedAt,
-              };
+          for (let index = 0; index < batches.length; index += 1) {
+            const batch = batches[index] ?? [];
+            const result = results[index];
+            if (!result || result.status === "rejected") {
+              const message =
+                result?.status === "rejected" && result.reason instanceof Error
+                  ? result.reason.message
+                  : "Snapshot request failed.";
+              for (const symbol of batch) {
+                next[symbol] = {
+                  ...next[symbol],
+                  phase: "error",
+                  error: message,
+                };
+              }
               continue;
             }
-            next[symbol] = {
-              ...next[symbol],
-              phase: "error",
-              error:
-                item?.status === "error"
-                  ? item.error
-                  : "Snapshot identity did not match the requested symbol.",
-            };
+
+            const itemsBySymbol = new Map(
+              result.value.data.map((item) => [item.symbolId, item]),
+            );
+            for (const symbol of batch) {
+              const item = itemsBySymbol.get(symbol);
+              if (
+                item?.status === "ready" &&
+                item.data.symbolId === symbol
+              ) {
+                next[symbol] = {
+                  data: item.data,
+                  meta: item.meta,
+                  phase: "ready",
+                  receivedAt,
+                };
+                continue;
+              }
+              next[symbol] = {
+                ...next[symbol],
+                phase: "error",
+                error:
+                  item?.status === "error"
+                    ? item.error
+                    : "Snapshot identity did not match the requested symbol.",
+              };
+            }
           }
           return next;
         });
@@ -1059,7 +1145,7 @@ export function MarketDashboard({
         if (stopped) return;
         setSnapshotResources((current) => {
           const next = { ...current };
-          for (const symbol of symbols) {
+          for (const symbol of batches.flat()) {
             next[symbol] = {
               ...next[symbol],
               phase: "error",
@@ -1086,7 +1172,7 @@ export function MarketDashboard({
       activeController?.abort();
       if (timer) window.clearTimeout(timer);
     };
-  }, [refreshGeneration, selectedSymbol, visibleInstruments]);
+  }, [holdings, refreshGeneration, selectedSymbol, visibleInstruments]);
 
   useEffect(() => {
     if (!hasMarketSelection) return;
@@ -1540,6 +1626,17 @@ export function MarketDashboard({
     setShowSearch(false);
     setShowMobileWatchlist(false);
     persistAnonymousPreferences(watchlist, symbol, timeframe);
+  }
+
+  function selectPulsePosition(symbol: CanonicalSymbol) {
+    selectStock(symbol);
+    window.requestAnimationFrame(() => {
+      const heading = marketSymbolHeadingRef.current;
+      heading?.focus({ preventScroll: true });
+      document
+        .getElementById("market-symbol-detail")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   function openStockSearch() {
@@ -2364,6 +2461,19 @@ export function MarketDashboard({
             </div>
           </section>
 
+          <PortfolioPulseCard
+            locale={locale}
+            pulse={portfolioPulseState.data}
+            holdingCount={holdings.length}
+            loading={portfolioPulseState.loading}
+            unavailable={portfolioAvailability === "unavailable"}
+            onAddPosition={() => {
+              if (hasMarketSelection) openPortfolioWorkspace("position");
+              else openStockSearch();
+            }}
+            onSelectPosition={selectPulsePosition}
+          />
+
           <DailyBriefCard session={session} />
 
           {visibleInstruments.length === 0 ? (
@@ -2379,12 +2489,14 @@ export function MarketDashboard({
             </section>
           ) : (
           <>
-          <div className="symbol-header">
+          <div id="market-symbol-detail" className="symbol-header" aria-live="polite">
             <div className="symbol-identity">
               <span className="symbol-avatar large">{selectedInstrument.ticker[0]}</span>
               <div>
                 <div className="ticker-line">
-                  <h2>{selectedInstrument.ticker}</h2>
+                  <h2 ref={marketSymbolHeadingRef} tabIndex={-1}>
+                    {selectedInstrument.ticker}
+                  </h2>
                   <span>{selectedInstrument.exchange}</span>
                   <button type="button" aria-label={t("favoriteTicker", { ticker: selectedInstrument.ticker })}>
                     <Star size={16} />
@@ -2563,6 +2675,8 @@ export function MarketDashboard({
                             <a href={feedItem.sourceUrl} target="_blank" rel="noreferrer">
                               {t("openSource")}
                             </a>
+                          ) : eventIsLive ? (
+                            <span>{t("sourceUnavailable")}</span>
                           ) : (
                             <button type="button">{t("inspectDemoEvidence")}</button>
                           )}

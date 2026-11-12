@@ -59,6 +59,7 @@ export function createHealthHandler(
             : []),
           "evidence-grounded-ai",
           "portfolio-v1",
+          "portfolio-pulse-v1",
           "deterministic-decision-scenarios",
           "durable-intelligence-inbox",
           "bounded-cursor-ingestion",

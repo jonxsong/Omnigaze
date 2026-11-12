@@ -38,6 +38,7 @@ describe("MCP 2026-07-28 contract", () => {
         "get_omnigaze_view",
         "get_daily_brief",
         "get_watchlist_dashboard",
+        "get_portfolio_pulse",
       ]),
     );
   });

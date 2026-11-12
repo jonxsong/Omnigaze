@@ -9,6 +9,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Debounced search across the active U.S. equity catalog during onboarding and from the dashboard.
 - [x] Durable arbitrary-stock descriptors across anonymous reloads, with server-side canonical verification before authenticated writes.
 - [x] Personalized watchlist and holdings dashboard with optimistic persistence and conflict recovery.
+- [x] Bilingual Portfolio Pulse with fixed-point market value, daily contribution, unrealized P&L, concentration, top contributors, explicit quote exclusions, and HTTP/MCP parity.
 - [x] Intelligence timeline with neutral handling of controversial executive, governance, legal, and reputational events.
 - [x] Durable intelligence inbox with read, saved, dismissed, and corrected-since-read state.
 - [x] Explicit in-app alert rules with idempotent delivery records.

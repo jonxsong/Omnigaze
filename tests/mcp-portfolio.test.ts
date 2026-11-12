@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getUserPortfolio: vi.fn(),
+  getPortfolioPulse: vi.fn(),
   getPortfolioDecisionSupport: vi.fn(),
 }));
 
@@ -11,6 +12,10 @@ vi.mock("@/lib/repositories/portfolio", () => ({
 
 vi.mock("@/lib/services/portfolio-decision-support", () => ({
   getPortfolioDecisionSupport: mocks.getPortfolioDecisionSupport,
+}));
+
+vi.mock("@/lib/services/portfolio-pulse", () => ({
+  getPortfolioPulse: mocks.getPortfolioPulse,
 }));
 
 import { POST } from "@/app/mcp/route";
@@ -50,10 +55,48 @@ async function callTool(
   };
 }
 
+async function listTools() {
+  const response = await POST(
+    new Request("https://omnigaze.test/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+      }),
+    }),
+  );
+  const body = (await response.json()) as {
+    result: {
+      tools: Array<{
+        name: string;
+        inputSchema: Record<string, unknown>;
+      }>;
+    };
+  };
+  return body.result.tools;
+}
+
 describe("portfolio MCP tools", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it.each(["get_portfolio", "get_decision_support"])(
+  it("advertises portfolio pulse as a closed, owner-free tool", async () => {
+    const tools = await listTools();
+    const pulseTool = tools.find((tool) => tool.name === "get_portfolio_pulse");
+
+    expect(pulseTool).toMatchObject({
+      name: "get_portfolio_pulse",
+      inputSchema: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
+    });
+    expect(JSON.stringify(pulseTool)).not.toContain("owner_id");
+  });
+
+  it.each(["get_portfolio", "get_portfolio_pulse", "get_decision_support"])(
     "requires trusted identity for %s",
     async (name) => {
       const response = await callTool(
@@ -97,6 +140,62 @@ describe("portfolio MCP tools", () => {
     expect(response.result.structuredContent).toEqual(response.content);
   });
 
+  it("returns the shared partial pulse contract without exposing owner identity", async () => {
+    const pulse = {
+      currency: "USD",
+      asOf: "2026-11-12T16:59:45.000Z",
+      tradeExecutionAllowed: false,
+      modelOutputRole: "portfolio_math_only",
+      totals: {
+        currentValue: "1500",
+        previousCloseValue: "1470",
+        dayPnl: "30",
+        dayChangePercent: "2.040816",
+        coveredCostBasis: "1200",
+        coveredUnrealizedPnl: "300",
+      },
+      coverage: {
+        status: "partial",
+        totalPositions: 2,
+        consideredPositions: 2,
+        omittedPositions: 0,
+        truncated: false,
+        includedPositions: 1,
+        excludedPositions: 1,
+        delayedPositions: 0,
+        costBasisPositions: 1,
+        costBasisStatus: "complete",
+      },
+      positions: [
+        { symbolId: "NASDAQ:NVDA", included: true, currentValue: "1500" },
+        {
+          symbolId: "NASDAQ:MSFT",
+          included: false,
+          exclusionReason: "missing_quote",
+        },
+      ],
+      contributors: { positive: [], negative: [] },
+    };
+    mocks.getPortfolioPulse.mockResolvedValue(pulse);
+
+    const response = await callTool("get_portfolio_pulse", {}, "owner-a");
+
+    expect(mocks.getPortfolioPulse).toHaveBeenCalledOnce();
+    expect(mocks.getPortfolioPulse).toHaveBeenCalledWith("owner-a");
+    expect(response.response.headers.get("cache-control")).toBe("no-store");
+    expect(response.content).toMatchObject({
+      data: pulse,
+      meta: {
+        scope: "personal",
+        identity: "authenticated",
+        purpose: "portfolio_pulse",
+        tradeExecutionAllowed: false,
+      },
+    });
+    expect(response.result.structuredContent).toEqual(response.content);
+    expect(JSON.stringify(response.content)).not.toContain("owner-a");
+  });
+
   it("enforces the advertised closed schema for portfolio reads", async () => {
     const response = await callTool(
       "get_portfolio",
@@ -109,6 +208,18 @@ describe("portfolio MCP tools", () => {
       error: "Invalid tool arguments.",
     });
     expect(mocks.getUserPortfolio).not.toHaveBeenCalled();
+  });
+
+  it("enforces a closed, owner-free schema for portfolio pulse reads", async () => {
+    const response = await callTool(
+      "get_portfolio_pulse",
+      { owner_id: "someone-else", limit: 1 },
+      "owner-a",
+    );
+
+    expect(response.result.isError).toBe(true);
+    expect(response.content).toMatchObject({ error: "Invalid tool arguments." });
+    expect(mocks.getPortfolioPulse).not.toHaveBeenCalled();
   });
 
   it("exposes non-executing decision scenarios through the same domain service", async () => {
@@ -228,6 +339,41 @@ describe("portfolio MCP tools", () => {
     const serializedLogs = JSON.stringify(errorSpy.mock.calls);
     expect(serializedLogs).not.toContain("sensitive database binding detail");
     expect(serializedLogs).not.toContain("owner-a");
+
+    errorSpy.mockRestore();
+  });
+
+  it("redacts portfolio pulse failures with a tool-scoped request id", async () => {
+    const errorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    mocks.getPortfolioPulse.mockRejectedValue(
+      new Error("sensitive market provider credential detail"),
+    );
+
+    const response = await callTool("get_portfolio_pulse", {}, "owner-a");
+
+    expect(response.result.isError).toBe(true);
+    expect(response.content).toMatchObject({
+      error: "Tool execution failed.",
+      details: {
+        code: "tool_execution_failed",
+        requestId: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+        ),
+      },
+    });
+    expect(JSON.stringify(response.content)).not.toContain("sensitive");
+    const requestId = (response.content.details as { requestId: string })
+      .requestId;
+    expect(errorSpy).toHaveBeenCalledWith(
+      "omnigaze.unexpected_failure",
+      expect.objectContaining({
+        operation: "mcp.get_portfolio_pulse",
+        requestId,
+      }),
+    );
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain("credential");
 
     errorSpy.mockRestore();
   });
