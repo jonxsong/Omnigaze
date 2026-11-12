@@ -20,11 +20,12 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Automatic authenticated Today Across Your Watchlist card with strict client validation, bounded cross-symbol evidence, original-language sources, honest live/durable provenance, and zero model requests.
 - [x] Search discovery foundation: canonical metadata, JSON-LD, `robots.txt`, and `sitemap.xml`.
 - [x] One persisted English/Chinese preference across the landing page, onboarding, dashboard, inbox, Daily Brief, Omnigaze View, and portfolio research workspaces.
-- [x] Public bilingual Privacy, Terms, and Data & deletion pages with accessible landing/dashboard links, transparent provider/AI disclosures, and an authenticated owner-scoped deletion control.
+- [x] Public bilingual Privacy, Terms, and Data & deletion pages with accessible landing/dashboard links, transparent provider/AI disclosures, an authenticated bounded JSON saved-data snapshot, and an owner-scoped deletion control.
 
 ## Market data and pipelines
 
 - [x] Alpaca-backed active-equity catalog, quotes, historical bars, and licensed news adapters.
+- [x] Database-clocked D1 egress admission and shared cooldown protection across separate Alpaca quote, chart, catalog, interactive-news, and ingestion-news budgets, with fail-closed provider suppression and no IP or owner storage.
 - [x] One bounded multi-symbol quote request for up to 12 dashboard symbols, with ordered partial results and per-symbol fallback metadata.
 - [x] Explicit source, coverage, delay, observation time, response time, and fallback labels throughout the UI.
 - [x] Move Lens uses one bounded selected/SPY/QQQ quote batch plus one concurrent selected-symbol evidence read; missing, stale, demo, invalid, mismatched, or incomparable legs remain explicit and never become fixture comparisons.
@@ -76,6 +77,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Deterministic server-only HTTP success sampling with unsampled error/slow paths, fully emitted MCP completions, and a no-application-retention policy for materially higher traffic.
 - [x] Localize product controls, accessibility labels, validation, and safe error states while preserving tickers, company names, and cited source material in their original language.
 - [x] Same-origin, nonce-bound account-data deletion erases owner-scoped D1 records in one batch, clears known device keys, and signs out without claiming permanent account closure or deleting shared evidence.
+- [x] Authenticated same-origin JSON export provides a deterministic, redacted, owner-filtered saved-data snapshot with decimal-string holdings and honest per-section truncation metadata; it is intentionally browser-only and not described as a complete account archive.
 
 ## Move Lens limitations
 

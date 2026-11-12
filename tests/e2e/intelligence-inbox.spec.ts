@@ -188,7 +188,9 @@ async function ensureNvdaTracked(request: APIRequestContext) {
 }
 
 async function signInWithNvda(page: Page, request: APIRequestContext) {
-  await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+  await page.goto("/signin-with-chatgpt?return_to=/dashboard", {
+    waitUntil: "domcontentloaded",
+  });
   await expect(page).toHaveURL(/\/dashboard$/);
   await ensureNvdaTracked(request);
   await page.reload();
@@ -211,7 +213,7 @@ test.describe("Omnigaze intelligence inbox", () => {
       await route.fulfill({ status: 500, body: "unexpected anonymous rules call" });
     });
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     const trigger = page.getByTestId("intelligence-inbox-trigger");
     await expect(trigger).toBeVisible();

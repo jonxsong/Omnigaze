@@ -1,17 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertTriangle,
-  ArrowRight,
-  Clock3,
-  ExternalLink,
-  Globe2,
-  LoaderCircle,
-  Newspaper,
-  RefreshCw,
-  ShieldCheck,
-} from "lucide-react";
+import AlertTriangle from "lucide-react/icons/alert-triangle";
+import ArrowRight from "lucide-react/icons/arrow-right";
+import Clock3 from "lucide-react/icons/clock-3";
+import ExternalLink from "lucide-react/icons/external-link";
+import Globe2 from "lucide-react/icons/globe-2";
+import LoaderCircle from "lucide-react/icons/loader-circle";
+import Newspaper from "lucide-react/icons/newspaper";
+import RefreshCw from "lucide-react/icons/refresh-cw";
+import ShieldCheck from "lucide-react/icons/shield-check";
 import { useAppLocale } from "@/components/app-locale";
 import {
   personalTodayCopy,

@@ -14,11 +14,18 @@ import {
   type MarketDataProvider,
   type PaginatedIntelligenceSourceProvider,
 } from "./contracts";
+import {
+  boundedProviderRetryAfterSeconds,
+  ProviderEgressGuardError,
+  type ProviderEgressAdmissionGuard,
+  type ProviderEgressBucket,
+} from "./provider-egress-guard";
 
-type AlpacaConfig = {
+export type AlpacaProviderConfig = {
   keyId?: string;
   secretKey?: string;
   feed?: "iex" | "sip" | "delayed_sip";
+  egressGuard?: ProviderEgressAdmissionGuard;
 };
 
 export type HistoricalRange = HistoricalMarketSeries["timeframe"];
@@ -75,7 +82,7 @@ function tickerFromSymbol(symbol: CanonicalSymbol) {
 function normalizeSnapshot(
   symbol: CanonicalSymbol,
   data: AlpacaSnapshotPayload,
-  feed: NonNullable<AlpacaConfig["feed"]>,
+  feed: NonNullable<AlpacaProviderConfig["feed"]>,
 ): MarketSnapshot {
   const price = data.latestTrade?.p ?? data.dailyBar?.c;
   const previousClose = data.prevDailyBar?.c;
@@ -121,6 +128,29 @@ function normalizedTimestamp(value: string, field: string) {
   return new Date(parsed).toISOString();
 }
 
+function retryAfterSeconds(response: Response) {
+  const value = response.headers.get("retry-after");
+  if (value) {
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return boundedProviderRetryAfterSeconds(seconds);
+    }
+    const timestamp = Date.parse(value);
+    if (Number.isFinite(timestamp)) {
+      return boundedProviderRetryAfterSeconds(
+        Math.max(0, Math.ceil((timestamp - Date.now()) / 1_000)),
+      );
+    }
+  }
+  const resetAtSeconds = Number(response.headers.get("x-ratelimit-reset"));
+  if (Number.isFinite(resetAtSeconds) && resetAtSeconds > 0) {
+    return boundedProviderRetryAfterSeconds(
+      Math.max(0, Math.ceil(resetAtSeconds - Date.now() / 1_000)),
+    );
+  }
+  return boundedProviderRetryAfterSeconds(undefined);
+}
+
 function bytesToHex(bytes: ArrayBuffer) {
   return [...new Uint8Array(bytes)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
@@ -160,7 +190,7 @@ export class AlpacaProvider
 {
   readonly name = "alpaca";
 
-  constructor(private readonly config: AlpacaConfig) {}
+  constructor(private readonly config: AlpacaProviderConfig) {}
 
   private headers() {
     if (!this.config.keyId || !this.config.secretKey) {
@@ -176,12 +206,29 @@ export class AlpacaProvider
     };
   }
 
+  private async request(
+    input: string | URL,
+    bucket: ProviderEgressBucket,
+    init: Omit<RequestInit, "headers">,
+  ) {
+    const headers = this.headers();
+    await this.config.egressGuard?.acquire(bucket);
+    const response = await fetch(input, { ...init, headers });
+    if (response.status === 429 && this.config.egressGuard) {
+      const retryAfter = retryAfterSeconds(response);
+      await this.config.egressGuard.imposeCooldown(bucket, retryAfter);
+      throw new ProviderEgressGuardError("cooldown", bucket, retryAfter);
+    }
+    return response;
+  }
+
   async getSnapshot(symbol: CanonicalSymbol): Promise<MarketSnapshot> {
     const ticker = tickerFromSymbol(symbol);
     const feed = this.config.feed ?? "iex";
-    const response = await fetch(
+    const response = await this.request(
       `https://data.alpaca.markets/v2/stocks/${encodeURIComponent(ticker)}/snapshot?feed=${feed}`,
-      { headers: this.headers(), signal: AbortSignal.timeout(8_000) },
+      "alpaca_quotes_interactive",
+      { signal: AbortSignal.timeout(ALPACA_REQUEST_TIMEOUT_MS) },
     );
 
     if (!response.ok) {
@@ -205,8 +252,7 @@ export class AlpacaProvider
     );
     url.searchParams.set("feed", feed);
 
-    const response = await fetch(url, {
-      headers: this.headers(),
+    const response = await this.request(url, "alpaca_quotes_interactive", {
       signal: AbortSignal.timeout(8_000),
     });
     if (!response.ok) {
@@ -253,8 +299,7 @@ export class AlpacaProvider
     url.searchParams.set("feed", feed);
     url.searchParams.set("sort", "asc");
 
-    const response = await fetch(url, {
-      headers: this.headers(),
+    const response = await this.request(url, "alpaca_bars_interactive", {
       signal: AbortSignal.timeout(8_000),
     });
     if (!response.ok) {
@@ -351,8 +396,7 @@ export class AlpacaProvider
       url.searchParams.set("sort", "desc");
       if (pageToken) url.searchParams.set("page_token", pageToken);
 
-      const response = await fetch(url, {
-        headers: this.headers(),
+      const response = await this.request(url, "alpaca_news_interactive", {
         signal,
       });
       if (!response.ok) {
@@ -478,8 +522,7 @@ export class AlpacaProvider
     const signal = options.signal
       ? AbortSignal.any([options.signal, timeoutSignal])
       : timeoutSignal;
-    const response = await fetch(url, {
-      headers: this.headers(),
+    const response = await this.request(url, "alpaca_news_ingestion", {
       signal,
     });
     if (!response.ok) {

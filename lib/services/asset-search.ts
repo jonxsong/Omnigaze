@@ -6,6 +6,10 @@ import {
   type AlpacaAssetProviderErrorCode,
   type AlpacaUsEquityAsset,
 } from "@/lib/providers/alpaca-assets";
+import {
+  createProviderEgressGuard,
+  type ProviderEgressAdmissionGuard,
+} from "@/lib/providers/provider-egress-guard";
 
 export const ASSET_CATALOG_FRESH_MS = 60 * 60 * 1_000;
 export const ASSET_CATALOG_MAX_STALE_MS = 24 * 60 * 60 * 1_000;
@@ -233,11 +237,17 @@ export class AssetSearchService {
 
 export function createAssetSearchService(
   environment: Record<string, string | undefined> = process.env,
+  dependencies: {
+    createProviderEgressGuard?: () => ProviderEgressAdmissionGuard;
+  } = {},
 ) {
   const provider = new AlpacaAssetCatalogProvider({
     keyId: environment.ALPACA_API_KEY_ID,
     secretKey: environment.ALPACA_API_SECRET_KEY,
     baseUrl: environment.ALPACA_TRADING_API_BASE_URL,
+    egressGuard:
+      dependencies.createProviderEgressGuard?.() ??
+      createProviderEgressGuard(),
   });
   return new AssetSearchService(provider);
 }

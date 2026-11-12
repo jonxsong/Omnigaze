@@ -143,7 +143,7 @@ test.describe("Today across your watchlist", () => {
       await route.abort("failed");
     });
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     const card = page.getByTestId("personal-today-card");
     await expect(card).toBeVisible();
@@ -197,7 +197,9 @@ test.describe("Today across your watchlist", () => {
       await route.abort("failed");
     });
 
-    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard", {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page).toHaveURL(/\/dashboard$/);
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     const card = page.getByTestId("personal-today-card");
@@ -271,7 +273,9 @@ test.describe("Today across your watchlist", () => {
       });
     });
 
-    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard", {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page).toHaveURL(/\/dashboard$/);
     const card = page.getByTestId("personal-today-card");
 

@@ -134,7 +134,7 @@ test.describe("Portfolio Pulse", () => {
       );
     }, asOf);
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     const pulse = page.getByTestId("portfolio-pulse");
     await expect(pulse.getByText("$2,400.00", { exact: true }).first()).toBeVisible();
@@ -171,7 +171,9 @@ test.describe("Portfolio Pulse", () => {
     page,
   }) => {
     test.setTimeout(75_000);
-    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard", {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page).toHaveURL(/\/dashboard$/);
 
     const portfolioResponse = await context.request.get("/api/portfolio");

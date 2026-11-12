@@ -265,7 +265,7 @@ test.describe("Move Lens", () => {
       await route.abort("failed");
     });
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     const card = page.getByTestId("move-lens-card");
     await expect(card).toHaveAttribute("data-status", "complete");
@@ -348,7 +348,7 @@ test.describe("Move Lens", () => {
     ]);
     const counters = await installPublicMoveLensRoutes(page, () => envelope);
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     const card = page.getByTestId("move-lens-card");
     await expect(card).toHaveAttribute("data-status", "partial");
     await expect(card.getByText("+3.00 pts", { exact: true })).toBeVisible();

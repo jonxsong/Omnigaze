@@ -8,6 +8,10 @@ import {
 } from "@/lib/providers/alpaca";
 import type { PaginatedIntelligenceSourceProvider } from "@/lib/providers/contracts";
 import {
+  createProviderEgressGuard,
+  type ProviderEgressAdmissionGuard,
+} from "@/lib/providers/provider-egress-guard";
+import {
   createBoundedProviderIngestionService,
   IngestionTickError,
   type IngestionRepositoryPort,
@@ -237,6 +241,9 @@ export function createIntelligenceIngestionService(
 
 export function createConfiguredAlpacaIngestionProvider(
   environment: Record<string, string | undefined> = process.env,
+  dependencies: {
+    createProviderEgressGuard?: () => ProviderEgressAdmissionGuard;
+  } = {},
 ) {
   return new AlpacaProvider({
     keyId: environment.ALPACA_API_KEY_ID,
@@ -246,6 +253,9 @@ export function createConfiguredAlpacaIngestionProvider(
       environment.ALPACA_DATA_FEED === "delayed_sip"
         ? environment.ALPACA_DATA_FEED
         : "iex",
+    egressGuard:
+      dependencies.createProviderEgressGuard?.() ??
+      createProviderEgressGuard(),
   });
 }
 

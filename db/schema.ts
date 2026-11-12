@@ -804,6 +804,36 @@ export const secFairAccessControl = sqliteTable(
 );
 
 /**
+ * Application-wide provider request budgets. Each row is an operation class,
+ * never a person, device, address, symbol, or request. D1's clock owns both
+ * fixed-window rollover and provider cooldowns across Worker isolates.
+ */
+export const providerEgressGuard = sqliteTable(
+  "provider_egress_guard",
+  {
+    bucket: text("bucket").primaryKey(),
+    windowStartedAtMs: integer("window_started_at_ms").notNull().default(0),
+    requestCount: integer("request_count").notNull().default(0),
+    cooldownUntilMs: integer("cooldown_until_ms").notNull().default(0),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  () => [
+    check(
+      "provider_egress_guard_bucket_check",
+      sql.raw(
+        "bucket IN ('alpaca_quotes_interactive', 'alpaca_bars_interactive', 'alpaca_catalog_interactive', 'alpaca_news_interactive', 'alpaca_news_ingestion')",
+      ),
+    ),
+    check(
+      "provider_egress_guard_state_check",
+      sql.raw(
+        "window_started_at_ms >= 0 AND request_count >= 0 AND cooldown_until_ms >= 0 AND julianday(updated_at) IS NOT NULL",
+      ),
+    ),
+  ],
+);
+
+/**
  * `source_events.symbol_id` predates multi-symbol provider events. Keep that
  * column untouched and add a monotonic many-to-many mapping for new ingestion.
  */

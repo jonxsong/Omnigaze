@@ -95,7 +95,7 @@ describe("asset search API", () => {
     });
   });
 
-  it("returns a sanitized 503 with no demo fallback when no catalog is usable", async () => {
+  it("returns a sanitized 429 with retry guidance when no catalog is usable", async () => {
     const search = vi.fn().mockRejectedValue(
       new AlpacaAssetProviderError("provider_rate_limited", 429, 12),
     );
@@ -104,7 +104,7 @@ describe("asset search API", () => {
     const response = await handler(request("?q=nvda"));
     const body = await response.json();
 
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(429);
     expect(response.headers.get("Retry-After")).toBe("12");
     expect(response.headers.get("Cache-Control")).toBe("no-store");
     expect(body).toEqual({
@@ -113,6 +113,22 @@ describe("asset search API", () => {
     });
     expect(JSON.stringify(body)).not.toContain("demo");
     expect(JSON.stringify(body)).not.toContain("provider_rate_limited");
+  });
+
+  it("adds bounded retry guidance when a rate-limit error has no provider header", async () => {
+    const handler = createAssetSearchHandler({
+      search: vi
+        .fn()
+        .mockRejectedValue(
+          new AlpacaAssetProviderError("provider_rate_limited", 429),
+        ),
+    });
+
+    const response = await handler(request("?q=nvda"));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("60");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
   it("does not leak unexpected failure details", async () => {

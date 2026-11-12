@@ -22,13 +22,14 @@ function invalidQuery(message: string) {
 
 function unavailable(error: unknown) {
   const headers = new Headers(noStoreHeaders);
-  if (
+  const rateLimited =
     error instanceof AlpacaAssetProviderError &&
-    error.retryAfterSeconds !== undefined
-  ) {
+    error.code === "provider_rate_limited";
+  if (rateLimited) {
+    const retryAfterSeconds = error.retryAfterSeconds ?? 60;
     headers.set(
       "Retry-After",
-      String(Math.min(Math.max(error.retryAfterSeconds, 0), 86_400)),
+      String(Math.min(Math.max(retryAfterSeconds, 1), 86_400)),
     );
   }
 
@@ -37,7 +38,7 @@ function unavailable(error: unknown) {
       error: "The asset catalog is temporarily unavailable.",
       code: "asset_catalog_unavailable",
     },
-    { status: 503, headers },
+    { status: rateLimited ? 429 : 503, headers },
   );
 }
 

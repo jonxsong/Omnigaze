@@ -140,7 +140,7 @@ test.describe("Personal Daily Brief", () => {
       await route.abort("failed");
     });
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
 
     const card = page.getByTestId("daily-brief-card");
@@ -169,7 +169,9 @@ test.describe("Personal Daily Brief", () => {
   test("renders a cited multi-symbol brief and preserves safe retry identity", async ({
     page,
   }) => {
-    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard", {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page).toHaveURL(/\/dashboard$/);
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
 
@@ -273,7 +275,9 @@ test.describe("Personal Daily Brief", () => {
   });
 
   test("rejects an envelope with unrecognized client fields", async ({ page }) => {
-    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard", {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page).toHaveURL(/\/dashboard$/);
 
     const invalidEnvelope = dailyBriefEnvelope();
@@ -314,7 +318,9 @@ test.describe("Personal Daily Brief", () => {
       });
     });
 
-    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard", {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page).toHaveURL(/\/dashboard$/);
     const card = page.getByTestId("daily-brief-card");
     await card.getByRole("button", { name: "生成我的每日简报" }).click();

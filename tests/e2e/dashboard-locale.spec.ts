@@ -13,7 +13,7 @@ async function startInChinese(page: import("@playwright/test").Page) {
     ({ key, value }) => window.localStorage.setItem(key, value),
     { key: localeKey, value: "zh-CN" },
   );
-  await page.goto("/dashboard");
+  await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
   await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
 }
 
@@ -48,7 +48,9 @@ async function ensureNvdaTracked(request: APIRequestContext) {
 }
 
 async function signInWithNvda(page: Page, request: APIRequestContext) {
-  await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+  await page.goto("/signin-with-chatgpt?return_to=/dashboard", {
+    waitUntil: "domcontentloaded",
+  });
   await expect(page).toHaveURL(/\/dashboard$/);
   await ensureNvdaTracked(request);
   await page.reload();
@@ -294,7 +296,7 @@ test.describe("Omnigaze dashboard locale", () => {
   }) => {
     const context = await browser.newContext({ javaScriptEnabled: false });
     const page = await context.newPage();
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
 
     await expect(page.locator("main.omnigaze-shell")).toBeVisible();
     await expect(

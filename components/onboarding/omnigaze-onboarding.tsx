@@ -10,22 +10,20 @@ import {
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import {
-  ArrowLeft,
-  ArrowRight,
-  Check,
-  CheckCircle2,
-  CircleDollarSign,
-  Eye,
-  LoaderCircle,
-  LockKeyhole,
-  Search,
-  ShieldCheck,
-  Sparkles,
-  Target,
-  Trash2,
-  WalletCards,
-} from "lucide-react";
+import ArrowLeft from "lucide-react/icons/arrow-left";
+import ArrowRight from "lucide-react/icons/arrow-right";
+import Check from "lucide-react/icons/check";
+import CheckCircle2 from "lucide-react/icons/check-circle-2";
+import CircleDollarSign from "lucide-react/icons/circle-dollar-sign";
+import Eye from "lucide-react/icons/eye";
+import LoaderCircle from "lucide-react/icons/loader-circle";
+import LockKeyhole from "lucide-react/icons/lock-keyhole";
+import Search from "lucide-react/icons/search";
+import ShieldCheck from "lucide-react/icons/shield-check";
+import Sparkles from "lucide-react/icons/sparkles";
+import Target from "lucide-react/icons/target";
+import Trash2 from "lucide-react/icons/trash-2";
+import WalletCards from "lucide-react/icons/wallet-cards";
 import { useAppLocale } from "@/components/app-locale";
 import { stockWorkspaces } from "@/lib/demo-market-data";
 import type { CanonicalSymbol } from "@/lib/market-types";

@@ -4,7 +4,7 @@ test.describe("Omnigaze public experience", () => {
   test("landing page exposes its primary navigation and dashboard CTA", async ({
     page,
   }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "domcontentloaded" });
 
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
     await expect(
@@ -23,7 +23,7 @@ test.describe("Omnigaze public experience", () => {
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "domcontentloaded" });
 
     const footerNavigation = page.getByRole("navigation", {
       name: "Footer navigation",
@@ -52,7 +52,9 @@ test.describe("Omnigaze public experience", () => {
       page.getByRole("heading", { level: 1, name: "用清晰的语言说明隐私。" }),
     ).toBeVisible();
 
-    await page.goto("/data-and-deletion");
+    await page.goto("/data-and-deletion", {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     await expect(page.locator("main")).toHaveAttribute("lang", "zh-CN");
     await expect(page.getByRole("link", { name: "登录并管理数据" })).toHaveAttribute(
@@ -68,7 +70,9 @@ test.describe("Omnigaze public experience", () => {
     const confirmation = "ERASE MY OMNIGAZE DATA";
     let deletionBody: unknown = null;
 
-    await page.goto("/signin-with-chatgpt?return_to=/data-and-deletion");
+    await page.goto("/signin-with-chatgpt?return_to=/data-and-deletion", {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page).toHaveURL(/\/data-and-deletion$/);
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     await page.evaluate(() => {
@@ -120,7 +124,7 @@ test.describe("Omnigaze public experience", () => {
   test("How It Works steps disclose the selected evidence workflow", async ({
     page,
   }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
 
     const heading = page.getByRole("heading", {
@@ -143,7 +147,7 @@ test.describe("Omnigaze public experience", () => {
   });
 
   test("dashboard route loads the market workspace", async ({ page }) => {
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
 
     await expect(page.getByRole("link", { name: "Omnigaze home" })).toBeVisible();
@@ -164,7 +168,7 @@ test.describe("Omnigaze public experience", () => {
       await route.abort();
     });
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     await page.getByRole("button", { name: "Ask Omnigaze", exact: true }).click();
 
@@ -184,7 +188,9 @@ test.describe("Omnigaze public experience", () => {
     context,
     page,
   }) => {
-    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard", {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page).toHaveURL(/\/dashboard$/);
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
 
@@ -423,7 +429,7 @@ test.describe("Omnigaze public experience", () => {
       });
     });
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     await page.getByRole("button", { name: "View data status" }).click();
 
@@ -503,7 +509,7 @@ test.describe("Omnigaze public experience", () => {
       });
     });
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     await page.getByRole("button", { name: "View data status" }).click();
 
@@ -596,7 +602,7 @@ test.describe("Omnigaze public experience", () => {
       });
     });
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     await page.getByRole("button", { name: "View data status" }).click();
 
@@ -742,7 +748,7 @@ test.describe("Omnigaze public experience", () => {
       });
     });
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".demo-banner.provider")).toContainText(
       "Test provider",
     );
@@ -762,7 +768,7 @@ test.describe("Omnigaze public experience", () => {
   test("anonymous watchlists stay device-local and advertise account sync", async ({
     page,
   }) => {
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
 
     await expect(page.getByText("Saved on this device")).toBeVisible();
@@ -872,7 +878,7 @@ test.describe("Omnigaze public experience", () => {
       });
     });
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     await page.getByTestId("overview-add-stock").click();
     await page.getByTestId("stock-search-input").fill("IBM");
@@ -918,7 +924,9 @@ test.describe("Omnigaze public experience", () => {
     page,
   }) => {
     test.setTimeout(75_000);
-    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard", {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page).toHaveURL(/\/dashboard$/);
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     await expect(page.getByText("Synced across your devices")).toBeVisible();
@@ -1010,7 +1018,9 @@ test.describe("Omnigaze public experience", () => {
     page,
   }) => {
     test.setTimeout(75_000);
-    await page.goto("/signin-with-chatgpt?return_to=/onboarding");
+    await page.goto("/signin-with-chatgpt?return_to=/onboarding", {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page).toHaveURL(/\/onboarding$/);
     await page.evaluate(() => {
       localStorage.clear();
@@ -1073,7 +1083,7 @@ test.describe("Omnigaze public experience", () => {
 
   test("landing page does not overflow a 390px viewport", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
 
     const dimensions = await page.evaluate(() => ({
@@ -1091,7 +1101,7 @@ test.describe("Omnigaze public experience", () => {
   });
 
   test("Chinese landing preference is complete and persists", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     await page.getByRole("button", { name: "中文" }).click();
 
@@ -1116,7 +1126,9 @@ test.describe("Omnigaze public experience", () => {
     page,
   }) => {
     test.setTimeout(90_000);
-    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard", {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page).toHaveURL(/\/dashboard$/);
 
     const currentPortfolio = await context.request.get("/api/portfolio");
@@ -1227,7 +1239,9 @@ test.describe("Omnigaze public experience", () => {
     page,
   }) => {
     test.setTimeout(75_000);
-    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard", {
+      waitUntil: "domcontentloaded",
+    });
     await expect(page).toHaveURL(/\/dashboard$/);
 
     const portfolio = await context.request.get("/api/portfolio");

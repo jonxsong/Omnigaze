@@ -1,6 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AlpacaProvider } from "@/lib/providers/alpaca";
-import { GET as getBars } from "@/app/api/market/bars/route";
+import { createMarketBarsRoute } from "@/app/api/market/bars/route";
+import {
+  ProviderEgressGuardError,
+  type ProviderEgressAdmissionGuard,
+} from "@/lib/providers/provider-egress-guard";
+
+const allowingGuard = {
+  acquire: async () => undefined,
+  imposeCooldown: async () => undefined,
+  getStatus: async () => ({
+    status: "ready" as const,
+    retryAfterSeconds: null,
+  }),
+} satisfies ProviderEgressAdmissionGuard;
+
+const getBars = createMarketBarsRoute({
+  createEgressGuard: () => allowingGuard,
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -94,6 +111,45 @@ describe("historical bars API", () => {
     expect(await response.json()).toEqual({
       code: "provider_unconfigured",
       error: "Historical market data is not configured.",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a bounded sanitized 429 without calling Alpaca when admission is denied", async () => {
+    vi.stubEnv("ALPACA_API_KEY_ID", "route-test-key");
+    vi.stubEnv("ALPACA_API_SECRET_KEY", "route-test-secret");
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const denied = createMarketBarsRoute({
+      createEgressGuard: () => ({
+        acquire: async (bucket) => {
+          throw new ProviderEgressGuardError(
+            "budget_exhausted",
+            bucket,
+            7,
+          );
+        },
+        imposeCooldown: async () => undefined,
+        getStatus: async () => ({
+          status: "ready" as const,
+          retryAfterSeconds: null,
+        }),
+      }),
+    });
+
+    const response = await denied(
+      new Request(
+        "https://omnigaze.test/api/market/bars?symbol=NASDAQ:NVDA&timeframe=1D",
+      ),
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("7");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+    expect(await response.json()).toEqual({
+      code: "provider_rate_limited",
+      error:
+        "Historical market data request capacity is temporarily exhausted.",
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });

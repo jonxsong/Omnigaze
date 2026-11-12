@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test.describe("Omnigaze onboarding", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/onboarding");
+    await page.goto("/onboarding", { waitUntil: "domcontentloaded" });
     await page.evaluate(() => window.localStorage.clear());
     await page.reload();
     await expect(
@@ -79,7 +79,7 @@ test.describe("Omnigaze onboarding", () => {
   test("carries Chinese from landing through onboarding, reload, and history", async ({
     page,
   }) => {
-    await page.goto("/");
+    await page.goto("/", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     await page.getByRole("button", { name: "中文" }).click();
     await expect(page.locator("html")).toHaveAttribute("lang", "zh-CN");
@@ -180,7 +180,7 @@ test.describe("Omnigaze onboarding", () => {
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await page.evaluate(() => window.localStorage.clear());
     await page.reload();
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");

@@ -64,6 +64,13 @@
       "when": 1794510049402,
       "tag": "0008_inbox_projection_cursor_v1",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1794521272444,
+      "tag": "0009_provider_egress_guard_v1",
+      "breakpoints": true
     }
   ]
 }

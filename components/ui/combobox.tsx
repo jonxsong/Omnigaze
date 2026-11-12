@@ -2,7 +2,9 @@
 
 import * as React from "react"
 import { Combobox as ComboboxPrimitive } from "@base-ui/react"
-import { CheckIcon, ChevronDownIcon, XIcon } from "lucide-react"
+import CheckIcon from "lucide-react/icons/check"
+import ChevronDownIcon from "lucide-react/icons/chevron-down"
+import XIcon from "lucide-react/icons/x"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"

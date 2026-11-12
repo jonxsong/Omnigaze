@@ -1,14 +1,12 @@
 "use client";
 
-import {
-  Activity,
-  AlertTriangle,
-  Clock3,
-  ExternalLink,
-  FileSearch,
-  LoaderCircle,
-  ShieldCheck,
-} from "lucide-react";
+import Activity from "lucide-react/icons/activity";
+import AlertTriangle from "lucide-react/icons/alert-triangle";
+import Clock3 from "lucide-react/icons/clock-3";
+import ExternalLink from "lucide-react/icons/external-link";
+import FileSearch from "lucide-react/icons/file-search";
+import LoaderCircle from "lucide-react/icons/loader-circle";
+import ShieldCheck from "lucide-react/icons/shield-check";
 import { useAppLocale } from "@/components/app-locale";
 import type { MarketContextResource } from "@/components/market-context-ticker";
 import { moveLensCopy } from "@/components/move-lens-copy";

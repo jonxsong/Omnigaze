@@ -1,18 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertTriangle,
-  ArrowRight,
-  BookOpenText,
-  CheckCircle2,
-  Clock3,
-  ExternalLink,
-  LoaderCircle,
-  RefreshCw,
-  ShieldCheck,
-  Sparkles,
-} from "lucide-react";
+import AlertTriangle from "lucide-react/icons/alert-triangle";
+import ArrowRight from "lucide-react/icons/arrow-right";
+import BookOpenText from "lucide-react/icons/book-open-text";
+import CheckCircle2 from "lucide-react/icons/check-circle-2";
+import Clock3 from "lucide-react/icons/clock-3";
+import ExternalLink from "lucide-react/icons/external-link";
+import LoaderCircle from "lucide-react/icons/loader-circle";
+import RefreshCw from "lucide-react/icons/refresh-cw";
+import ShieldCheck from "lucide-react/icons/shield-check";
+import Sparkles from "lucide-react/icons/sparkles";
 import {
   parseDailyBriefEnvelope,
   type DailyBriefEnvelope,

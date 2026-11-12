@@ -1,24 +1,22 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import {
-  Activity,
-  BellRing,
-  BrainCircuit,
-  Check,
-  ChevronDown,
-  Database,
-  ExternalLink,
-  Eye,
-  FileCheck2,
-  FileText,
-  LineChart,
-  ListPlus,
-  RadioTower,
-  SearchCheck,
-  ShieldCheck,
-  Sparkles,
-} from "lucide-react";
+import Activity from "lucide-react/icons/activity";
+import BellRing from "lucide-react/icons/bell-ring";
+import BrainCircuit from "lucide-react/icons/brain-circuit";
+import Check from "lucide-react/icons/check";
+import ChevronDown from "lucide-react/icons/chevron-down";
+import Database from "lucide-react/icons/database";
+import ExternalLink from "lucide-react/icons/external-link";
+import Eye from "lucide-react/icons/eye";
+import FileCheck2 from "lucide-react/icons/file-check-2";
+import FileText from "lucide-react/icons/file-text";
+import LineChart from "lucide-react/icons/line-chart";
+import ListPlus from "lucide-react/icons/list-plus";
+import RadioTower from "lucide-react/icons/radio-tower";
+import SearchCheck from "lucide-react/icons/search-check";
+import ShieldCheck from "lucide-react/icons/shield-check";
+import Sparkles from "lucide-react/icons/sparkles";
 import { useState } from "react";
 import { type LandingLocale, useLandingLocale } from "./landing-locale";
 import styles from "./omnigaze-how-it-works.module.css";

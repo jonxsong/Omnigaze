@@ -125,7 +125,7 @@ describe("browser API response contracts", () => {
       checkDatabaseReadiness: async () => ({
         status: "ready",
         checkedAt: "2026-11-12T08:00:00.000Z",
-        schema: "owner-projection-cursor-v1",
+        schema: "provider-egress-guard-v1",
       }),
       getIngestionReadiness: async () => ({
         mode: "request_time",
@@ -183,7 +183,7 @@ describe("browser API response contracts", () => {
     expect(body.readiness.database).toEqual({
       status: "ready",
       checkedAt: "2026-11-12T08:00:00.000Z",
-      schema: "owner-projection-cursor-v1",
+      schema: "provider-egress-guard-v1",
     });
     expect(body.readiness.ingestion).toMatchObject({
       mode: "request_time",
@@ -208,7 +208,7 @@ describe("browser API response contracts", () => {
       checkDatabaseReadiness: async () => ({
         status: "unavailable",
         checkedAt: "2026-11-12T08:00:00.000Z",
-        schema: "owner-projection-cursor-v1",
+        schema: "provider-egress-guard-v1",
       }),
       getIngestionReadiness: async () => ({
         mode: "unavailable",
@@ -243,7 +243,7 @@ describe("browser API response contracts", () => {
       readiness: {
         database: {
           status: "unavailable",
-          schema: "owner-projection-cursor-v1",
+          schema: "provider-egress-guard-v1",
         },
         projection: {
           mode: "unavailable",

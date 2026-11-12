@@ -3,6 +3,7 @@ import {
   AlpacaAssetCatalogProvider,
   AlpacaAssetProviderError,
 } from "@/lib/providers/alpaca-assets";
+import type { ProviderEgressAdmissionGuard } from "@/lib/providers/provider-egress-guard";
 
 function upstreamAsset(overrides: Record<string, unknown> = {}) {
   return {
@@ -141,6 +142,33 @@ describe("Alpaca active US-equity catalog provider", () => {
     expect(messages).not.toContain("private-secret");
     expect(messages).not.toContain("do-not-return-this-body");
     expect(messages).not.toContain("secret details");
+  });
+
+  it("applies a bounded shared cooldown when a 429 omits retry headers", async () => {
+    const guard = {
+      acquire: vi.fn(async () => undefined),
+      imposeCooldown: vi.fn(async () => undefined),
+      getStatus: vi.fn(async () => ({
+        status: "ready" as const,
+        retryAfterSeconds: null,
+      })),
+    } satisfies ProviderEgressAdmissionGuard;
+    const provider = new AlpacaAssetCatalogProvider({
+      keyId: "private-key-id",
+      secretKey: "private-secret",
+      fetcher: vi.fn().mockResolvedValue(new Response(null, { status: 429 })),
+      egressGuard: guard,
+    });
+
+    await expect(provider.listActiveUsEquities()).rejects.toMatchObject({
+      code: "provider_rate_limited",
+      status: 429,
+      retryAfterSeconds: 60,
+    });
+    expect(guard.imposeCooldown).toHaveBeenCalledWith(
+      "alpaca_catalog_interactive",
+      60,
+    );
   });
 
   it("rejects malformed successful payloads instead of inventing assets", async () => {

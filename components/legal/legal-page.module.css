@@ -105,10 +105,21 @@
 .document li { position: relative; padding-left: 18px; }
 .document li::before { position: absolute; top: .72em; left: 1px; width: 5px; height: 5px; border: 1px solid var(--policy-cyan); border-radius: 50%; content: ""; }
 
-.deletionPanel { display: grid; grid-template-columns: auto 1fr; gap: 15px; margin: 58px 0 30px; padding: 22px; border: 1px solid rgb(255 107 125 / 25%); border-radius: 12px; background: linear-gradient(135deg, rgb(255 107 125 / 7%), #0a1118 58%); }
+.dataControls { display: grid; gap: 14px; margin: 58px 0 30px; }
+.exportPanel, .deletionPanel { display: grid; grid-template-columns: auto 1fr; gap: 15px; padding: 22px; border-radius: 12px; }
+.exportPanel { border: 1px solid rgb(98 217 255 / 24%); background: linear-gradient(135deg, rgb(98 217 255 / 7%), #0a1118 58%); }
+.exportPanel > svg { color: var(--policy-cyan); }
+.exportPanel h2, .deletionPanel h2 { margin: 0 0 8px; font-size: 16px; }
+.exportPanel > div > p, .deletionPanel > div > p { max-width: 720px; margin: 0; color: #9cafba; font-size: 13px; line-height: 1.65; }
+.exportActions { display: grid; justify-items: start; gap: 10px; margin-top: 17px; }
+.exportActions > button { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; padding: 9px 13px; border: 1px solid rgb(98 217 255 / 34%); border-radius: 7px; background: rgb(98 217 255 / 9%); color: #a9e8f8; font-size: 12px; font-weight: 750; cursor: pointer; }
+.exportActions > button:hover { background: rgb(98 217 255 / 14%); }
+.exportActions > button:disabled { opacity: .55; cursor: wait; }
+.exportSuccess { display: flex; gap: 7px; align-items: flex-start; color: #8cdbc5 !important; }
+.exportSuccess svg { flex: 0 0 auto; margin-top: 3px; color: #22d3a7; }
+.exportSuccess strong { color: #b7eadc; }
+.deletionPanel { border: 1px solid rgb(255 107 125 / 25%); background: linear-gradient(135deg, rgb(255 107 125 / 7%), #0a1118 58%); }
 .deletionPanel > svg { color: #ff7b8c; }
-.deletionPanel h2 { margin: 0 0 8px; font-size: 16px; }
-.deletionPanel p { max-width: 720px; margin: 0; color: #9cafba; font-size: 13px; line-height: 1.65; }
 .deletionForm { display: grid; gap: 6px; margin-top: 18px; }
 .deletionForm label { color: #c6d4dc; font-size: 12px; font-weight: 700; }
 .deletionForm > span { color: #8ca1af; font-size: 11px; }
@@ -145,7 +156,8 @@
   .tableOfContents { grid-template-columns: 1fr; }
   .document > section { padding: 0 0 38px 35px; }
   .sectionNumber { left: 10px; }
-  .deletionPanel { grid-template-columns: 1fr; }
+  .exportPanel, .deletionPanel { grid-template-columns: 1fr; }
+  .exportActions > button { justify-content: center; width: 100%; }
   .deletionForm > div { align-items: stretch; flex-direction: column; }
   .deletionForm input { width: 100%; }
   .deletionForm button { justify-content: center; min-height: 40px; }

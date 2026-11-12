@@ -13,6 +13,7 @@ flowchart LR
 
   subgraph Edge[Cloudflare / OpenAI Sites]
     Ingest[Provider orchestration]
+    ProviderGuard[(D1 provider egress guard)]
     Normalize[Normalize + deduplicate]
     D1[(D1 evidence store)]
     Portfolio[(D1 watchlists + portfolio)]
@@ -32,8 +33,8 @@ flowchart LR
   UI[React dashboard]
   Clients[AI clients]
 
-  Alpaca --> Ingest
-  Assets --> Ingest
+  Alpaca --> ProviderGuard --> Ingest
+  Assets --> ProviderGuard
   SEC --> Ingest
   Future --> Ingest
   Ingest --> Normalize --> D1
@@ -64,6 +65,7 @@ flowchart LR
 ## Trust boundaries
 
 - Provider credentials and the OpenAI API key exist only as encrypted server secrets.
+- Every Alpaca-backed quote, chart, catalog, and news operation acquires an atomic database-clocked admission before network egress. Separate capability buckets and application-wide cooldown state protect interactive use from ingestion pressure without recording an owner or IP address.
 - Browser clients receive normalized data plus explicit source, timestamp, delay, and freshness metadata.
 - AI analysis can cite only evidence IDs supplied by the server and is never treated as an order or recommendation.
 - AI generation is manual and authenticated. A fail-closed D1 guard keys single-stock output by canonical symbol, prompt version, effective model, and stable evidence revisions. The owner-scoped Daily Brief key also commits to the exact watchlist and UTC date. Volatile response timestamps are excluded; cached JSON is bounded and rejects raw prompts, messages, credentials, headers, tokens, and provider payloads.
@@ -85,6 +87,8 @@ The application degrades by capability. A quote-provider outage can leave the ev
 Intelligence reads start the request-time provider and durable D1 receipt read concurrently. They merge only live evidence by stable provider-event identity, select the newest effective provider revision, prefer the durable projection on an exact tie, and apply materiality plus the caller limit only after the global merge. A request-time outage may therefore serve retained evidence as partial live coverage, but freshness is always recomputed from provider evidence time—not the D1 read time. Stale retained evidence remains live-but-stale and cannot unlock AI or numeric decision scenarios. Demo fixtures never enter a live merged result.
 
 Historical charts fail independently from current snapshots. If provider history is unavailable, the dashboard labels any bundled series as illustrative instead of blending it with live bars. Asset-catalog refresh can serve a bounded stale catalog, but an upstream outage never creates fake search results.
+
+The Alpaca egress guard also fails independently and closed. A missing migration or unavailable D1 coordinator causes zero provider egress; an exhausted capability budget or active upstream cooldown returns bounded retry metadata. The dashboard may still use an already verified cache or an explicitly labeled degraded/demo path, but the guard is never bypassed to manufacture freshness.
 
 Move Lens also fails per leg. Missing, stale, demo, invalid, identity-mismatched, or metadata-incompatible observations remain explicit unavailable comparisons; they are never replaced with fixtures. An aggregate relationship is emitted only when both SPY and QQQ comparisons are eligible. The latest symbol-linked event is selected independently and may remain available when price comparisons are unavailable, but it is context rather than evidence of causation.
 

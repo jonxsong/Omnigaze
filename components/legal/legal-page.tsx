@@ -2,16 +2,15 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import {
-  ArrowLeft,
-  ArrowRight,
-  Database,
-  ExternalLink,
-  Eye,
-  ShieldCheck,
-  Trash2,
-  TriangleAlert,
-} from "lucide-react";
+import ArrowLeft from "lucide-react/icons/arrow-left";
+import ArrowRight from "lucide-react/icons/arrow-right";
+import Database from "lucide-react/icons/database";
+import Download from "lucide-react/icons/download";
+import ExternalLink from "lucide-react/icons/external-link";
+import Eye from "lucide-react/icons/eye";
+import ShieldCheck from "lucide-react/icons/shield-check";
+import Trash2 from "lucide-react/icons/trash-2";
+import TriangleAlert from "lucide-react/icons/triangle-alert";
 import { AppLocaleProvider, useAppLocale } from "@/components/app-locale";
 import {
   APP_LOCALE_STORAGE_KEY,
@@ -31,7 +30,7 @@ import styles from "./legal-page.module.css";
 const publicRepositoryUrl = "https://github.com/jonxsong/omnigaze";
 const signOutPath = "/signout-with-chatgpt?return_to=%2F";
 
-type DeletionPhase = "idle" | "working" | "success" | "error";
+type ActionPhase = "idle" | "working" | "success" | "error";
 
 export interface LegalPageProps {
   kind: LegalPageKind;
@@ -49,6 +48,91 @@ function BrandMark() {
   );
 }
 
+function snapshotFilename(contentDisposition: string | null) {
+  const candidate = /filename="?([^";]+)"?/i.exec(contentDisposition ?? "")?.[1]?.trim();
+  return candidate && /^[a-z0-9][a-z0-9._-]{0,119}\.json$/i.test(candidate)
+    ? candidate
+    : "omnigaze-saved-data-snapshot.json";
+}
+
+function DataExportControl({
+  isAuthenticated,
+  signInPath,
+}: Required<Pick<LegalPageProps, "isAuthenticated" | "signInPath">>) {
+  const { locale } = useAppLocale();
+  const copy = legalPageCopy[locale].snapshot;
+  const [phase, setPhase] = useState<ActionPhase>("idle");
+
+  async function downloadSnapshot() {
+    if (phase === "working") return;
+    setPhase("working");
+    try {
+      const response = await fetch("/api/account/data-export", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ format: "json" }),
+      });
+      if (
+        !response.ok ||
+        !response.headers.get("content-type")?.toLowerCase().includes("application/json")
+      ) {
+        throw new Error("account_data_export_failed");
+      }
+
+      const objectUrl = window.URL.createObjectURL(await response.blob());
+      const link = window.document.createElement("a");
+      link.href = objectUrl;
+      link.download = snapshotFilename(response.headers.get("content-disposition"));
+      link.hidden = true;
+      window.document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => window.URL.revokeObjectURL(objectUrl), 1_000);
+      setPhase("success");
+    } catch {
+      setPhase("error");
+    }
+  }
+
+  return (
+    <section className={styles.exportPanel} aria-labelledby="download-account-data-title">
+      <Download size={22} aria-hidden="true" />
+      <div>
+        <h2 id="download-account-data-title">{copy.title}</h2>
+        <p>{isAuthenticated ? copy.body : copy.anonymousBody}</p>
+        {isAuthenticated ? (
+          <div className={styles.exportActions}>
+            <button
+              type="button"
+              disabled={phase === "working"}
+              onClick={downloadSnapshot}
+            >
+              <Download size={14} aria-hidden="true" />
+              {phase === "working" ? copy.working : copy.action}
+            </button>
+            {phase === "success" && (
+              <p className={styles.exportSuccess} role="status">
+                <ShieldCheck size={14} aria-hidden="true" />
+                <span><strong>{copy.successTitle}</strong> {copy.successBody}</span>
+              </p>
+            )}
+            {phase === "error" && (
+              <p className={styles.deletionError} role="alert">
+                <TriangleAlert size={14} aria-hidden="true" /> {copy.failure}
+              </p>
+            )}
+          </div>
+        ) : (
+          <a className={styles.signInAction} href={signInPath} target="_top">
+            {copy.signIn} <ArrowRight size={14} />
+          </a>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function DataDeletionControl({
   isAuthenticated,
   signInPath,
@@ -56,7 +140,7 @@ function DataDeletionControl({
   const { locale } = useAppLocale();
   const copy = legalPageCopy[locale].deletion;
   const [confirmation, setConfirmation] = useState("");
-  const [phase, setPhase] = useState<DeletionPhase>("idle");
+  const [phase, setPhase] = useState<ActionPhase>("idle");
 
   async function deleteAccountData() {
     if (confirmation !== DATA_DELETION_CONFIRMATION || phase === "working") return;
@@ -288,10 +372,16 @@ function LegalPageContent({
         </div>
 
         {kind === "data" && (
-          <DataDeletionControl
-            isAuthenticated={isAuthenticated}
-            signInPath={signInPath}
-          />
+          <div className={styles.dataControls}>
+            <DataExportControl
+              isAuthenticated={isAuthenticated}
+              signInPath={signInPath}
+            />
+            <DataDeletionControl
+              isAuthenticated={isAuthenticated}
+              signInPath={signInPath}
+            />
+          </div>
         )}
 
         <footer className={styles.footer}>

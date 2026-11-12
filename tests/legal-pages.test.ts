@@ -65,4 +65,17 @@ describe("public policy copy", () => {
     expect(legalPageCopy.en.deletion.body).toMatch(/not permanent account closure/i);
     expect(legalPageCopy["zh-CN"].deletion.body).toMatch(/不代表永久关闭账户/);
   });
+
+  it("offers a bounded saved-data snapshot without claiming a complete archive", () => {
+    const english = documentText("en", "data");
+    const chinese = documentText("zh-CN", "data");
+
+    expect(english).not.toMatch(/export is not yet available/i);
+    expect(chinese).not.toContain("尚不支持导出");
+    expect(english).toMatch(/bounded saved-data snapshot/i);
+    expect(english).toMatch(/not a complete platform or account archive/i);
+    expect(chinese).toMatch(/有范围限制的已保存数据快照/);
+    expect(legalPageCopy.en.snapshot.action).toBe("Download JSON snapshot");
+    expect(legalPageCopy["zh-CN"].snapshot.action).toBe("下载 JSON 快照");
+  });
 });

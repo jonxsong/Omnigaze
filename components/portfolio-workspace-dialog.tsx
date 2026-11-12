@@ -2,22 +2,20 @@
 
 import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import {
-  AlertTriangle,
-  ArrowRight,
-  BriefcaseBusiness,
-  Check,
-  Clock3,
-  ExternalLink,
-  FileSearch,
-  LoaderCircle,
-  LockKeyhole,
-  RefreshCw,
-  ShieldCheck,
-  Sparkles,
-  Trash2,
-  X,
-} from "lucide-react";
+import AlertTriangle from "lucide-react/icons/alert-triangle";
+import ArrowRight from "lucide-react/icons/arrow-right";
+import BriefcaseBusiness from "lucide-react/icons/briefcase-business";
+import Check from "lucide-react/icons/check";
+import Clock3 from "lucide-react/icons/clock-3";
+import ExternalLink from "lucide-react/icons/external-link";
+import FileSearch from "lucide-react/icons/file-search";
+import LoaderCircle from "lucide-react/icons/loader-circle";
+import LockKeyhole from "lucide-react/icons/lock-keyhole";
+import RefreshCw from "lucide-react/icons/refresh-cw";
+import ShieldCheck from "lucide-react/icons/shield-check";
+import Sparkles from "lucide-react/icons/sparkles";
+import Trash2 from "lucide-react/icons/trash-2";
+import X from "lucide-react/icons/x";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { useAppLocale } from "@/components/app-locale";
 import {

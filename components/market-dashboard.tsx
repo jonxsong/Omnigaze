@@ -10,36 +10,34 @@ import {
   useState,
 } from "react";
 import Link from "next/link";
-import {
-  ArrowRight,
-  Bell,
-  Bot,
-  ChevronRight,
-  CircleHelp,
-  Cloud,
-  Clock3,
-  FileText,
-  Gauge,
-  Globe2,
-  Layers3,
-  LogIn,
-  LogOut,
-  Menu,
-  MessageSquareText,
-  Plus,
-  RefreshCw,
-  Search,
-  Server,
-  Settings2,
-  ShieldCheck,
-  Sparkles,
-  Star,
-  TriangleAlert,
-  TrendingDown,
-  TrendingUp,
-  WifiOff,
-  X,
-} from "lucide-react";
+import ArrowRight from "lucide-react/icons/arrow-right";
+import Bell from "lucide-react/icons/bell";
+import Bot from "lucide-react/icons/bot";
+import ChevronRight from "lucide-react/icons/chevron-right";
+import CircleHelp from "lucide-react/icons/circle-help";
+import Cloud from "lucide-react/icons/cloud";
+import Clock3 from "lucide-react/icons/clock-3";
+import FileText from "lucide-react/icons/file-text";
+import Gauge from "lucide-react/icons/gauge";
+import Globe2 from "lucide-react/icons/globe-2";
+import Layers3 from "lucide-react/icons/layers-3";
+import LogIn from "lucide-react/icons/log-in";
+import LogOut from "lucide-react/icons/log-out";
+import Menu from "lucide-react/icons/menu";
+import MessageSquareText from "lucide-react/icons/message-square-text";
+import Plus from "lucide-react/icons/plus";
+import RefreshCw from "lucide-react/icons/refresh-cw";
+import Search from "lucide-react/icons/search";
+import Server from "lucide-react/icons/server";
+import Settings2 from "lucide-react/icons/settings-2";
+import ShieldCheck from "lucide-react/icons/shield-check";
+import Sparkles from "lucide-react/icons/sparkles";
+import Star from "lucide-react/icons/star";
+import TriangleAlert from "lucide-react/icons/triangle-alert";
+import TrendingDown from "lucide-react/icons/trending-down";
+import TrendingUp from "lucide-react/icons/trending-up";
+import WifiOff from "lucide-react/icons/wifi-off";
+import X from "lucide-react/icons/x";
 import {
   defaultWatchlist,
   stockWorkspaces,

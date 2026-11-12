@@ -20,6 +20,7 @@ import {
   ProviderCursorRejectedError,
   type PaginatedIntelligenceSourceProvider,
 } from "@/lib/providers/contracts";
+import { ProviderEgressGuardError } from "@/lib/providers/provider-egress-guard";
 
 const DEFAULT_LEASE_DURATION_MS = 30_000;
 const DEFAULT_TICK_DEADLINE_MS = 12_000;
@@ -253,6 +254,20 @@ function safeFailure(
       stage,
       message: "The ingestion provider is not configured.",
       retryable: false,
+    };
+  }
+  if (failure instanceof ProviderEgressGuardError) {
+    return {
+      code:
+        failure.code === "guard_unavailable"
+          ? "provider_guard_unavailable"
+          : "provider_rate_limited",
+      stage,
+      message:
+        failure.code === "guard_unavailable"
+          ? "Provider request coordination is temporarily unavailable."
+          : "The provider request budget is temporarily exhausted.",
+      retryable: true,
     };
   }
   if (failure instanceof ProviderCursorMismatchError) {

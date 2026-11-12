@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { CircleIcon } from "lucide-react"
+import CircleIcon from "lucide-react/icons/circle"
 import { RadioGroup as RadioGroupPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"

@@ -1,4 +1,9 @@
 import type { CanonicalSymbol } from "@/lib/market-types";
+import {
+  boundedProviderRetryAfterSeconds,
+  ProviderEgressGuardError,
+  type ProviderEgressAdmissionGuard,
+} from "@/lib/providers/provider-egress-guard";
 
 const DEFAULT_BASE_URL = "https://paper-api.alpaca.markets";
 const DEFAULT_TIMEOUT_MS = 8_000;
@@ -69,6 +74,7 @@ type AlpacaAssetProviderConfig = {
   timeoutMs?: number;
   fetcher?: FetchLike;
   now?: () => number;
+  egressGuard?: ProviderEgressAdmissionGuard;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -89,20 +95,26 @@ function parseRetryAfter(response: Response, now: number) {
   const retryAfter = response.headers.get("retry-after");
   if (retryAfter) {
     const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return boundedProviderRetryAfterSeconds(seconds);
+    }
 
     const timestamp = Date.parse(retryAfter);
     if (Number.isFinite(timestamp)) {
-      return Math.max(0, Math.ceil((timestamp - now) / 1_000));
+      return boundedProviderRetryAfterSeconds(
+        Math.max(0, Math.ceil((timestamp - now) / 1_000)),
+      );
     }
   }
 
   const reset = Number(response.headers.get("x-ratelimit-reset"));
   if (Number.isFinite(reset) && reset > 0) {
-    return Math.max(0, Math.ceil(reset - now / 1_000));
+    return boundedProviderRetryAfterSeconds(
+      Math.max(0, Math.ceil(reset - now / 1_000)),
+    );
   }
 
-  return undefined;
+  return boundedProviderRetryAfterSeconds(undefined);
 }
 
 function normalizeBaseUrl(value?: string) {
@@ -204,14 +216,25 @@ export class AlpacaAssetCatalogProvider implements AlpacaAssetCatalogClient {
   }
 
   private async request(url: URL) {
+    const headers = this.requestHeaders();
     let response: Response;
     try {
+      await this.config.egressGuard?.acquire("alpaca_catalog_interactive");
       response = await this.fetcher(url, {
-        headers: this.requestHeaders(),
+        headers,
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
       if (error instanceof AlpacaAssetProviderError) throw error;
+      if (error instanceof ProviderEgressGuardError) {
+        throw error.code === "guard_unavailable"
+          ? new AlpacaAssetProviderError("provider_unavailable")
+          : new AlpacaAssetProviderError(
+              "provider_rate_limited",
+              429,
+              error.retryAfterSeconds,
+            );
+      }
       throw new AlpacaAssetProviderError("provider_unavailable");
     }
 
@@ -221,10 +244,21 @@ export class AlpacaAssetCatalogProvider implements AlpacaAssetCatalogClient {
       throw new AlpacaAssetProviderError("provider_auth_failed", response.status);
     }
     if (response.status === 429) {
+      const retryAfter = parseRetryAfter(response, this.now());
+      if (this.config.egressGuard) {
+        try {
+          await this.config.egressGuard.imposeCooldown(
+            "alpaca_catalog_interactive",
+            retryAfter,
+          );
+        } catch {
+          throw new AlpacaAssetProviderError("provider_unavailable");
+        }
+      }
       throw new AlpacaAssetProviderError(
         "provider_rate_limited",
         response.status,
-        parseRetryAfter(response, this.now()),
+        retryAfter,
       );
     }
     if (response.status >= 500) {

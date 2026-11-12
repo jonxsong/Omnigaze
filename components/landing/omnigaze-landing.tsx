@@ -2,23 +2,21 @@
 
 import { type ReactNode, useEffect } from "react";
 import { MotionConfig, motion } from "framer-motion";
-import {
-  ArrowRight,
-  Bell,
-  Bot,
-  Braces,
-  Check,
-  Database,
-  Eye,
-  FileSearch,
-  Gauge,
-  Network,
-  Search,
-  ShieldCheck,
-  Sparkles,
-  Workflow,
-  Zap,
-} from "lucide-react";
+import ArrowRight from "lucide-react/icons/arrow-right";
+import Bell from "lucide-react/icons/bell";
+import Bot from "lucide-react/icons/bot";
+import Braces from "lucide-react/icons/braces";
+import Check from "lucide-react/icons/check";
+import Database from "lucide-react/icons/database";
+import Eye from "lucide-react/icons/eye";
+import FileSearch from "lucide-react/icons/file-search";
+import Gauge from "lucide-react/icons/gauge";
+import Network from "lucide-react/icons/network";
+import Search from "lucide-react/icons/search";
+import ShieldCheck from "lucide-react/icons/shield-check";
+import Sparkles from "lucide-react/icons/sparkles";
+import Workflow from "lucide-react/icons/workflow";
+import Zap from "lucide-react/icons/zap";
 import {
   LandingLocaleProvider,
   type LandingLocale,

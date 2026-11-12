@@ -38,6 +38,17 @@ type LegalCopy = {
   updated: string;
   researchBoundary: string;
   documents: Record<LegalPageKind, LegalDocument>;
+  snapshot: {
+    title: string;
+    body: string;
+    anonymousBody: string;
+    signIn: string;
+    action: string;
+    working: string;
+    successTitle: string;
+    successBody: string;
+    failure: string;
+  };
   deletion: {
     title: string;
     body: string;
@@ -229,7 +240,7 @@ const en: LegalCopy = {
           id: "before-deleting",
           title: "Before you delete",
           paragraphs: [
-            "Deletion cannot be undone from Omnigaze. Export is not yet available in this alpha, so record anything you need before continuing. The request is intentionally sign-in gated and requires an exact confirmation phrase.",
+            "Deletion cannot be undone from Omnigaze. Before continuing, you can download the bounded saved-data snapshot below. It reports total, exported, and truncated counts for growing sections, but it is not a complete platform or account archive and excludes shared market evidence, platform logs, credentials, and internal safety records. The deletion request is intentionally sign-in gated and requires an exact confirmation phrase.",
           ],
         },
         {
@@ -241,6 +252,21 @@ const en: LegalCopy = {
         },
       ],
     },
+  },
+  snapshot: {
+    title: "Download a saved-data snapshot",
+    body:
+      "Download a JSON copy of the owner-scoped Omnigaze records currently available for export. The file includes section-level truncation metadata and excludes shared evidence, platform logs, credentials, prompts, leases, hashes, and other internal safety data. Downloading does not change or delete anything.",
+    anonymousBody:
+      "Sign in with the identity whose saved Omnigaze records you want to download. Authentication is required before a snapshot is created.",
+    signIn: "Sign in to download data",
+    action: "Download JSON snapshot",
+    working: "Preparing snapshot…",
+    successTitle: "Download started",
+    successBody:
+      "Your bounded JSON snapshot was prepared without changing your saved Omnigaze data.",
+    failure:
+      "The snapshot could not be prepared. No download is being claimed; try again.",
   },
   deletion: {
     title: "Delete saved account data",
@@ -434,7 +460,7 @@ const zhCN: LegalCopy = {
           id: "before-deleting",
           title: "删除之前",
           paragraphs: [
-            "Omnigaze 无法撤销删除。Alpha 版尚不支持导出，请先自行记录需要保留的信息。删除请求必须先登录，并输入完全一致的确认短语。",
+            "Omnigaze 无法撤销删除。继续之前，你可以下载下方有范围限制的已保存数据快照。对于会增长的分区，快照会列出总数、已导出数量和是否截断；但它不是完整的平台或账户归档，也不包含共享市场证据、平台日志、密钥或内部安全记录。删除请求必须先登录，并输入完全一致的确认短语。",
           ],
         },
         {
@@ -446,6 +472,20 @@ const zhCN: LegalCopy = {
         },
       ],
     },
+  },
+  snapshot: {
+    title: "下载已保存数据快照",
+    body:
+      "下载当前可导出的个人 Omnigaze 记录 JSON 副本。文件包含分区级截断信息，但不包含共享证据、平台日志、密钥、提示词、租约、哈希或其他内部安全数据。下载不会更改或删除任何内容。",
+    anonymousBody:
+      "请使用需要下载 Omnigaze 记录的身份登录。系统仅会在完成身份验证后创建快照。",
+    signIn: "登录并下载数据",
+    action: "下载 JSON 快照",
+    working: "正在准备快照…",
+    successTitle: "下载已开始",
+    successBody:
+      "有范围限制的 JSON 快照已准备完成，不会更改你保存的 Omnigaze 数据。",
+    failure: "快照准备失败。系统不会把失败请求描述为已下载；请重试。",
   },
   deletion: {
     title: "删除已保存的账户数据",

@@ -106,7 +106,7 @@ test.describe("provider-backed Market Pulse", () => {
       await route.abort("failed");
     });
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
     const ticker = page.getByTestId("market-context-ticker");
     await expect(ticker).toHaveAttribute("data-status", "live");
@@ -185,7 +185,7 @@ test.describe("provider-backed Market Pulse", () => {
       });
     });
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     const ticker = page.getByTestId("market-context-ticker");
     await expect(ticker).toHaveAttribute("data-status", "live");
     fail = true;
@@ -233,7 +233,7 @@ test.describe("provider-backed Market Pulse", () => {
       });
     });
 
-    await page.goto("/dashboard");
+    await page.goto("/dashboard", { waitUntil: "domcontentloaded" });
     const ticker = page.getByTestId("market-context-ticker");
     await expect(ticker).toHaveAttribute("data-status", "partial");
     await expect(ticker).toContainText("PARTIAL ETF PROXIES");

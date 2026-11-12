@@ -1,17 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertTriangle,
-  ArrowRight,
-  Clock3,
-  ExternalLink,
-  LoaderCircle,
-  RefreshCw,
-  ShieldCheck,
-  Sparkles,
-  X,
-} from "lucide-react";
+import AlertTriangle from "lucide-react/icons/alert-triangle";
+import ArrowRight from "lucide-react/icons/arrow-right";
+import Clock3 from "lucide-react/icons/clock-3";
+import ExternalLink from "lucide-react/icons/external-link";
+import LoaderCircle from "lucide-react/icons/loader-circle";
+import RefreshCw from "lucide-react/icons/refresh-cw";
+import ShieldCheck from "lucide-react/icons/shield-check";
+import Sparkles from "lucide-react/icons/sparkles";
+import X from "lucide-react/icons/x";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import type { CanonicalSymbol } from "@/lib/market-types";
 import {

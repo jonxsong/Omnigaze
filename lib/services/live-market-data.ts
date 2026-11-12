@@ -11,6 +11,10 @@ import type {
 import { classifyPublicEvent } from "@/lib/pipeline/classify-public-event";
 import type { ProviderHealth, RawSourceEvent, SourceKind } from "@/lib/pipeline/contracts";
 import { AlpacaProvider } from "@/lib/providers/alpaca";
+import {
+  createProviderEgressGuard,
+  type ProviderEgressAdmissionGuard,
+} from "@/lib/providers/provider-egress-guard";
 import type {
   IntelligenceSourceResult,
   IntelligenceSourceProvider,
@@ -736,8 +740,11 @@ export function createLiveMarketDataOrchestrator(
   environment: Record<string, string | undefined> = process.env,
   dependencies: {
     createSecFairAccessCoordinator?: () => SecFairAccessCoordinator;
+    createProviderEgressGuard?: () => ProviderEgressAdmissionGuard;
   } = {},
 ) {
+  const egressGuard =
+    dependencies.createProviderEgressGuard?.() ?? createProviderEgressGuard();
   const alpaca = new AlpacaProvider({
     keyId: environment.ALPACA_API_KEY_ID,
     secretKey: environment.ALPACA_API_SECRET_KEY,
@@ -746,6 +753,7 @@ export function createLiveMarketDataOrchestrator(
       environment.ALPACA_DATA_FEED === "delayed_sip"
         ? environment.ALPACA_DATA_FEED
         : "iex",
+    egressGuard,
   });
   const sec = new SecEdgarProvider({
     enabled: environment.SEC_EDGAR_ENABLED === "true",

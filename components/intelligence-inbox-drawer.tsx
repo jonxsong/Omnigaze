@@ -1,28 +1,26 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertTriangle,
-  Bell,
-  BellRing,
-  Bookmark,
-  BookmarkCheck,
-  Check,
-  Clock3,
-  ExternalLink,
-  FileText,
-  Inbox,
-  LoaderCircle,
-  LogIn,
-  Radio,
-  RefreshCw,
-  RotateCcw,
-  ShieldCheck,
-  SlidersHorizontal,
-  Sparkles,
-  Trash2,
-  X,
-} from "lucide-react";
+import AlertTriangle from "lucide-react/icons/alert-triangle";
+import Bell from "lucide-react/icons/bell";
+import BellRing from "lucide-react/icons/bell-ring";
+import Bookmark from "lucide-react/icons/bookmark";
+import BookmarkCheck from "lucide-react/icons/bookmark-check";
+import Check from "lucide-react/icons/check";
+import Clock3 from "lucide-react/icons/clock-3";
+import ExternalLink from "lucide-react/icons/external-link";
+import FileText from "lucide-react/icons/file-text";
+import Inbox from "lucide-react/icons/inbox";
+import LoaderCircle from "lucide-react/icons/loader-circle";
+import LogIn from "lucide-react/icons/log-in";
+import Radio from "lucide-react/icons/radio";
+import RefreshCw from "lucide-react/icons/refresh-cw";
+import RotateCcw from "lucide-react/icons/rotate-ccw";
+import ShieldCheck from "lucide-react/icons/shield-check";
+import SlidersHorizontal from "lucide-react/icons/sliders-horizontal";
+import Sparkles from "lucide-react/icons/sparkles";
+import Trash2 from "lucide-react/icons/trash-2";
+import X from "lucide-react/icons/x";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { useAppLocale } from "@/components/app-locale";
 import { intelligenceInboxCopy } from "@/components/intelligence-inbox-copy";

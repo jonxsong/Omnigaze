@@ -5,7 +5,7 @@ export type DatabaseReadinessStatus = "ready" | "unavailable";
 export interface DatabaseReadiness {
   status: DatabaseReadinessStatus;
   checkedAt: string;
-  schema: "owner-projection-cursor-v1";
+  schema: "provider-egress-guard-v1";
 }
 
 export interface ReadinessDatabase {
@@ -18,7 +18,7 @@ export type ReadinessDatabaseFactory =
 const REQUIRED_COLUMN_COUNTS = [
   3, 2, 2, 2, 3, 3, 4,
   15, 12, 5, 2, 9, 10, 12,
-  12, 12, 1, 4, 7, 10,
+  12, 12, 1, 4, 7, 10, 5,
 ] as const;
 
 async function runtimeDatabaseFactory(): Promise<ReadinessDatabase> {
@@ -110,6 +110,11 @@ export async function checkDatabaseReadiness(
             'owner_id', 'last_sequence', 'claim_token', 'claim_until',
             'next_allowed_at', 'last_attempt_at', 'last_completed_at',
             'consecutive_failures', 'created_at', 'updated_at'
+          )),
+        (SELECT COUNT(*) FROM pragma_table_info('provider_egress_guard')
+          WHERE name IN (
+            'bucket', 'window_started_at_ms', 'request_count',
+            'cooldown_until_ms', 'updated_at'
           ))
     `)) as number[][];
     const row = rows[0];
@@ -120,13 +125,13 @@ export async function checkDatabaseReadiness(
     return {
       status: ready ? "ready" : "unavailable",
       checkedAt,
-      schema: "owner-projection-cursor-v1",
+      schema: "provider-egress-guard-v1",
     };
   } catch {
     return {
       status: "unavailable",
       checkedAt,
-      schema: "owner-projection-cursor-v1",
+      schema: "provider-egress-guard-v1",
     };
   }
 }

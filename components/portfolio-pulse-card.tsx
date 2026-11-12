@@ -1,15 +1,13 @@
 "use client";
 
-import {
-  Activity,
-  ArrowDownRight,
-  ArrowUpRight,
-  BriefcaseBusiness,
-  Clock3,
-  Plus,
-  ShieldCheck,
-  TriangleAlert,
-} from "lucide-react";
+import Activity from "lucide-react/icons/activity";
+import ArrowDownRight from "lucide-react/icons/arrow-down-right";
+import ArrowUpRight from "lucide-react/icons/arrow-up-right";
+import BriefcaseBusiness from "lucide-react/icons/briefcase-business";
+import Clock3 from "lucide-react/icons/clock-3";
+import Plus from "lucide-react/icons/plus";
+import ShieldCheck from "lucide-react/icons/shield-check";
+import TriangleAlert from "lucide-react/icons/triangle-alert";
 import { useState } from "react";
 import type { AppLocale } from "@/lib/app-locale";
 import type { CanonicalSymbol } from "@/lib/market-types";

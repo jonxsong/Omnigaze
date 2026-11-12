@@ -5,7 +5,7 @@ import { LegalPage } from "@/components/legal/legal-page";
 export const dynamic = "force-dynamic";
 
 const dataDescription =
-  "See exactly what Omnigaze stores and use the authenticated control to erase saved personal Omnigaze data.";
+  "See what Omnigaze stores, download a bounded saved-data snapshot, or erase saved personal Omnigaze data with authenticated controls.";
 
 export const metadata: Metadata = {
   title: "Data & deletion",
