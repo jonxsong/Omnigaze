@@ -67,6 +67,7 @@ flowchart LR
 - Authenticated inbox and alert-rule writes are owner-scoped and compare both user-state versions and event revisions. Exact retries return the current state; conflicting stale writes do not overwrite newer data.
 - The durable collection ledger retains a minimal, redacted provider envelope plus content digests and revision timestamps; it never stores credentials, request headers, cursor tokens, or article bodies. Corrected events preserve stable provider identity and revision history rather than silently replacing user state.
 - Automated SEC traffic is fail-closed behind an exact activation flag, a validated contact-bearing user agent, and one D1 Fair Access coordinator shared by every Worker isolate. Identity values and SEC response bodies never enter coordinator state or health output.
+- Durable recent SEC collection has a second exact activation gate and one stable CIK per partition. A generic lease engine freezes the scan window, while the provider binds its keyset cursor to the CIK, symbol mapping, query inputs, and a digest of the complete normalized recent snapshot. If that snapshot changes between continuation pages, traversal resets rather than risking a skip. Only a minimal filing envelope and content digest cross the persistence boundary.
 
 ## Failure model
 
@@ -79,6 +80,8 @@ The intelligence inbox also degrades independently. If a provider fails or retur
 AI analysis also degrades independently. Cache and budget reads fail closed before model invocation; cache hits and same-isolate followers spend no additional model budget. A single-stock cache lifetime is the earlier of five minutes or the evidence-freshness boundary. A Daily Brief is recomputed whenever its watchlist or selected evidence identity changes and otherwise expires after at most six hours or at the evidence-freshness boundary. Both operations share one atomic owner budget. The durable ledger stores hashed request and operation keys rather than raw model inputs, and bounded cleanup removes expired cache rows plus old reservation history.
 
 SEC filing reads also fail closed independently. Before every `www.sec.gov` or `data.sec.gov` request, the adapter obtains an atomic admission from the D1 coordinator using the database clock. Admissions are globally spaced below the SEC ceiling and bounded by a short queue deadline; a missing migration, unavailable database, exhausted deadline, absent coordinator, invalid identity, or disabled activation flag produces zero SEC egress. Rate-related `403` and `429` responses establish a shared cooldown of at least ten minutes. The existing per-isolate cache, singleflight, timeout, and limiter remain defense in depth, not the application-wide policy boundary.
+
+The durable SEC runner checks both activation flags, the contact-bearing identity, and coordinator health before importing the repository or creating a checkpoint. It processes at most one page for one configured issuer per invocation. Amendments such as `10-Q/A` remain distinct accession events. A missing accession is never interpreted as deletion: historical-file staging and weekly authoritative index reconciliation are required before a future tombstone workflow can make that claim.
 
 ## Bilingual application boundary
 

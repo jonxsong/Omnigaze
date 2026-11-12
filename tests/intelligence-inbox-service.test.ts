@@ -282,6 +282,54 @@ describe("intelligence inbox orchestration", () => {
     expect(JSON.stringify(result)).not.toContain("provider secret");
   });
 
+  it("materializes a durable SEC filing while request-time SEC is unavailable", async () => {
+    const repo = repository();
+    const deps = dependencies(repo, new Error("SEC is intentionally dormant"));
+    deps.getCollectedFeed = vi.fn().mockResolvedValue({
+      data: [
+        item({
+          id: "sec-edgar:0001045810-26-000042",
+          source: "sec-edgar",
+          sourceKind: "sec_filing",
+          headline: "8-K/A filed with the SEC",
+          summary: "A regulatory filing is available for evidence review.",
+          providerUpdatedAt: "2026-11-12T07:58:00.000Z",
+          sourceUrl:
+            "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000042/report.htm",
+          category: "filing",
+          claimStatus: "confirmed",
+          topicTags: ["filing", "amendment"],
+        }),
+      ],
+      hasMore: false,
+    });
+
+    const result = await getIntelligenceInbox(
+      "owner-a",
+      { filter: "all", limit: 50 },
+      deps,
+    );
+
+    expect(repo.syncLiveItems).toHaveBeenCalledWith(
+      "owner-a",
+      [
+        expect.objectContaining({
+          id: "sec-edgar:0001045810-26-000042",
+          sourceKind: "sec_filing",
+          headline: "8-K/A filed with the SEC",
+          topicTags: ["filing", "amendment"],
+        }),
+      ],
+      generatedAt,
+    );
+    expect(result.meta.sync).toMatchObject({
+      status: "live",
+      dataMode: "live",
+      providerCoverage: "partial",
+    });
+    expect(JSON.stringify(result)).not.toContain("intentionally dormant");
+  });
+
   it("keeps the newest correction when collected and request-time batches overlap", async () => {
     const repo = repository();
     const deps = dependencies(

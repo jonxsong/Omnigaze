@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
-import type { CollectedSourceEvent } from "@/lib/ingestion/contracts";
-import { projectCollectedSourceEvent } from "@/lib/services/collected-intelligence";
+import { describe, expect, it, vi } from "vitest";
+import type {
+  CollectedSourceEvent,
+  ListCollectedEventsInput,
+} from "@/lib/ingestion/contracts";
+import {
+  getCollectedIntelligenceFeedForScopes,
+  projectCollectedSourceEvent,
+} from "@/lib/services/collected-intelligence";
 
 function collected(
   overrides: Partial<CollectedSourceEvent> = {},
@@ -88,6 +94,38 @@ describe("collected intelligence projection", () => {
     ).toBeNull();
   });
 
+  it("projects SEC filing amendments with stable identity and base-form materiality", () => {
+    const projected = projectCollectedSourceEvent(
+      collected({
+        provider: "sec-edgar",
+        sourceKind: "sec_filing",
+        sourceEventId: "0001045810-26-000042",
+        envelope: {
+          schema: "omnigaze.provider-receipt.v1",
+          headline: "10-Q/A filed with the SEC",
+          summary: "A regulatory filing is available for evidence review.",
+          url: "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000042/report.htm",
+          contentDigest: "b".repeat(64),
+        },
+      }),
+      new Set(["NASDAQ:NVDA"]),
+    );
+
+    expect(projected).toMatchObject({
+      id: "sec-edgar:0001045810-26-000042",
+      source: "sec-edgar",
+      sourceKind: "sec_filing",
+      headline: "10-Q/A filed with the SEC",
+      materiality: "high",
+      category: "filing",
+      claimStatus: "confirmed",
+      causalLink: "unassessed",
+      topicTags: ["filing", "amendment"],
+      isControversial: false,
+      isLive: true,
+    });
+  });
+
   it("decodes stored display text before classification without changing the durable envelope", () => {
     const event = collected({
       envelope: {
@@ -124,5 +162,76 @@ describe("collected intelligence projection", () => {
     expect(
       projectCollectedSourceEvent(event, new Set(["NASDAQ:NVDA"])),
     ).toBeNull();
+  });
+
+  it("merges bounded provider partitions once and keeps the newest immutable version", async () => {
+    const older = collected({
+      receiptId: "src_old",
+      providerRevisionAt: "2026-11-12T07:49:00.000Z",
+      effectiveAt: "2026-11-12T07:49:00.000Z",
+      observedAt: "2026-11-12T07:50:00.000Z",
+      envelope: {
+        ...collected().envelope,
+        headline: "Older correction",
+      },
+    });
+    const newer = collected({
+      receiptId: "src_new",
+      providerRevisionAt: "2026-11-12T07:55:00.000Z",
+      effectiveAt: "2026-11-12T07:55:00.000Z",
+      observedAt: "2026-11-12T07:56:00.000Z",
+      envelope: {
+        ...collected().envelope,
+        headline: "Newer correction",
+      },
+    });
+    const filing = collected({
+      receiptId: "src_filing",
+      provider: "sec-edgar",
+      sourceKind: "sec_filing",
+      sourceEventId: "0001045810-26-000043",
+      providerRevisionAt: "2026-11-12T07:52:00.000Z",
+      effectiveAt: "2026-11-12T07:52:00.000Z",
+      envelope: {
+        schema: "omnigaze.provider-receipt.v1",
+        headline: "8-K filed with the SEC",
+        summary: "A regulatory filing is available for evidence review.",
+        url: null,
+        contentDigest: "c".repeat(64),
+      },
+    });
+    const listCollectedEvents = vi.fn(async ({ partitionKey }: ListCollectedEventsInput) => ({
+      items:
+        partitionKey === "news-a"
+          ? [older]
+          : partitionKey === "news-b"
+            ? [newer]
+            : [filing],
+      hasMore: partitionKey === "filings",
+      nextBefore: null,
+    }));
+
+    const result = await getCollectedIntelligenceFeedForScopes(
+      {
+        symbols: ["NASDAQ:NVDA"],
+        since: "2026-11-12T07:00:00.000Z",
+        limit: 10,
+        scopes: [
+          { provider: "alpaca", partitionKey: "news-a" },
+          { provider: "alpaca", partitionKey: "news-b" },
+          { provider: "sec-edgar", partitionKey: "filings" },
+        ],
+      },
+      { listCollectedEvents },
+    );
+
+    expect(result.hasMore).toBe(true);
+    expect(result.data).toHaveLength(2);
+    expect(result.data.map((item) => item.id)).toEqual([
+      "alpaca:42",
+      "sec-edgar:0001045810-26-000043",
+    ]);
+    expect(result.data[0].headline).toBe("Newer correction");
+    expect(listCollectedEvents).toHaveBeenCalledTimes(3);
   });
 });

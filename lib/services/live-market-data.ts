@@ -17,6 +17,7 @@ import type {
   MarketDataProvider,
 } from "@/lib/providers/contracts";
 import { SecEdgarProvider } from "@/lib/providers/sec-edgar";
+import { SEC_KNOWN_CIK_BY_TICKER } from "@/lib/providers/sec-known-ciks";
 import {
   createSecFairAccessCoordinator,
   type SecFairAccessCoordinator,
@@ -100,14 +101,6 @@ type OrchestratorDependencies = {
     limit?: number;
   }) => IntelligenceEvent[];
   now?: () => Date;
-};
-
-const SEC_CIK_BY_TICKER: Record<string, string> = {
-  AAPL: "320193",
-  AMD: "2488",
-  MSFT: "789019",
-  NVDA: "1045810",
-  TSLA: "1318605",
 };
 
 const LIVE_NOTICE =
@@ -757,7 +750,7 @@ export function createLiveMarketDataOrchestrator(
   const sec = new SecEdgarProvider({
     enabled: environment.SEC_EDGAR_ENABLED === "true",
     userAgent: environment.SEC_USER_AGENT,
-    cikByTicker: SEC_CIK_BY_TICKER,
+    cikByTicker: SEC_KNOWN_CIK_BY_TICKER,
     coordinator:
       dependencies.createSecFairAccessCoordinator?.() ??
       createSecFairAccessCoordinator(),

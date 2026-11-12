@@ -29,8 +29,10 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [ ] Verify the hosted hourly operator tick after refreshing the Omnigaze app connection; keep collection labeled `request_time` until the first successful checkpoint.
 - [x] Dormant SEC adapter with official ticker-catalog resolution, collision-safe class-share aliases, per-CIK request deduplication, bounded short-lived caching, global accession ordering, explicit partial-coverage reporting, and a production fail-closed activation gate.
 - [x] Add a D1-backed distributed SEC Fair Access coordinator with bounded admission, fail-closed deadlines, and application-wide cooldown handling.
+- [x] Add bounded durable recent-filing ingestion with per-CIK partitions, frozen snapshot digests, keyset cursors, immutable receipts, amendment-aware projection, and an independently gated operator MCP tool.
 - [ ] Configure a truthful monitored application/contact user agent and explicitly set `SEC_EDGAR_ENABLED=true`; `SEC_USER_AGENT` alone cannot enable production SEC egress.
-- [ ] Add durable scheduled SEC ingestion, historical backfill, and correction/removal reconciliation; the current adapter reads recent submissions on demand only.
+- [ ] Link and verify the SEC operator schedule, then explicitly set `SEC_DURABLE_INGESTION_ENABLED=true` and label its collection mode `scheduled`.
+- [ ] Add historical SEC shard backfill and authoritative correction/removal reconciliation; absence from one recent-submissions response is never treated as a removal.
 - [ ] Add sub-minute streaming infrastructure for true push updates; the alpha intentionally uses resilient REST polling.
 
 ## AI and MCP
@@ -41,7 +43,7 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Manual model invocation only; selecting a stock or opening the dialog never spends an AI request automatically.
 - [x] Deterministic review zones and hypothetical share scenarios that withhold numbers when evidence or quotes are inadequate.
 - [x] Browser/API/MCP parity for market data, watchlists, portfolio, inbox, alert rules, provider status, live Omnigaze Views, and personalized Daily Briefs.
-- [x] Closed operator-only MCP ingestion tool with authenticated identity enforcement.
+- [x] Separate closed operator-only MCP ingestion tools for licensed news and SEC filings, both with authenticated identity enforcement and one-page bounds.
 - [x] Durable, model-aware AI-result caching with stable evidence fingerprints, freshness-bounded TTLs, atomic shared per-owner budgets, rolling limits, and cross-isolate leases.
 - [x] Generated cross-watchlist Daily Brief with deterministic live-evidence selection, strict grounding, owner-scoped caching, HTTP/MCP parity, and a manual dashboard workflow.
 - [x] Locale-aware Daily Brief and Omnigaze View generation with English/Chinese cache isolation, source-language preservation, and bilingual non-prescriptive output checks.

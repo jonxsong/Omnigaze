@@ -1,39 +1,28 @@
 import { defaultWatchlist } from "@/lib/demo-market-data";
-import type {
-  ClaimNextDueInput,
-  CompleteRunInput,
-  EnsureCheckpointInput,
-  FailRunInput,
-  IngestionAggregateStatus,
-  IngestionLeaseIdentity,
-  PersistPageInput,
-  PersistPageResult,
-  ProviderCheckpointClaim,
-  RawSourceEventReceipt,
-  SafeIngestionError,
-} from "@/lib/ingestion/contracts";
+import type { RawSourceEventReceipt } from "@/lib/ingestion/contracts";
 import type { CanonicalSymbol } from "@/lib/market-types";
 import type { RawSourceEvent } from "@/lib/pipeline/contracts";
 import {
   AlpacaProvider,
   createAlpacaNewsQueryFingerprint,
 } from "@/lib/providers/alpaca";
+import type { PaginatedIntelligenceSourceProvider } from "@/lib/providers/contracts";
 import {
-  ProviderConfigurationError,
-  ProviderCursorMismatchError,
-  ProviderCursorRejectedError,
-  type PaginatedIntelligenceSourceProvider,
-} from "@/lib/providers/contracts";
+  createBoundedProviderIngestionService,
+  IngestionTickError,
+  type IngestionRepositoryPort,
+  type IngestionTickResult,
+} from "@/lib/services/bounded-provider-ingestion";
+
+export { IngestionTickError };
+export type { IngestionRepositoryPort, IngestionTickResult };
 
 const INGESTION_PROVIDER = "alpaca";
 const PAGE_SIZE = 50;
-const LEASE_DURATION_MS = 30_000;
-const TICK_DEADLINE_MS = 12_000;
 const PROVIDER_SETTLING_DELAY_MS = 30_000;
 const CORRECTION_LOOKBACK_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_CADENCE_SECONDS = 300;
 const MAX_CONFIGURED_SYMBOLS = 50;
-const MAX_RETRY_SECONDS = 30 * 60;
 
 export type IngestionCollectionMode =
   | "scheduled"
@@ -50,65 +39,12 @@ export type IngestionRuntimeConfig = {
   collectionMode: Exclude<IngestionCollectionMode, "unavailable">;
 };
 
-export interface IngestionRepositoryPort {
-  ensureCheckpoint(input: EnsureCheckpointInput): Promise<unknown>;
-  claimNextDue(
-    input: ClaimNextDueInput,
-  ): Promise<ProviderCheckpointClaim | null>;
-  startRun(lease: IngestionLeaseIdentity, startedAt: string): Promise<string>;
-  persistPage(input: PersistPageInput): Promise<PersistPageResult>;
-  completeRun(input: CompleteRunInput): Promise<unknown>;
-  failRun(input: FailRunInput): Promise<unknown>;
-  getAggregateStatus(input: {
-    now: string;
-    since: string;
-    provider?: string;
-    partitionKey?: string;
-  }): Promise<IngestionAggregateStatus>;
-}
-
 type IngestionDependencies = {
   repository: IngestionRepositoryPort;
   provider: PaginatedIntelligenceSourceProvider;
   config: IngestionRuntimeConfig;
   now?: () => Date;
 };
-
-export type IngestionTickResult =
-  | {
-      outcome: "idle";
-      provider: string;
-      checkedAt: string;
-    }
-  | {
-      outcome: "processed";
-      provider: string;
-      runId: string;
-      completedAt: string;
-      hasMore: boolean;
-      receiptCount: number;
-      insertedReceiptCount: number;
-      linkedSymbolCount: number;
-    };
-
-type FailureStage =
-  | "claim"
-  | "run_start"
-  | "provider_fetch"
-  | "page_validation"
-  | "persistence"
-  | "completion";
-
-export class IngestionTickError extends Error {
-  constructor(
-    readonly code: string,
-    readonly stage: FailureStage,
-    readonly retryable: boolean,
-  ) {
-    super("The bounded ingestion tick failed.");
-    this.name = "IngestionTickError";
-  }
-}
 
 function parsePositiveInteger(
   value: string | undefined,
@@ -179,10 +115,6 @@ export async function readIngestionRuntimeConfig(
     publiclyReportedCadenceSeconds: scheduleDeclared ? cadenceSeconds : null,
     collectionMode: scheduleDeclared ? "scheduled" : "request_time",
   };
-}
-
-function addMilliseconds(iso: string, milliseconds: number) {
-  return new Date(Date.parse(iso) + milliseconds).toISOString();
 }
 
 function eventSymbols(
@@ -263,267 +195,44 @@ async function receiptForEvent(
   };
 }
 
-function safeFailure(
-  failure: unknown,
-  stage: FailureStage,
-): SafeIngestionError & { stage: FailureStage } {
-  if (failure instanceof IngestionTickError) {
-    return {
-      code: failure.code,
-      stage: failure.stage,
-      message: failure.message,
-      retryable: failure.retryable,
-    };
-  }
-  if (failure instanceof ProviderConfigurationError) {
-    return {
-      code: "provider_unconfigured",
-      stage,
-      message: "The ingestion provider is not configured.",
-      retryable: false,
-    };
-  }
-  if (failure instanceof ProviderCursorMismatchError) {
-    return {
-      code: "cursor_query_mismatch",
-      stage,
-      message: "The stored provider cursor does not match its frozen query.",
-      retryable: false,
-    };
-  }
-  if (failure instanceof ProviderCursorRejectedError) {
-    return {
-      code: "invalid_page_token",
-      stage,
-      message: "The provider rejected the stored page cursor.",
-      retryable: false,
-    };
-  }
-  if (
-    failure instanceof DOMException &&
-    (failure.name === "AbortError" || failure.name === "TimeoutError")
-  ) {
-    return {
-      code: "provider_timeout",
-      stage,
-      message: "The provider request exceeded its bounded deadline.",
-      retryable: true,
-    };
-  }
-  return {
-    code:
-      stage === "persistence" || stage === "completion"
-        ? "ingestion_persistence_failed"
-        : "provider_request_failed",
-    stage,
-    message: "The ingestion tick failed without exposing upstream details.",
-    retryable: true,
-  };
-}
-
-function retryDelaySeconds(claim: ProviderCheckpointClaim, retryable: boolean) {
-  if (!retryable) return 15 * 60;
-  return Math.min(
-    60 * 2 ** Math.min(claim.consecutiveFailures, 5),
-    MAX_RETRY_SECONDS,
-  );
-}
-
-function validatePageEvents(
-  events: RawSourceEvent[],
-  claim: ProviderCheckpointClaim,
-  pageSize: number,
-) {
-  if (events.length > pageSize) {
-    throw new IngestionTickError(
-      "provider_page_contract_invalid",
-      "page_validation",
-      false,
-    );
-  }
-  const seenIds = new Set<string>();
-  const windowStart = Date.parse(claim.window.start);
-  const windowEnd = Date.parse(claim.window.end);
-  if (
-    !Number.isFinite(windowStart) ||
-    !Number.isFinite(windowEnd) ||
-    windowStart >= windowEnd
-  ) {
-    throw new IngestionTickError(
-      "provider_page_contract_invalid",
-      "page_validation",
-      false,
-    );
-  }
-  for (const event of events) {
-    const effectiveObservationAt = Date.parse(
-      event.providerUpdatedAt ?? event.publishedAt,
-    );
-    if (
-      event.source !== claim.provider ||
-      event.sourceKind !== "licensed_news" ||
-      event.sourceEventId.trim().length === 0 ||
-      seenIds.has(event.sourceEventId) ||
-      !Number.isFinite(effectiveObservationAt) ||
-      effectiveObservationAt < windowStart ||
-      effectiveObservationAt > windowEnd
-    ) {
-      throw new IngestionTickError(
-        "provider_page_contract_invalid",
-        "page_validation",
-        false,
-      );
-    }
-    seenIds.add(event.sourceEventId);
-  }
-}
-
 export function createIntelligenceIngestionService(
   dependencies: IngestionDependencies,
 ) {
-  return {
-    async runTick(): Promise<IngestionTickResult> {
-      const startedAt = (dependencies.now ?? (() => new Date()))().toISOString();
-      const windowEnd = addMilliseconds(startedAt, -PROVIDER_SETTLING_DELAY_MS);
-      const windowStart = addMilliseconds(windowEnd, -CORRECTION_LOOKBACK_MS);
-      const windowFingerprint = await createAlpacaNewsQueryFingerprint({
-        symbols: dependencies.config.symbols,
+  return createBoundedProviderIngestionService({
+    repository: dependencies.repository,
+    provider: dependencies.provider,
+    config: {
+      provider: dependencies.config.provider,
+      partitions: [
+        {
+          partitionKey: dependencies.config.partitionKey,
+          symbols: dependencies.config.symbols,
+        },
+      ],
+      sourceKinds: ["licensed_news"],
+      pageSize: dependencies.config.pageSize,
+      cadenceSeconds: dependencies.config.cadenceSeconds,
+      settlingDelayMs: PROVIDER_SETTLING_DELAY_MS,
+      lookbackMs: CORRECTION_LOOKBACK_MS,
+    },
+    adapter: {
+      createQueryFingerprint: ({
+        partition,
         windowStart,
         windowEnd,
-        pageSize: dependencies.config.pageSize,
-      });
-      const leaseExpiresAt = addMilliseconds(startedAt, LEASE_DURATION_MS);
-      let claim: ProviderCheckpointClaim | null = null;
-      let runId: string | null = null;
-      let stage: FailureStage = "claim";
-
-      try {
-        await dependencies.repository.ensureCheckpoint({
-          provider: dependencies.config.provider,
-          partitionKey: dependencies.config.partitionKey,
-          nextDueAt: startedAt,
-          now: startedAt,
-        });
-        const claimInput: ClaimNextDueInput = {
-          provider: dependencies.config.provider,
-          partitionKey: dependencies.config.partitionKey,
-          claimedAt: startedAt,
-          leaseExpiresAt,
-          proposedWindow: {
-            start: windowStart,
-            end: windowEnd,
-            fingerprint: windowFingerprint,
-          },
-        };
-        claim = await dependencies.repository.claimNextDue(claimInput);
-        if (!claim) {
-          return {
-            outcome: "idle",
-            provider: dependencies.config.provider,
-            checkedAt: startedAt,
-          };
-        }
-
-        stage = "run_start";
-        runId = await dependencies.repository.startRun(claim.lease, startedAt);
-        stage = "provider_fetch";
-        const tickSignal = AbortSignal.timeout(TICK_DEADLINE_MS);
-        const page = await dependencies.provider.getEventPage({
-          symbols: dependencies.config.symbols,
-          windowStart: claim.window.start,
-          windowEnd: claim.window.end,
-          pageSize: dependencies.config.pageSize,
-          cursor: claim.resumeCursor
-            ? {
-                token: claim.resumeCursor,
-                queryFingerprint: claim.window.fingerprint,
-              }
-            : null,
-          signal: tickSignal,
-        });
-
-        stage = "page_validation";
-        const nextCursor = page.nextCursor ?? null;
-        if (
-          page.queryFingerprint !== claim.window.fingerprint ||
-          page.exhausted === Boolean(nextCursor) ||
-          (nextCursor !== null &&
-            nextCursor.queryFingerprint !== claim.window.fingerprint) ||
-          (claim.resumeCursor !== null &&
-            nextCursor?.token === claim.resumeCursor)
-        ) {
-          throw new IngestionTickError(
-            claim.resumeCursor !== null &&
-              nextCursor?.token === claim.resumeCursor
-              ? "invalid_cursor"
-              : "provider_page_contract_invalid",
-            "page_validation",
-            false,
-          );
-        }
-        validatePageEvents(page.events, claim, dependencies.config.pageSize);
-        const receipts = await Promise.all(
-          page.events.map((event) =>
-            receiptForEvent(event, dependencies.config.symbols),
-          ),
-        );
-        stage = "persistence";
-        const persisted = await dependencies.repository.persistPage({
-          lease: claim.lease,
-          runId,
-          receipts,
-          nextCursor: nextCursor?.token ?? null,
-          persistedAt: (dependencies.now ?? (() => new Date()))().toISOString(),
-        });
-
-        stage = "completion";
-        const completedAt = (dependencies.now ?? (() => new Date()))().toISOString();
-        await dependencies.repository.completeRun({
-          lease: claim.lease,
-          runId,
-          completedAt,
-          nextDueAt: page.exhausted
-            ? addMilliseconds(
-                completedAt,
-                dependencies.config.cadenceSeconds * 1_000,
-              )
-            : completedAt,
-          hasMore: !page.exhausted,
-          ...(page.exhausted ? { highWaterMark: claim.window.end } : {}),
-        });
-        return {
-          outcome: "processed",
-          provider: dependencies.config.provider,
-          runId,
-          completedAt,
-          hasMore: !page.exhausted,
-          receiptCount: persisted.receiptCount,
-          insertedReceiptCount: persisted.insertedReceiptCount,
-          linkedSymbolCount: persisted.linkedSymbolCount,
-        };
-      } catch (failure) {
-        const safe = safeFailure(failure, stage);
-        if (claim && runId) {
-          const failedAt = (dependencies.now ?? (() => new Date()))().toISOString();
-          try {
-            await dependencies.repository.failRun({
-              lease: claim.lease,
-              runId,
-              failedAt,
-              nextDueAt: addMilliseconds(
-                failedAt,
-                retryDelaySeconds(claim, safe.retryable) * 1_000,
-              ),
-              error: safe,
-            });
-          } catch {
-            // A stale lease must not overwrite the newer owner's outcome.
-          }
-        }
-        throw new IngestionTickError(safe.code, safe.stage, safe.retryable);
-      }
+        pageSize,
+      }) =>
+        createAlpacaNewsQueryFingerprint({
+          symbols: partition.symbols,
+          windowStart,
+          windowEnd,
+          pageSize,
+        }),
+      createReceipt: (event, { partition }) =>
+        receiptForEvent(event, partition.symbols),
     },
-  };
+    now: dependencies.now,
+  });
 }
 
 export function createConfiguredAlpacaIngestionProvider(

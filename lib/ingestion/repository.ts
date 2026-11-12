@@ -1110,7 +1110,9 @@ async function listCollectedEvents(
   input: ListCollectedEventsInput,
 ): Promise<CollectedEventPage> {
   const provider = providerName(input.provider);
-  const partitionKey = partitionName(input.partitionKey);
+  const partitionKey = input.partitionKey
+    ? partitionName(input.partitionKey)
+    : null;
   const since = isoTimestamp(input.since);
   if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
     invalid();
@@ -1136,6 +1138,9 @@ async function listCollectedEvents(
           AND latest.receipt_id < ${before.receiptId}
         )
       )`
+    : sql``;
+  const partitionPredicate = partitionKey
+    ? sql`AND ${sourceEventIngestionMetadata.partitionKey} = ${partitionKey}`
     : sql``;
   const rows = await db.values<
     [
@@ -1176,14 +1181,16 @@ async function listCollectedEvents(
               ${sourceEventIngestionMetadata.providerRevisionAt},
               ${sourceEvents.observedAt}
             )) DESC,
-            julianday(${sourceEventIngestionMetadata.firstSeenAt}) ASC,
-            ${sourceEvents.id} ASC
+            julianday(${sourceEventIngestionMetadata.lastSeenAt}) DESC,
+            julianday(${sourceEventIngestionMetadata.firstSeenAt}) DESC,
+            julianday(${sourceEvents.observedAt}) DESC,
+            ${sourceEvents.id} DESC
         ) AS version_rank
       FROM ${sourceEventIngestionMetadata}
       INNER JOIN ${sourceEvents}
         ON ${sourceEvents.id} = ${sourceEventIngestionMetadata.sourceEventId}
       WHERE ${sourceEventIngestionMetadata.provider} = ${provider}
-        AND ${sourceEventIngestionMetadata.partitionKey} = ${partitionKey}
+        ${partitionPredicate}
         AND julianday(COALESCE(
           ${sourceEventIngestionMetadata.providerRevisionAt},
           ${sourceEvents.observedAt}

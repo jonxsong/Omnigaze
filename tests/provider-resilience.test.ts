@@ -8,7 +8,11 @@ import {
   ProviderCursorMismatchError,
   ProviderCursorRejectedError,
 } from "@/lib/providers/contracts";
-import { SecEdgarProvider } from "@/lib/providers/sec-edgar";
+import {
+  createSecFilingQueryFingerprint,
+  isValidSecUserAgent,
+  SecEdgarProvider,
+} from "@/lib/providers/sec-edgar";
 import type { SecFairAccessCoordinator } from "@/lib/providers/sec-fair-access";
 import type { CanonicalSymbol } from "@/lib/market-types";
 
@@ -521,7 +525,40 @@ function secFiling(
   };
 }
 
+const secPageRequest = {
+  symbols: ["NASDAQ:NVDA"] as CanonicalSymbol[],
+  windowStart: "2026-11-11T00:00:00.000Z",
+  windowEnd: "2026-11-12T00:00:00.000Z",
+  pageSize: 1,
+};
+
 describe("SEC EDGAR provider activation readiness", () => {
+  it("exports the same strict contact-identity validation used by the provider", () => {
+    expect(isValidSecUserAgent(SEC_USER_AGENT)).toBe(true);
+    expect(isValidSecUserAgent("Omnigaze")).toBe(false);
+    expect(isValidSecUserAgent("Omnigaze test@example.com\nInjected")).toBe(
+      false,
+    );
+  });
+
+  it("creates a stable SEC filing query fingerprint from canonical query inputs", async () => {
+    const first = await createSecFilingQueryFingerprint({
+      ...secPageRequest,
+      cik: "1045810",
+      symbols: ["NASDAQ:NVDA", "NYSE:BRK-A"],
+    });
+    const reordered = await createSecFilingQueryFingerprint({
+      ...secPageRequest,
+      cik: "0001045810",
+      symbols: ["NYSE:BRK-A", "NASDAQ:NVDA", "NASDAQ:NVDA"],
+      windowStart: "2026-11-11T00:00:00Z",
+      windowEnd: "2026-11-12T00:00:00Z",
+    });
+
+    expect(first).toMatch(/^[a-f0-9]{64}$/u);
+    expect(reordered).toBe(first);
+  });
+
   it("fails closed until the production activation gate is explicitly enabled", async () => {
     const fetchMock = vi.fn();
     const provider = new SecEdgarProvider({
@@ -546,6 +583,234 @@ describe("SEC EDGAR provider activation readiness", () => {
       "SEC requests are disabled until explicit production activation.",
     );
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps paginated SEC collection dormant with zero admission or fetch", async () => {
+    const acquire = vi.fn(async () => undefined);
+    const fetchMock = vi.fn();
+    const provider = new SecEdgarProvider({
+      userAgent: SEC_USER_AGENT,
+      coordinator: { ...READY_SEC_COORDINATOR, acquire },
+      cikByTicker: { NVDA: "1045810" },
+      fetcher: fetchMock,
+    });
+
+    await expect(provider.getEventPage(secPageRequest)).rejects.toThrow(
+      "SEC requests are disabled until explicit production activation.",
+    );
+    expect(acquire).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mismatched SEC page query before admission or network access", async () => {
+    const acquire = vi.fn(async () => undefined);
+    const fetchMock = vi.fn();
+    const provider = secProvider({
+      userAgent: SEC_USER_AGENT,
+      coordinator: { ...READY_SEC_COORDINATOR, acquire },
+      cikByTicker: { NVDA: "1045810" },
+      fetcher: fetchMock,
+    });
+
+    await expect(
+      provider.getEventPage({
+        ...secPageRequest,
+        cursor: {
+          token: "not-inspected-on-query-mismatch",
+          queryFingerprint: "0".repeat(64),
+        },
+      }),
+    ).rejects.toBeInstanceOf(ProviderCursorMismatchError);
+    expect(acquire).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed SEC page cursors before admission or network access", async () => {
+    const acquire = vi.fn(async () => undefined);
+    const fetchMock = vi.fn();
+    const provider = secProvider({
+      userAgent: SEC_USER_AGENT,
+      coordinator: { ...READY_SEC_COORDINATOR, acquire },
+      cikByTicker: { NVDA: "1045810" },
+      fetcher: fetchMock,
+    });
+    const queryFingerprint = await createSecFilingQueryFingerprint(
+      { ...secPageRequest, cik: "1045810" },
+    );
+
+    await expect(
+      provider.getEventPage({
+        ...secPageRequest,
+        cursor: { token: "not_a_canonical_cursor", queryFingerprint },
+      }),
+    ).rejects.toBeInstanceOf(ProviderCursorRejectedError);
+    expect(acquire).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("pages one configured CIK in stable accepted-at/accession order", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json(
+        secSubmissions([
+          secFiling("0001045810-26-000003", "2026-11-11T20:00:00.000Z"),
+          secFiling("0001045810-26-000001", "2026-11-11T18:00:00.000Z"),
+          secFiling("0001045810-26-000002", "2026-11-11T19:00:00.000Z"),
+        ]),
+      ),
+    );
+    const provider = secProvider({
+      userAgent: SEC_USER_AGENT,
+      cikByTicker: { NVDA: "1045810" },
+      fetcher: fetchMock,
+      now: () => Date.parse("2026-11-12T01:00:00.000Z"),
+    });
+
+    const first = await provider.getEventPage(secPageRequest);
+    expect(first).toMatchObject({
+      exhausted: false,
+      events: [
+        {
+          source: "sec-edgar",
+          sourceKind: "sec_filing",
+          sourceEventId: "0001045810-26-000001",
+          payload: {
+            headline: "8-K filed with the SEC",
+            summary: "A new regulatory filing is available for evidence review.",
+            url: "https://www.sec.gov/Archives/edgar/data/1045810/000104581026000001/report.htm",
+            symbols: ["NASDAQ:NVDA"],
+          },
+        },
+      ],
+    });
+    expect(first.nextCursor?.token).toMatch(/^[A-Za-z0-9_-]+$/u);
+
+    const second = await provider.getEventPage({
+      ...secPageRequest,
+      cursor: first.nextCursor,
+    });
+    expect(second.events.map((event) => event.sourceEventId)).toEqual([
+      "0001045810-26-000002",
+    ]);
+    expect(second.nextCursor?.token).not.toBe(first.nextCursor?.token);
+
+    const third = await provider.getEventPage({
+      ...secPageRequest,
+      cursor: second.nextCursor,
+    });
+    expect(third.events.map((event) => event.sourceEventId)).toEqual([
+      "0001045810-26-000003",
+    ]);
+    expect(third).toMatchObject({ exhausted: true, nextCursor: null });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects a changed frozen SEC snapshot instead of skipping an insertion", async () => {
+    const firstSnapshot = [
+      secFiling("0001045810-26-000001", "2026-11-11T18:00:00.000Z"),
+      secFiling("0001045810-26-000003", "2026-11-11T20:00:00.000Z"),
+    ];
+    const changedSnapshot = [
+      firstSnapshot[0],
+      secFiling("0001045810-26-000002", "2026-11-11T19:00:00.000Z"),
+      firstSnapshot[1],
+    ];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(secSubmissions(firstSnapshot)))
+      .mockResolvedValueOnce(Response.json(secSubmissions(changedSnapshot)));
+    const provider = secProvider({
+      userAgent: SEC_USER_AGENT,
+      cikByTicker: { NVDA: "1045810" },
+      fetcher: fetchMock,
+      now: () => Date.parse("2026-11-12T01:00:00.000Z"),
+    });
+    const first = await provider.getEventPage(secPageRequest);
+
+    await expect(
+      provider.getEventPage({ ...secPageRequest, cursor: first.nextCursor }),
+    ).rejects.toBeInstanceOf(ProviderCursorRejectedError);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("requires every SEC page symbol to resolve to the same configured CIK", async () => {
+    const fetchMock = vi.fn();
+    const provider = secProvider({
+      userAgent: SEC_USER_AGENT,
+      cikByTicker: { NVDA: "1045810", MSFT: "789019" },
+      fetcher: fetchMock,
+    });
+
+    await expect(
+      provider.getEventPage({
+        ...secPageRequest,
+        symbols: ["NASDAQ:NVDA", "NASDAQ:MSFT"],
+      }),
+    ).rejects.toThrow("exactly one configured CIK");
+    await expect(
+      provider.getEventPage({
+        ...secPageRequest,
+        symbols: ["NYSE:UNKNOWN"],
+      }),
+    ).rejects.toThrow("explicit CIK mapping");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects SEC page sizes above the durable receipt bound before fetching", async () => {
+    const fetchMock = vi.fn();
+    const provider = secProvider({
+      userAgent: SEC_USER_AGENT,
+      cikByTicker: { NVDA: "1045810" },
+      fetcher: fetchMock,
+    });
+
+    await expect(
+      provider.getEventPage({ ...secPageRequest, pageSize: 101 }),
+    ).rejects.toThrow("SEC filing page request is invalid.");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("honors an already-aborted SEC paging signal before admission or fetch", async () => {
+    const acquire = vi.fn(async () => undefined);
+    const fetchMock = vi.fn();
+    const controller = new AbortController();
+    controller.abort(new DOMException("bounded tick ended", "AbortError"));
+    const provider = secProvider({
+      userAgent: SEC_USER_AGENT,
+      coordinator: { ...READY_SEC_COORDINATOR, acquire },
+      cikByTicker: { NVDA: "1045810" },
+      fetcher: fetchMock,
+    });
+
+    await expect(
+      provider.getEventPage({ ...secPageRequest, signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(acquire).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("combines the SEC paging caller signal with its provider timeout", async () => {
+    const observed: { signal?: AbortSignal } = {};
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        observed.signal = init?.signal as AbortSignal;
+        return Response.json(secSubmissions());
+      },
+    );
+    const controller = new AbortController();
+    const provider = secProvider({
+      userAgent: SEC_USER_AGENT,
+      cikByTicker: { NVDA: "1045810" },
+      fetcher: fetchMock,
+    });
+
+    await provider.getEventPage({
+      ...secPageRequest,
+      signal: controller.signal,
+    });
+    expect(observed.signal).toBeInstanceOf(AbortSignal);
+    expect(observed.signal).not.toBe(controller.signal);
+    controller.abort();
+    expect(observed.signal?.aborted).toBe(true);
   });
 
   it("reports a missing or non-contact user agent as unconfigured without fetching", async () => {

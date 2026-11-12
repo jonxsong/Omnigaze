@@ -140,7 +140,17 @@ const tools = [
   {
     name: "run_intelligence_ingestion_tick",
     description:
-      "Run one bounded, operator-only provider ingestion page. This tool is intended for a trusted linked schedule and never places trades.",
+      "Run one bounded, operator-only licensed-news ingestion page. This tool is intended for a trusted linked schedule and never places trades.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "run_sec_filing_ingestion_tick",
+    description:
+      "Run one bounded, operator-only recent SEC filing ingestion page. It remains fail-closed unless both SEC activation gates and the contact identity are configured, and it never places trades.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -591,6 +601,50 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         } catch (failure) {
           if (failure instanceof IngestionTickError) {
             return toolError("Ingestion tick failed.", {
+              code: failure.code,
+              stage: failure.stage,
+              retryable: failure.retryable,
+            });
+          }
+          throw failure;
+        }
+      }
+      case "run_sec_filing_ingestion_tick": {
+        const userId = request.headers.get("oai-authenticated-user-id");
+        if (!userId) {
+          return toolError("Authentication required.", { code: "auth_required" });
+        }
+        const operatorId = process.env.INGESTION_OPERATOR_USER_ID?.trim();
+        if (!operatorId) {
+          return toolError("Ingestion operator is not configured.", {
+            code: "ingestion_operator_unconfigured",
+          });
+        }
+        if (userId !== operatorId) {
+          return toolError("Operator authorization required.", {
+            code: "operator_required",
+          });
+        }
+        const parsed = z.object({}).strict().safeParse(args);
+        if (!parsed.success) return validationError(parsed.error);
+        const {
+          runSecFilingIngestionTick,
+        } = await import("@/lib/services/sec-filing-ingestion");
+        const { IngestionTickError } = await import(
+          "@/lib/services/bounded-provider-ingestion"
+        );
+        try {
+          const result = await runSecFilingIngestionTick();
+          return toolContent(result, {
+            scope: "operator",
+            persistence: "server",
+            boundedPages: 1,
+            tradeExecutionAllowed: false,
+            generatedAt: new Date().toISOString(),
+          });
+        } catch (failure) {
+          if (failure instanceof IngestionTickError) {
+            return toolError("SEC filing ingestion tick failed.", {
               code: failure.code,
               stage: failure.stage,
               retryable: failure.retryable,

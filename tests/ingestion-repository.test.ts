@@ -417,9 +417,25 @@ describe("global ingestion repository", () => {
     ).resolves.toMatchObject({
       providers: [{ provider: "alpaca", partitionCount: 1 }],
     });
+    await expect(
+      repository.listCollectedEvents({
+        provider: "alpaca",
+        since: "2026-11-12T07:00:00.000Z",
+        symbolIds: ["NASDAQ:NVDA"],
+        limit: 20,
+      }),
+    ).resolves.toMatchObject({
+      hasMore: false,
+      items: [
+        expect.objectContaining({
+          sourceEventId: "news-1",
+          symbolIds: ["NASDAQ:NVDA"],
+        }),
+      ],
+    });
   });
 
-  it("preserves the first accepted version when a late variant reuses a provider revision", async () => {
+  it("follows the latest observation across an equal-revision correction and reversion", async () => {
     sqlite
       .prepare(
         "INSERT INTO instruments (id, ticker, exchange, name, currency, status) VALUES (?, ?, ?, ?, ?, ?)",
@@ -459,15 +475,15 @@ describe("global ingestion repository", () => {
       leaseExpiresAt: "2026-11-12T08:01:04.000Z",
       proposedWindow: laterWindow,
     });
-    const staleEnvelope = JSON.stringify({
+    const correctedEnvelope = JSON.stringify({
       schema: "omnigaze.provider-receipt.v1",
       sourceKind: "licensed_news",
       sourceEventId: "news-1",
       publishedAt: "2026-11-12T07:45:00.000Z",
       providerRevisionAt: "2026-11-12T07:45:30.000Z",
       symbolIds: ["NASDAQ:NVDA"],
-      headline: "Late stale variant",
-      summary: "This must not replace the first accepted equal revision.",
+      headline: "Late corrected variant",
+      summary: "The latest observed equal-revision variant must win.",
       url: "https://example.test/news-1",
       contentDigest: "b".repeat(64),
     });
@@ -481,8 +497,8 @@ describe("global ingestion repository", () => {
       receipts: [
         await receipt({
           observedAt: "2026-11-12T08:00:05.000Z",
-          rawPayload: staleEnvelope,
-          rawPayloadHash: await sha256Hex(staleEnvelope),
+          rawPayload: correctedEnvelope,
+          rawPayloadHash: await sha256Hex(correctedEnvelope),
         }),
       ],
       nextCursor: null,
@@ -495,6 +511,40 @@ describe("global ingestion repository", () => {
       nextDueAt: "2026-11-12T09:05:00.000Z",
       hasMore: false,
       highWaterMark: laterWindow.end,
+    });
+
+    const thirdWindow = {
+      start: "2026-11-12T09:00:00.000Z",
+      end: "2026-11-12T10:00:00.000Z",
+      fingerprint: "configured-symbols-v3",
+    };
+    const third = await repository.claimNextDue({
+      provider: "alpaca",
+      partitionKey: first.partitionKey,
+      claimedAt: "2026-11-12T09:05:00.000Z",
+      leaseExpiresAt: "2026-11-12T09:06:00.000Z",
+      proposedWindow: thirdWindow,
+    });
+    const thirdRun = await repository.startRun(
+      third!.lease,
+      "2026-11-12T09:05:01.000Z",
+    );
+    await repository.persistPage({
+      lease: third!.lease,
+      runId: thirdRun,
+      receipts: [
+        await receipt({ observedAt: "2026-11-12T09:05:01.000Z" }),
+      ],
+      nextCursor: null,
+      persistedAt: "2026-11-12T09:05:02.000Z",
+    });
+    await repository.completeRun({
+      lease: third!.lease,
+      runId: thirdRun,
+      completedAt: "2026-11-12T09:05:03.000Z",
+      nextDueAt: "2026-11-12T10:05:00.000Z",
+      hasMore: false,
+      highWaterMark: thirdWindow.end,
     });
 
     const collected = await repository.listCollectedEvents({

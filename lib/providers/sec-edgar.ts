@@ -1,8 +1,12 @@
 import type { CanonicalSymbol } from "@/lib/market-types";
 import type { ProviderHealth, RawSourceEvent } from "@/lib/pipeline/contracts";
-import type {
-  IntelligenceSourceProvider,
-  IntelligenceSourceResult,
+import {
+  ProviderCursorMismatchError,
+  ProviderCursorRejectedError,
+  type IntelligenceEventPage,
+  type IntelligenceEventPageRequest,
+  type IntelligenceSourceResult,
+  type PaginatedIntelligenceSourceProvider,
 } from "./contracts";
 import type { SecFairAccessCoordinator } from "./sec-fair-access";
 
@@ -25,6 +29,9 @@ const MAX_CATALOG_ENTRIES = 25_000;
 const MAX_FILINGS_PER_CIK = 2_000;
 const MAX_REQUEST_SYMBOLS = 100;
 const MAX_RESULT_LIMIT = 100;
+const MAX_PAGE_SIZE = 100;
+const MAX_PAGE_CURSOR_LENGTH = 1_024;
+const SEC_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_TICKER_CATALOG_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MAX_SUBMISSIONS_RESPONSE_BYTES = 8 * 1024 * 1024;
 const MIN_POLICY_COOLDOWN_SECONDS = 10 * 60;
@@ -85,6 +92,14 @@ type SecFiling = {
   cik: string;
 };
 
+type SecPageCursor = {
+  version: 1;
+  cik: string;
+  snapshotDigest: string;
+  acceptedAt: string;
+  accessionNumber: string;
+};
+
 type SubmissionsCacheEntry = {
   fetchedAt: number;
   filings: SecFiling[];
@@ -105,6 +120,93 @@ function normalizedUserAgent(value: string | undefined) {
     return null;
   }
   return candidate;
+}
+
+export function isValidSecUserAgent(value: string | undefined) {
+  return normalizedUserAgent(value) !== null;
+}
+
+function normalizedPageTimestamp(value: string, field: string) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 64) {
+    invalid(`SEC filing page ${field} is invalid.`);
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    invalid(`SEC filing page ${field} is invalid.`);
+  }
+  return new Date(timestamp).toISOString();
+}
+
+function normalizePageQuery(options: {
+  symbols: CanonicalSymbol[];
+  windowStart: string;
+  windowEnd: string;
+  pageSize: number;
+}) {
+  if (
+    !Array.isArray(options.symbols) ||
+    options.symbols.length === 0 ||
+    options.symbols.length > MAX_REQUEST_SYMBOLS ||
+    options.symbols.some((symbol) => typeof symbol !== "string") ||
+    !Number.isSafeInteger(options.pageSize) ||
+    options.pageSize < 1 ||
+    options.pageSize > MAX_PAGE_SIZE
+  ) {
+    invalid("SEC filing page request is invalid.");
+  }
+  const symbols = [
+    ...new Set(options.symbols.map((symbol) => symbol.trim().toUpperCase())),
+  ].sort() as CanonicalSymbol[];
+  if (
+    symbols.length === 0 ||
+    symbols.some((symbol) => !canonicalSymbolPattern.test(symbol))
+  ) {
+    invalid("SEC filing page request is invalid.");
+  }
+  const windowStart = normalizedPageTimestamp(
+    options.windowStart,
+    "window start",
+  );
+  const windowEnd = normalizedPageTimestamp(options.windowEnd, "window end");
+  if (windowStart >= windowEnd) {
+    invalid("SEC filing page window start must precede window end.");
+  }
+  return { symbols, windowStart, windowEnd, pageSize: options.pageSize };
+}
+
+async function sha256Hex(value: string) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export async function createSecFilingQueryFingerprint(options: {
+  cik: string;
+  symbols: CanonicalSymbol[];
+  windowStart: string;
+  windowEnd: string;
+  pageSize: number;
+}) {
+  const query = normalizePageQuery(options);
+  const cik = normalizedCik(options.cik);
+  if (!cik) invalid("SEC filing page CIK is invalid.");
+  return sha256Hex(
+    JSON.stringify({
+      provider: "sec-edgar",
+      stream: "submissions-recent",
+      version: 1,
+      cik,
+      symbols: query.symbols,
+      windowStart: query.windowStart,
+      windowEnd: query.windowEnd,
+      pageSize: query.pageSize,
+      sort: "accepted_at_asc_accession_asc",
+    }),
+  );
 }
 
 function normalizedCik(value: unknown) {
@@ -302,6 +404,119 @@ function parseSubmissions(value: unknown, cik: string, now: number): SecFiling[]
   });
 }
 
+function filingSort(left: SecFiling, right: SecFiling) {
+  return (
+    left.acceptedAt.localeCompare(right.acceptedAt) ||
+    left.accessionNumber.localeCompare(right.accessionNumber)
+  );
+}
+
+function canonicalFilingSnapshot(filings: SecFiling[]) {
+  const byAccession = new Map<string, SecFiling>();
+  for (const filing of filings) {
+    const existing = byAccession.get(filing.accessionNumber);
+    if (existing && JSON.stringify(existing) !== JSON.stringify(filing)) {
+      invalid("SEC submissions returned an ambiguous filing snapshot.");
+    }
+    byAccession.set(filing.accessionNumber, filing);
+  }
+  return [...byAccession.values()].sort(filingSort);
+}
+
+async function filingSnapshotDigest(filings: SecFiling[]) {
+  return sha256Hex(
+    JSON.stringify(
+      filings.map((filing) => ({
+        cik: filing.cik,
+        accessionNumber: filing.accessionNumber,
+        filingDate: filing.filingDate,
+        acceptedAt: filing.acceptedAt,
+        form: filing.form,
+        primaryDocument: filing.primaryDocument,
+      })),
+    ),
+  );
+}
+
+function encodePageCursor(cursor: SecPageCursor) {
+  return btoa(JSON.stringify(cursor))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
+}
+
+function decodePageCursor(token: string): SecPageCursor {
+  const candidate = token.trim();
+  if (
+    candidate.length === 0 ||
+    candidate.length > MAX_PAGE_CURSOR_LENGTH ||
+    !/^[A-Za-z0-9_-]+$/u.test(candidate)
+  ) {
+    throw new ProviderCursorRejectedError("sec-edgar");
+  }
+  try {
+    const padding = "=".repeat((4 - (candidate.length % 4)) % 4);
+    const decoded = JSON.parse(
+      atob(candidate.replaceAll("-", "+").replaceAll("_", "/") + padding),
+    ) as unknown;
+    if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+      throw new Error("invalid");
+    }
+    const value = decoded as Record<string, unknown>;
+    if (
+      Object.keys(value).sort().join(",") !==
+        "acceptedAt,accessionNumber,cik,snapshotDigest,version" ||
+      value.version !== 1 ||
+      typeof value.cik !== "string" ||
+      !cikPattern.test(value.cik) ||
+      typeof value.snapshotDigest !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(value.snapshotDigest) ||
+      typeof value.acceptedAt !== "string" ||
+      strictAcceptanceTimestamp(value.acceptedAt) === null ||
+      new Date(Date.parse(value.acceptedAt)).toISOString() !== value.acceptedAt ||
+      typeof value.accessionNumber !== "string" ||
+      !accessionPattern.test(value.accessionNumber)
+    ) {
+      throw new Error("invalid");
+    }
+    const cursor = value as SecPageCursor;
+    if (encodePageCursor(cursor) !== candidate) throw new Error("invalid");
+    return cursor;
+  } catch (error) {
+    if (error instanceof ProviderCursorRejectedError) throw error;
+    throw new ProviderCursorRejectedError("sec-edgar");
+  }
+}
+
+function filingSourceUrl(filing: SecFiling) {
+  return filing.primaryDocument
+    ? `https://www.sec.gov/Archives/edgar/data/${filing.cik}/${filing.accessionNumber.replaceAll("-", "")}/${filing.primaryDocument}`
+    : null;
+}
+
+function filingEvent(
+  filing: SecFiling,
+  symbols: CanonicalSymbol[],
+  receivedAt: string,
+): RawSourceEvent {
+  const headline = `${filing.form} filed with the SEC`;
+  return {
+    source: "sec-edgar",
+    sourceKind: "sec_filing",
+    sourceEventId: filing.accessionNumber,
+    receivedAt,
+    publishedAt: filing.acceptedAt,
+    providerUpdatedAt: filing.acceptedAt,
+    payload: {
+      ...filing,
+      symbols,
+      headline,
+      summary: "A new regulatory filing is available for evidence review.",
+      url: filingSourceUrl(filing),
+    },
+  };
+}
+
 function normalizeRequest(options: {
   symbols: CanonicalSymbol[];
   since: string;
@@ -336,7 +551,7 @@ function normalizeRequest(options: {
   };
 }
 
-export class SecEdgarProvider implements IntelligenceSourceProvider {
+export class SecEdgarProvider implements PaginatedIntelligenceSourceProvider {
   readonly name = "sec-edgar";
   private tickerCatalog: { fetchedAt: number; value: TickerCatalog } | null = null;
   private tickerCatalogRequest: Promise<{
@@ -413,13 +628,20 @@ export class SecEdgarProvider implements IntelligenceSourceProvider {
     }
   }
 
-  private async request(url: string) {
+  private async request(url: string, callerSignal?: AbortSignal) {
     const headers = this.headers();
+    callerSignal?.throwIfAborted();
     await this.acquireRequestSlot();
+    callerSignal?.throwIfAborted();
     await this.coordinator!.acquire();
+    callerSignal?.throwIfAborted();
+    const timeoutSignal = AbortSignal.timeout(SEC_REQUEST_TIMEOUT_MS);
+    const signal = callerSignal
+      ? AbortSignal.any([callerSignal, timeoutSignal])
+      : timeoutSignal;
     const response = await this.fetcher(url, {
       headers,
-      signal: AbortSignal.timeout(10_000),
+      signal,
     });
     if (response.status === 403 || response.status === 429) {
       await this.coordinator!.imposeCooldown(
@@ -503,6 +725,23 @@ export class SecEdgarProvider implements IntelligenceSourceProvider {
     }
   }
 
+  private async fetchSubmissions(cik: string, signal?: AbortSignal) {
+    const paddedCik = cik.padStart(10, "0");
+    const response = await this.request(
+      `https://data.sec.gov/submissions/CIK${paddedCik}.json`,
+      signal,
+    );
+    if (!response.ok) {
+      throw new Error(`SEC submissions failed with ${response.status}`);
+    }
+    const payload = await readBoundedJson(
+      response,
+      MAX_SUBMISSIONS_RESPONSE_BYTES,
+      "SEC submissions exceeded its bounded response size.",
+    );
+    return parseSubmissions(payload, cik, this.now());
+  }
+
   private async loadSubmissions(cik: string) {
     const cached = this.submissionsCache.get(cik);
     if (cached && this.now() - cached.fetchedAt <= SUBMISSIONS_CACHE_TTL_MS) {
@@ -512,19 +751,7 @@ export class SecEdgarProvider implements IntelligenceSourceProvider {
     if (inFlight) return inFlight;
 
     const request = (async () => {
-      const paddedCik = cik.padStart(10, "0");
-      const response = await this.request(
-        `https://data.sec.gov/submissions/CIK${paddedCik}.json`,
-      );
-      if (!response.ok) {
-        throw new Error(`SEC submissions failed with ${response.status}`);
-      }
-      const payload = await readBoundedJson(
-        response,
-        MAX_SUBMISSIONS_RESPONSE_BYTES,
-        "SEC submissions exceeded its bounded response size.",
-      );
-      const filings = parseSubmissions(payload, cik, this.now());
+      const filings = await this.fetchSubmissions(cik);
       this.submissionsCache.set(cik, { fetchedAt: this.now(), filings });
       this.pruneSubmissionsCache();
       return filings;
@@ -537,6 +764,115 @@ export class SecEdgarProvider implements IntelligenceSourceProvider {
         this.submissionsRequests.delete(cik);
       }
     }
+  }
+
+  private configuredPagePlan(symbols: CanonicalSymbol[]) {
+    const ciks = new Set<string>();
+    for (const symbol of symbols) {
+      const ticker = symbol.split(":")[1];
+      const cik =
+        resolveCatalogExact(this.configuredCatalog, ticker) ??
+        resolveCatalogAlias(this.configuredCatalog, ticker);
+      if (!cik) {
+        invalid(
+          "SEC filing pages require an explicit CIK mapping for every symbol.",
+        );
+      }
+      ciks.add(cik);
+    }
+    if (ciks.size !== 1) {
+      invalid("SEC filing pages require exactly one configured CIK.");
+    }
+    const [cik] = ciks;
+    if (!cik) invalid("SEC filing pages require exactly one configured CIK.");
+    return {
+      cik,
+      symbols: [...symbols].sort() as CanonicalSymbol[],
+    };
+  }
+
+  async getEventPage(
+    options: IntelligenceEventPageRequest,
+  ): Promise<IntelligenceEventPage> {
+    const query = normalizePageQuery(options);
+    const plan = this.configuredPagePlan(query.symbols);
+    const queryFingerprint = await createSecFilingQueryFingerprint({
+      ...query,
+      cik: plan.cik,
+    });
+    const suppliedCursor = options.cursor ?? null;
+    if (
+      suppliedCursor &&
+      suppliedCursor.queryFingerprint !== queryFingerprint
+    ) {
+      throw new ProviderCursorMismatchError(this.name);
+    }
+    const cursor = suppliedCursor
+      ? decodePageCursor(suppliedCursor.token)
+      : null;
+    if (cursor && cursor.cik !== plan.cik) {
+      throw new ProviderCursorRejectedError(this.name);
+    }
+
+    // Validate the explicit activation, operator identity, and coordinator
+    // before the first possible SEC request. request() repeats the check at
+    // the actual egress boundary.
+    this.headers();
+    const filings = canonicalFilingSnapshot(
+      (await this.fetchSubmissions(plan.cik, options.signal)).filter(
+        (filing) =>
+          filing.acceptedAt >= query.windowStart &&
+          filing.acceptedAt <= query.windowEnd,
+      ),
+    );
+    const snapshotDigest = await filingSnapshotDigest(filings);
+    let startIndex = 0;
+    if (cursor) {
+      if (
+        cursor.snapshotDigest !== snapshotDigest ||
+        cursor.acceptedAt < query.windowStart ||
+        cursor.acceptedAt > query.windowEnd
+      ) {
+        throw new ProviderCursorRejectedError(this.name);
+      }
+      const cursorIndex = filings.findIndex(
+        (filing) =>
+          filing.acceptedAt === cursor.acceptedAt &&
+          filing.accessionNumber === cursor.accessionNumber,
+      );
+      if (cursorIndex < 0) {
+        throw new ProviderCursorRejectedError(this.name);
+      }
+      startIndex = cursorIndex + 1;
+    }
+
+    const selected = filings.slice(startIndex, startIndex + query.pageSize);
+    const hasMore = startIndex + selected.length < filings.length;
+    const last = selected.at(-1);
+    if (hasMore && !last) {
+      throw new ProviderCursorRejectedError(this.name);
+    }
+    const receivedAt = new Date(this.now()).toISOString();
+    return {
+      events: selected.map((filing) =>
+        filingEvent(filing, plan.symbols, receivedAt),
+      ),
+      nextCursor:
+        hasMore && last
+          ? {
+              token: encodePageCursor({
+                version: 1,
+                cik: plan.cik,
+                snapshotDigest,
+                acceptedAt: last.acceptedAt,
+                accessionNumber: last.accessionNumber,
+              }),
+              queryFingerprint,
+            }
+          : null,
+      exhausted: !hasMore,
+      queryFingerprint,
+    };
   }
 
   async getLatestEvents(options: {
@@ -644,18 +980,13 @@ export class SecEdgarProvider implements IntelligenceSourceProvider {
           left.filing.accessionNumber.localeCompare(right.filing.accessionNumber),
       )
       .slice(0, request.limit)
-      .map<RawSourceEvent>(({ filing, symbols }) => ({
-        source: this.name,
-        sourceKind: "sec_filing",
-        sourceEventId: filing.accessionNumber,
-        receivedAt,
-        publishedAt: filing.acceptedAt,
-        providerUpdatedAt: filing.acceptedAt,
-        payload: {
-          ...filing,
-          symbols: [...symbols].sort(),
-        },
-      }));
+      .map<RawSourceEvent>(({ filing, symbols }) =>
+        filingEvent(
+          filing,
+          [...symbols].sort() as CanonicalSymbol[],
+          receivedAt,
+        ),
+      );
 
     return partial ? { events, coverage: "partial" } : events;
   }

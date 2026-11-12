@@ -150,7 +150,8 @@ export interface CollectedEventCursor {
 
 export interface ListCollectedEventsInput {
   provider: string;
-  partitionKey: string;
+  /** Omit to read the provider's retained history across partition versions. */
+  partitionKey?: string;
   /** Inclusive lower bound over provider revision/observation time. */
   since: string;
   symbolIds: readonly CanonicalSymbol[];

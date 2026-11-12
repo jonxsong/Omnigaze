@@ -54,6 +54,21 @@ function repository(overrides: Partial<IngestionRepositoryPort> = {}) {
   const value: IngestionRepositoryPort = {
     ensureCheckpoint: vi.fn(async () => {
       calls.push("ensure");
+      return {
+        provider: claim.provider,
+        partitionKey: claim.partitionKey,
+        leaseExpiresAt: claim.leaseExpiresAt,
+        window: claim.window,
+        resumeCursor: claim.resumeCursor,
+        highWaterMark: claim.highWaterMark,
+        nextDueAt: claim.nextDueAt,
+        lastAttemptAt: claim.lastAttemptAt,
+        lastSuccessAt: claim.lastSuccessAt,
+        lastFailureAt: claim.lastFailureAt,
+        consecutiveFailures: claim.consecutiveFailures,
+        totalSuccesses: claim.totalSuccesses,
+        totalFailures: claim.totalFailures,
+      };
     }),
     claimNextDue: vi.fn(async () => {
       calls.push("claim");

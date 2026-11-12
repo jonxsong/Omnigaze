@@ -4,6 +4,7 @@ import type {
   IngestionRuntimeConfig,
 } from "@/lib/services/intelligence-ingestion";
 import { readIngestionRuntimeConfig } from "@/lib/services/intelligence-ingestion";
+import { isValidSecUserAgent } from "@/lib/providers/sec-edgar";
 
 const STATUS_LOOKBACK_MS = 24 * 60 * 60 * 1_000;
 
@@ -23,6 +24,11 @@ export type IngestionReadiness = IngestionAggregateStatus & {
   latestEvidenceAt: string | null;
 };
 
+type ReadinessConfig = Pick<
+  IngestionRuntimeConfig,
+  "collectionMode" | "publiclyReportedCadenceSeconds"
+>;
+
 function latest(values: Array<string | null>) {
   return values
     .filter((value): value is string => value !== null)
@@ -32,10 +38,7 @@ function latest(values: Array<string | null>) {
 
 export function summarizeIngestionReadiness(
   aggregate: IngestionAggregateStatus,
-  config: Pick<
-    IngestionRuntimeConfig,
-    "collectionMode" | "publiclyReportedCadenceSeconds"
-  >,
+  config: ReadinessConfig,
 ): IngestionReadiness {
   const partitionCount = aggregate.providers.reduce(
     (total, provider) => total + provider.partitionCount,
@@ -85,6 +88,76 @@ export function summarizeIngestionReadiness(
   };
 }
 
+function mergeProviderStatuses(
+  providers: IngestionAggregateStatus["providers"],
+) {
+  const merged = new Map<
+    string,
+    IngestionAggregateStatus["providers"][number]
+  >();
+  for (const provider of providers) {
+    const current = merged.get(provider.provider);
+    if (!current) {
+      merged.set(provider.provider, {
+        ...provider,
+        runs: { ...provider.runs },
+      });
+      continue;
+    }
+    const latest = (left: string | null, right: string | null) =>
+      [left, right]
+        .filter((value): value is string => value !== null)
+        .sort()
+        .at(-1) ?? null;
+    current.partitionCount += provider.partitionCount;
+    current.duePartitionCount += provider.duePartitionCount;
+    current.leasedPartitionCount += provider.leasedPartitionCount;
+    current.resumingPartitionCount += provider.resumingPartitionCount;
+    current.failingPartitionCount += provider.failingPartitionCount;
+    current.totalSuccesses += provider.totalSuccesses;
+    current.totalFailures += provider.totalFailures;
+    current.lastAttemptAt = latest(current.lastAttemptAt, provider.lastAttemptAt);
+    current.lastSuccessAt = latest(current.lastSuccessAt, provider.lastSuccessAt);
+    current.lastFailureAt = latest(current.lastFailureAt, provider.lastFailureAt);
+    current.latestEvidenceAt = latest(
+      current.latestEvidenceAt,
+      provider.latestEvidenceAt,
+    );
+    current.runs.running += provider.runs.running;
+    current.runs.succeeded += provider.runs.succeeded;
+    current.runs.failed += provider.runs.failed;
+    current.runs.receipts += provider.runs.receipts;
+    current.runs.errors += provider.runs.errors;
+  }
+  return [...merged.values()].sort((left, right) =>
+    left.provider.localeCompare(right.provider),
+  );
+}
+
+function uninitializedScheduledProvider(provider: string) {
+  return {
+    provider,
+    partitionCount: 1,
+    duePartitionCount: 1,
+    leasedPartitionCount: 0,
+    resumingPartitionCount: 0,
+    failingPartitionCount: 0,
+    totalSuccesses: 0,
+    totalFailures: 0,
+    lastAttemptAt: null,
+    lastSuccessAt: null,
+    lastFailureAt: null,
+    latestEvidenceAt: null,
+    runs: {
+      running: 0,
+      succeeded: 0,
+      failed: 0,
+      receipts: 0,
+      errors: 0,
+    },
+  } satisfies IngestionAggregateStatus["providers"][number];
+}
+
 export function unavailableIngestionReadiness(options: {
   now: string;
   since: string;
@@ -107,17 +180,78 @@ export async function getIngestionReadiness(
   const now = new Date().toISOString();
   const since = new Date(Date.parse(now) - STATUS_LOOKBACK_MS).toISOString();
   try {
-    const [config, { ingestionRepository }] = await Promise.all([
+    const [config, secConfig, { ingestionRepository }] = await Promise.all([
       readIngestionRuntimeConfig(environment),
+      environment.SEC_DURABLE_INGESTION_ENABLED === "true"
+        ? import("@/lib/services/sec-filing-ingestion").then(
+            ({ readSecFilingIngestionRuntimeConfig }) =>
+              readSecFilingIngestionRuntimeConfig(environment),
+          )
+        : Promise.resolve(null),
       import("@/lib/ingestion/repository"),
     ]);
-    const aggregate = await ingestionRepository.getAggregateStatus({
-      now,
+    const secConfigured =
+      secConfig?.enabled === true &&
+      environment.SEC_EDGAR_ENABLED === "true" &&
+      isValidSecUserAgent(environment.SEC_USER_AGENT);
+    const activeSecConfig = secConfigured ? secConfig : null;
+    const scopes = [
+      { provider: config.provider, partitionKey: config.partitionKey },
+      ...(activeSecConfig
+        ? activeSecConfig.partitions.map((partition) => ({
+            provider: activeSecConfig.provider,
+            partitionKey: partition.partitionKey,
+          }))
+        : []),
+    ];
+    const aggregates = await Promise.all(
+      scopes.map((scope) =>
+        ingestionRepository.getAggregateStatus({ now, since, ...scope }),
+      ),
+    );
+    const aggregate: IngestionAggregateStatus = {
+      generatedAt: now,
       since,
-      provider: config.provider,
-      partitionKey: config.partitionKey,
-    });
-    return summarizeIngestionReadiness(aggregate, config);
+      providers: mergeProviderStatuses(
+        aggregates.flatMap((entry, index) => {
+          const scope = scopes[index];
+          const scheduledSecScope =
+            activeSecConfig?.collectionMode === "scheduled" &&
+            scope.provider === activeSecConfig.provider;
+          if (!scheduledSecScope) return entry.providers;
+          if (entry.providers.length === 0) {
+            return [uninitializedScheduledProvider(scope.provider)];
+          }
+          return entry.providers.map((provider) =>
+            provider.totalSuccesses === 0
+              ? {
+                  ...provider,
+                  duePartitionCount: Math.max(
+                    1,
+                    provider.duePartitionCount,
+                  ),
+                }
+              : provider,
+          );
+        }),
+      ),
+    };
+    const reportedCadences = [
+      config.publiclyReportedCadenceSeconds,
+      ...(activeSecConfig
+        ? [activeSecConfig.publiclyReportedCadenceSeconds]
+        : []),
+    ].filter((value): value is number => value !== null);
+    const readinessConfig: ReadinessConfig = {
+      collectionMode:
+        config.collectionMode === "scheduled" ||
+        activeSecConfig?.collectionMode === "scheduled"
+          ? "scheduled"
+          : "request_time",
+      publiclyReportedCadenceSeconds:
+        reportedCadences.length > 0 ? Math.min(...reportedCadences) : null,
+    };
+    return summarizeIngestionReadiness(aggregate, readinessConfig);
   } catch {
     return unavailableIngestionReadiness({ now, since });
   }

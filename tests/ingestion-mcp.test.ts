@@ -13,12 +13,21 @@ const mocks = vi.hoisted(() => {
   }
   return {
     runIntelligenceIngestionTick: vi.fn(),
+    runSecFilingIngestionTick: vi.fn(),
     IngestionTickError: MockIngestionTickError,
   };
 });
 
 vi.mock("@/lib/services/intelligence-ingestion", () => ({
   runIntelligenceIngestionTick: mocks.runIntelligenceIngestionTick,
+  IngestionTickError: mocks.IngestionTickError,
+}));
+
+vi.mock("@/lib/services/sec-filing-ingestion", () => ({
+  runSecFilingIngestionTick: mocks.runSecFilingIngestionTick,
+}));
+
+vi.mock("@/lib/services/bounded-provider-ingestion", () => ({
   IngestionTickError: mocks.IngestionTickError,
 }));
 
@@ -61,6 +70,19 @@ async function callTick(args: Record<string, unknown>, userId?: string) {
   };
 }
 
+async function callSecTick(args: Record<string, unknown>, userId?: string) {
+  const response = await rpc(
+    "tools/call",
+    { name: "run_sec_filing_ingestion_tick", arguments: args },
+    userId,
+  );
+  const result = response.result!;
+  return {
+    result,
+    content: JSON.parse(result.content[0].text) as Record<string, unknown>,
+  };
+}
+
 describe("operator ingestion MCP tool", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -78,6 +100,14 @@ describe("operator ingestion MCP tool", () => {
       (candidate) => candidate.name === "run_intelligence_ingestion_tick",
     );
     expect(tool?.inputSchema).toEqual({
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    });
+    const secTool = response.result?.tools?.find(
+      (candidate) => candidate.name === "run_sec_filing_ingestion_tick",
+    );
+    expect(secTool?.inputSchema).toEqual({
       type: "object",
       properties: {},
       additionalProperties: false,
@@ -169,6 +199,61 @@ describe("operator ingestion MCP tool", () => {
           code: "invalid_page_token",
           stage: "provider_fetch",
           retryable: false,
+        },
+      },
+    });
+  });
+
+  it("applies the same closed operator boundary to SEC filing ingestion", async () => {
+    await expect(callSecTick({})).resolves.toMatchObject({
+      result: { isError: true },
+      content: { details: { code: "auth_required" } },
+    });
+    await expect(callSecTick({}, "ordinary-user")).resolves.toMatchObject({
+      result: { isError: true },
+      content: { details: { code: "operator_required" } },
+    });
+    expect(mocks.runSecFilingIngestionTick).not.toHaveBeenCalled();
+
+    mocks.runSecFilingIngestionTick.mockResolvedValue({
+      outcome: "processed",
+      provider: "sec-edgar",
+      runId: "sec-run-id",
+      completedAt: "2026-11-12T08:00:00.000Z",
+      hasMore: false,
+      receiptCount: 2,
+      insertedReceiptCount: 2,
+      linkedSymbolCount: 2,
+    });
+    const response = await callSecTick({}, "operator-user");
+    expect(mocks.runSecFilingIngestionTick).toHaveBeenCalledOnce();
+    expect(response.result.isError).not.toBe(true);
+    expect(response).toMatchObject({
+      content: {
+        data: { provider: "sec-edgar", receiptCount: 2 },
+        meta: { scope: "operator", boundedPages: 1 },
+      },
+    });
+    expect(JSON.stringify(response)).not.toContain("operator-user");
+  });
+
+  it("returns only safe SEC ingestion failure fields", async () => {
+    mocks.runSecFilingIngestionTick.mockRejectedValue(
+      new mocks.IngestionTickError(
+        "sec_fair_access_unavailable",
+        "claim",
+        true,
+      ),
+    );
+    const response = await callSecTick({}, "operator-user");
+    expect(response).toMatchObject({
+      result: { isError: true },
+      content: {
+        error: "SEC filing ingestion tick failed.",
+        details: {
+          code: "sec_fair_access_unavailable",
+          stage: "claim",
+          retryable: true,
         },
       },
     });

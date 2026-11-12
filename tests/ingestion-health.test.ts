@@ -103,6 +103,36 @@ describe("ingestion readiness summary", () => {
     });
   });
 
+  it("summarizes multiple providers without exposing their partitions", () => {
+    const result = summarizeIngestionReadiness(
+      aggregate([
+        provider(),
+        provider({
+          provider: "sec-edgar",
+          partitionCount: 2,
+          totalSuccesses: 4,
+          lastSuccessAt: "2026-11-12T07:59:30.000Z",
+          latestEvidenceAt: "2026-11-12T07:59:15.000Z",
+        }),
+      ]),
+      {
+        collectionMode: "scheduled",
+        publiclyReportedCadenceSeconds: 300,
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "healthy",
+      lastSuccessAt: "2026-11-12T07:59:30.000Z",
+      latestEvidenceAt: "2026-11-12T07:59:15.000Z",
+    });
+    expect(result.providers.map((entry) => entry.provider)).toEqual([
+      "alpaca",
+      "sec-edgar",
+    ]);
+    expect(JSON.stringify(result)).not.toContain("partitionKey");
+  });
+
   it("returns a stable, detail-free unavailable contract", () => {
     expect(
       unavailableIngestionReadiness({
