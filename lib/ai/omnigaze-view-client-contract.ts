@@ -16,6 +16,61 @@ const citationSchema = z.object({
   classification: z.enum(["fact", "derived", "inference"]),
 });
 
+const aiBudgetSchema = z.discriminatedUnion("charged", [
+  z
+    .object({
+      charged: z.literal(false),
+      remaining: z.null(),
+      limit: z.null(),
+      resetAt: z.null(),
+    })
+    .strict(),
+  z
+    .object({
+      charged: z.literal(true),
+      remaining: z.number().int().nonnegative(),
+      limit: z.number().int().positive(),
+      resetAt: z.string().datetime({ offset: true }),
+    })
+    .strict(),
+]).superRefine((budget, context) => {
+  if (budget.charged && budget.remaining > budget.limit) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Remaining AI budget cannot exceed its limit.",
+      path: ["remaining"],
+    });
+  }
+});
+
+const aiGuardSchema = z
+  .object({
+    source: z.enum(["cache", "generated"]),
+    deduplicated: z.boolean(),
+    modelConfig: z.string().trim().min(1).max(128),
+    evidenceFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    cacheExpiresAt: z.string().datetime({ offset: true }),
+    servedAt: z.string().datetime({ offset: true }),
+    budget: aiBudgetSchema,
+  })
+  .strict()
+  .superRefine((guard, context) => {
+    if (guard.source === "cache" && guard.budget.charged) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["budget", "charged"],
+        message: "A cache hit cannot consume an AI generation budget.",
+      });
+    }
+    if (guard.deduplicated && guard.budget.charged) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["budget", "charged"],
+        message: "A deduplicated follower cannot consume another AI budget.",
+      });
+    }
+  });
+
 export const omnigazeViewEnvelopeSchema = z.object({
   data: omnigazeAnalysisSchema,
   meta: z.object({
@@ -40,6 +95,7 @@ export const omnigazeViewEnvelopeSchema = z.object({
       sourceCount: z.number().int().positive(),
     }),
     citations: z.array(citationSchema).min(1),
+    ai: aiGuardSchema.optional(),
     confidenceMeaning: z.literal(
       "evidence_interpretation_not_return_probability",
     ),

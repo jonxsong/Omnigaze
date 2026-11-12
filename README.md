@@ -10,10 +10,11 @@ The public alpha uses provider-backed quotes, chart history, licensed news, and 
 2. Provider adapters ingest market data, licensed news, and configured SEC filings.
 3. The pipeline normalizes, timestamps, hashes, and deduplicates every source event.
 4. Deterministic code calculates market changes and freshness.
-5. The OpenAI Agents SDK produces a typed interpretation constrained to known evidence IDs.
-6. Deterministic code—not the model—calculates any review zones and hypothetical share scenarios, and suppresses them when data is stale, demo, or insufficiently corroborated.
-7. A fresh live inbox read reconciles normalized events into D1, evaluates explicit in-app alert rules, and preserves per-user read, saved, and dismissed state across sessions.
-8. The dashboard, HTTP API, and MCP tools expose the same owner-scoped domain objects.
+5. A fail-closed D1 guard checks a model-aware, evidence-fingerprint cache and atomically reserves the authenticated owner’s generation budget.
+6. On a cache miss, the OpenAI Agents SDK produces a typed interpretation constrained to known evidence IDs; the validated result is cached for at most five minutes and never stores a raw prompt.
+7. Deterministic code—not the model—calculates any review zones and hypothetical share scenarios, and suppresses them when data is stale, demo, or insufficiently corroborated.
+8. A fresh live inbox read reconciles normalized events into D1, evaluates explicit in-app alert rules, and preserves per-user read, saved, and dismissed state across sessions.
+9. The dashboard, HTTP API, and MCP tools expose the same owner-scoped domain objects.
 
 ## Stack
 
@@ -108,6 +109,8 @@ Copy `.env.example` for local development. Never commit `.env` files or API keys
 - The first successful live inbox sync baselines existing history as read so activation does not manufacture a backlog of alerts.
 - Provider corrections retain their stable event identity and user state while exposing a new event revision and an `updated since read` signal.
 - AI may interpret captured evidence but may not invent evidence IDs or act as a trading signal.
+- AI generation is manual, authenticated, and fail-closed behind a durable model-aware cache plus atomic per-owner budgets. The ledger stores hashed request/operation keys, not prompts, credentials, headers, or raw provider payloads.
+- The default generation policy is 20 attempts per UTC day, 5 per rolling minute, and 2 concurrent leases per owner. Exact active retries are denied until the existing lease expires; cache hits spend no additional model budget.
 - AI output schemas do not include target-price or share-quantity fields. Scenario math is deterministic, versioned, and never places orders.
 - Portfolio quantities and cost basis cross APIs as decimal strings and persist as scaled integers.
 - Facts, derived values, inferences, and user views remain visibly distinct.
@@ -138,7 +141,7 @@ Use `server/discover`, `tools/list`, and `tools/call` with MCP version `2026-07-
 - SEC ingestion is available on demand but still needs a configured application/contact user agent and scheduled background ingestion.
 - Alert rules currently deliver only inside the Omnigaze inbox during request-time refreshes. Email, SMS, push, browser notifications, and a continuously running background delivery worker are not enabled.
 - Brokerage import and order execution are intentionally not part of this alpha.
-- AI analysis requires an authenticated user, runs only after an explicit user request, and returns `503 ai_unconfigured` when the server secret is absent. Durable result caching and per-user model budgets/rate controls remain pre-scale work.
+- AI analysis requires an authenticated user, runs only after an explicit user request, and returns `503 ai_unconfigured` when the server secret is absent. The generated cross-watchlist Daily Brief remains an integration milestone; its strict grounded contract, evidence selector, and cache identity are implemented but it is not yet exposed by the dashboard, API, or MCP.
 - Omnigaze provides research support, not investment advice or autonomous trading.
 
 See [Scheduled ingestion](docs/scheduled-ingestion.md) for the operator contract, safety invariants, status semantics, and local verification workflow.

@@ -46,6 +46,9 @@ type ViewResource =
       data?: undefined;
       error: string;
       code: string | null;
+      retryMode: "new_request" | "same_request";
+      retryAt: string | null;
+      retryBlocked: boolean;
     };
 
 const stanceLabel = {
@@ -65,16 +68,39 @@ function formatTimestamp(value: string) {
   }).format(new Date(value));
 }
 
-function responseError(value: unknown, fallback: string) {
-  if (!value || typeof value !== "object") return { message: fallback, code: null };
-  const candidate = value as { error?: unknown; code?: unknown };
+function responseError(value: unknown, fallback: string, response: Response) {
+  if (!value || typeof value !== "object") {
+    return {
+      message: fallback,
+      code: null,
+      retryAt: validTimestamp(
+        response.headers.get("X-Omnigaze-AI-Budget-Retry-At"),
+      ),
+    };
+  }
+  const candidate = value as {
+    error?: unknown;
+    code?: unknown;
+    retryAt?: unknown;
+    retry_at?: unknown;
+  };
   return {
     message:
       typeof candidate.error === "string" && candidate.error.trim()
         ? candidate.error
         : fallback,
     code: typeof candidate.code === "string" ? candidate.code : null,
+    retryAt:
+      validTimestamp(response.headers.get("X-Omnigaze-AI-Budget-Retry-At")) ??
+      validTimestamp(candidate.retryAt) ??
+      validTimestamp(candidate.retry_at),
   };
+}
+
+function validTimestamp(value: unknown) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value))
+    ? new Date(value).toISOString()
+    : null;
 }
 
 export function OmnigazeViewDialog({
@@ -91,24 +117,34 @@ export function OmnigazeViewDialog({
   const controllerRef = useRef<AbortController | null>(null);
   const requestNonceRef = useRef(0);
   const inFlightRef = useRef(false);
+  const uncertainRequestIdRef = useRef<string | null>(null);
 
   const cancelRequest = useCallback(() => {
     requestNonceRef.current += 1;
     controllerRef.current?.abort();
     controllerRef.current = null;
     inFlightRef.current = false;
+    uncertainRequestIdRef.current = null;
   }, []);
 
-  const loadView = useCallback(async () => {
+  const loadView = useCallback(async (
+    attemptMode: "new_request" | "same_request" = "new_request",
+  ) => {
     if (!session.isAuthenticated || inFlightRef.current) return;
     inFlightRef.current = true;
     const controller = new AbortController();
     controllerRef.current = controller;
     const requestNonce = ++requestNonceRef.current;
     const key = instrument.id;
+    const requestId =
+      attemptMode === "same_request" && uncertainRequestIdRef.current
+        ? uncertainRequestIdRef.current
+        : crypto.randomUUID();
+    uncertainRequestIdRef.current = null;
     setResource({ phase: "loading", key });
 
     let timedOut = false;
+    let receivedResponse = false;
     const timeout = window.setTimeout(() => {
       timedOut = true;
       controller.abort();
@@ -122,21 +158,37 @@ export function OmnigazeViewDialog({
           Accept: "application/json",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ symbol_id: instrument.id }),
+        body: JSON.stringify({
+          symbol_id: instrument.id,
+          request_id: requestId,
+        }),
         signal: controller.signal,
       });
-      const body = (await response.json().catch(() => null)) as unknown;
+      let body: unknown;
+      try {
+        body = (await response.json()) as unknown;
+      } catch (error) {
+        if (controller.signal.aborted) throw error;
+        body = null;
+      }
+      receivedResponse = true;
       if (requestNonce !== requestNonceRef.current) return;
       if (!response.ok) {
         const failure = responseError(
           body,
           "The Omnigaze View is temporarily unavailable.",
+          response,
         );
+        uncertainRequestIdRef.current = null;
         setResource({
           phase: "error",
           key,
           error: failure.message,
           code: failure.code,
+          retryMode: "new_request",
+          retryAt: failure.retryAt,
+          retryBlocked:
+            failure.retryAt !== null && Date.parse(failure.retryAt) > Date.now(),
         });
         return;
       }
@@ -144,16 +196,22 @@ export function OmnigazeViewDialog({
       if (parsed.meta.symbolId !== instrument.id) {
         throw new Error("The returned analysis did not match this stock.");
       }
+      uncertainRequestIdRef.current = null;
       setResource({ phase: "ready", key, data: parsed });
     } catch (error) {
       if (requestNonce !== requestNonceRef.current) {
         return;
       }
       if (controller.signal.aborted && !timedOut) return;
+      const uncertainOutcome = !receivedResponse;
+      uncertainRequestIdRef.current = uncertainOutcome ? requestId : null;
       setResource({
         phase: "error",
         key,
         code: timedOut ? "request_timeout" : null,
+        retryMode: uncertainOutcome ? "same_request" : "new_request",
+        retryAt: null,
+        retryBlocked: false,
         error: timedOut
           ? "Analysis timed out before a verified view was ready. Try again."
           : error instanceof Error
@@ -187,6 +245,31 @@ export function OmnigazeViewDialog({
   }, [cancelRequest, resourceKey]);
 
   useEffect(() => () => cancelRequest(), [cancelRequest]);
+
+  const blockedRetryAt =
+    resource.key === resourceKey &&
+    resource.phase === "error" &&
+    resource.retryBlocked
+      ? resource.retryAt
+      : null;
+
+  useEffect(() => {
+    if (!blockedRetryAt) return;
+    const remainingMs = Date.parse(blockedRetryAt) - Date.now();
+    const timer = window.setTimeout(
+      () => {
+        setResource((current) =>
+          current.key === resourceKey &&
+          current.phase === "error" &&
+          current.retryAt === blockedRetryAt
+            ? { ...current, retryBlocked: false }
+            : current,
+        );
+      },
+      Math.max(0, Math.min(remainingMs + 100, 2_147_483_647)),
+    );
+    return () => window.clearTimeout(timer);
+  }, [blockedRetryAt, resourceKey]);
 
   const visibleResource = resource.key === resourceKey
     ? resource
@@ -259,7 +342,10 @@ export function OmnigazeViewDialog({
                   This starts one AI analysis using only currently verified, fresh
                   provider evidence. It will not run until you ask.
                 </p>
-                <button type="button" onClick={() => void loadView()}>
+                <button
+                  type="button"
+                  onClick={() => void loadView("new_request")}
+                >
                   <Sparkles size={14} /> Analyze live evidence
                 </button>
               </section>
@@ -275,13 +361,26 @@ export function OmnigazeViewDialog({
                 <div>
                   <strong>View unavailable</strong>
                   <p>{visibleResource.error}</p>
+                  {visibleResource.retryAt && (
+                    <small className={styles.retryNotice}>
+                      Usage becomes available again around {formatTimestamp(visibleResource.retryAt)}.
+                      This limit controls model requests, not investment confidence.
+                    </small>
+                  )}
                   {visibleResource.code === "auth_required" ? (
                     <a href="/dashboard" target="_top">
                       Sign in again <ArrowRight size={14} />
                     </a>
                   ) : (
-                    <button type="button" onClick={() => void loadView()}>
-                      <RefreshCw size={14} /> Retry analysis
+                    <button
+                      type="button"
+                      disabled={visibleResource.retryBlocked}
+                      onClick={() => void loadView(visibleResource.retryMode)}
+                    >
+                      <RefreshCw size={14} />
+                      {visibleResource.retryMode === "same_request"
+                        ? "Resume request safely"
+                        : "Try a new analysis"}
                     </button>
                   )}
                 </div>
@@ -294,7 +393,9 @@ export function OmnigazeViewDialog({
                       {stanceLabel[ready.data.stance]}
                     </span>
                     <small>
-                      <Clock3 size={12} /> Generated {formatTimestamp(ready.meta.generatedAt)}
+                      <Clock3 size={12} />
+                      {ready.meta.ai?.source === "cache" ? "Cached view from" : "Generated"}{" "}
+                      {formatTimestamp(ready.meta.generatedAt)}
                     </small>
                     <h2>{ready.data.headline}</h2>
                     <p>{ready.data.summary}</p>
@@ -312,6 +413,30 @@ export function OmnigazeViewDialog({
                     </div>
                   </div>
                 </section>
+
+                {ready.meta.ai && (
+                  <section className={styles.aiGuardrail} data-testid="omnigaze-ai-guardrail">
+                    <div>
+                      <ShieldCheck size={16} />
+                      <strong>
+                        {ready.meta.ai.source === "cache"
+                          ? "Verified analysis cache reused"
+                          : ready.meta.ai.deduplicated
+                            ? "Joined an analysis already in progress"
+                            : "Fresh model analysis generated"}
+                      </strong>
+                    </div>
+                    <p>
+                      {ready.meta.ai.budget.charged
+                        ? `One model request used · ${ready.meta.ai.budget.remaining} of ${ready.meta.ai.budget.limit} remain until ${formatTimestamp(ready.meta.ai.budget.resetAt)}.`
+                        : "No additional model request was charged for this view."}
+                    </p>
+                    <small>
+                      Usage controls manage AI cost and abuse. They are not a market signal,
+                      recommendation, or confidence score.
+                    </small>
+                  </section>
+                )}
 
                 <section className={styles.whyNow}>
                   <span>WHY NOW</span>
@@ -404,7 +529,10 @@ export function OmnigazeViewDialog({
                     </span>
                   </div>
                   <p>{ready.meta.disclaimer}</p>
-                  <button type="button" onClick={() => void loadView()}>
+                  <button
+                    type="button"
+                    onClick={() => void loadView("new_request")}
+                  >
                     <RefreshCw size={13} /> Refresh view
                   </button>
                 </footer>

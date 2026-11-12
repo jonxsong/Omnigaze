@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => {
     resolveCanonicalInstrument: vi.fn(),
     getIntelligenceFeed: vi.fn(),
     getChatGPTUser: vi.fn(),
+    findCachedView: vi.fn(),
+    putCachedView: vi.fn(),
+    reserveBudget: vi.fn(),
+    completeBudget: vi.fn(),
     InstrumentResolutionError: MockInstrumentResolutionError,
   };
 });
@@ -31,6 +35,15 @@ vi.mock("@/lib/services/instrument-resolution", () => ({
 
 vi.mock("@/lib/services/live-market-data", () => ({
   liveMarketData: { getIntelligenceFeed: mocks.getIntelligenceFeed },
+}));
+
+vi.mock("@/lib/ai/guardrails-repository", () => ({
+  aiGuardrailsRepository: {
+    findCachedView: mocks.findCachedView,
+    putCachedView: mocks.putCachedView,
+    reserveBudget: mocks.reserveBudget,
+    completeBudget: mocks.completeBudget,
+  },
 }));
 
 import { POST } from "@/app/api/ai/analyze/route";
@@ -67,6 +80,18 @@ describe("AI analysis route", () => {
       email: "a@example.test",
       fullName: "A User",
     });
+    mocks.findCachedView.mockResolvedValue(null);
+    mocks.putCachedView.mockResolvedValue(undefined);
+    mocks.reserveBudget.mockImplementation(() =>
+      Promise.resolve({
+        granted: true,
+        reservationId: "reservation-route-1",
+        remaining: 19,
+        limit: 20,
+        resetAt: new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString(),
+      }),
+    );
+    mocks.completeBudget.mockResolvedValue(undefined);
     mocks.resolveCanonicalInstrument.mockResolvedValue({
       id: "NYSE:IBM",
       ticker: "IBM",
@@ -115,18 +140,33 @@ describe("AI analysis route", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it("analyzes an arbitrary server-verified equity without fixture identity fallback", async () => {
-    const response = await POST(analyzeRequest({ symbol_id: "nyse:ibm" }));
+    const response = await POST(
+      analyzeRequest({
+        symbol_id: "nyse:ibm",
+        request_id: "route-request-1",
+      }),
+    );
     const body = (await response.json()) as {
       meta: {
         symbolId: string;
         dataMode: string;
         evidenceCount: number;
         promptVersion: string;
+        ai: {
+          source: string;
+          budget: { charged: boolean };
+        };
       };
     };
 
     expect(response.status).toBe(200);
     expect(mocks.resolveCanonicalInstrument).toHaveBeenCalledWith("NYSE:IBM");
+    expect(mocks.reserveBudget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerId: "user-a",
+        requestId: "route-request-1",
+      }),
+    );
     expect(mocks.analyzeEvidence).toHaveBeenCalledWith(
       expect.objectContaining({
         instrument: expect.objectContaining({
@@ -141,7 +181,13 @@ describe("AI analysis route", () => {
       dataMode: "live",
       evidenceCount: 1,
       promptVersion: "2026-11-12.1",
+      ai: expect.objectContaining({
+        source: "generated",
+        budget: expect.objectContaining({ charged: true }),
+      }),
     });
+    expect(response.headers.get("x-omnigaze-ai-cache")).toBe("miss");
+    expect(response.headers.get("cache-control")).toBe("no-store");
     expect(JSON.stringify(body)).not.toContain("NVDA");
   });
 
@@ -227,6 +273,37 @@ describe("AI analysis route", () => {
     expect(response.status).toBe(422);
     expect(await response.json()).toMatchObject({
       code: "fresh_evidence_required",
+    });
+    expect(mocks.analyzeEvidence).not.toHaveBeenCalled();
+  });
+
+  it("returns honest retry metadata when the user's rolling budget is full", async () => {
+    const retryAt = new Date(Date.now() + 45_000).toISOString();
+    mocks.reserveBudget.mockResolvedValue({
+      granted: false,
+      reason: "rolling_limit",
+      remaining: 12,
+      limit: 20,
+      retryAt,
+    });
+
+    const response = await POST(
+      analyzeRequest({
+        symbol_id: "NYSE:IBM",
+        request_id: "route-request-rate-limit",
+      }),
+    );
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(Number(response.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(response.headers.get("x-omnigaze-ai-budget-reason")).toBe(
+      "rolling_limit",
+    );
+    expect(await response.json()).toMatchObject({
+      code: "ai_rate_limited",
+      retryAt,
+      budgetReason: "rolling_limit",
     });
     expect(mocks.analyzeEvidence).not.toHaveBeenCalled();
   });

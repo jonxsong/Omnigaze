@@ -42,6 +42,7 @@ describe("local D1 migration reconciliation", () => {
     expect(result.pendingNames).toEqual([
       "0003_intelligence_inbox_v1.sql",
       "0004_ingestion_control_plane_v1.sql",
+      "0005_ai_guardrails_v1.sql",
     ]);
     expect(result.sql).toContain("CREATE TABLE IF NOT EXISTS `inbox_sync_gates`");
     expect(result.sql).toContain(
@@ -49,6 +50,9 @@ describe("local D1 migration reconciliation", () => {
     );
     expect(result.sql).toContain(
       "CREATE TABLE IF NOT EXISTS `provider_ingestion_checkpoints`",
+    );
+    expect(result.sql).toContain(
+      "CREATE TABLE IF NOT EXISTS `ai_model_budget_reservations`",
     );
     expect(result.sql).not.toContain("CREATE TABLE `portfolio_holdings`");
   });
@@ -133,6 +137,7 @@ describe("local D1 migration reconciliation", () => {
         "0002_portfolio_v1.sql",
         "0003_intelligence_inbox_v1.sql",
         "0004_ingestion_control_plane_v1.sql",
+        "0005_ai_guardrails_v1.sql",
       ]);
     } finally {
       sqlite.close();

@@ -72,6 +72,14 @@ const tools = [
       type: "object",
       properties: {
         symbol_id: { type: "string", pattern: canonicalSymbolPattern },
+        request_id: {
+          type: "string",
+          minLength: 8,
+          maxLength: 128,
+          pattern: "^[A-Za-z0-9._:-]+$",
+          description:
+            "Optional idempotency key. Reuse only when retrying the same explicit analysis request.",
+        },
       },
       required: ["symbol_id"],
       additionalProperties: false,
@@ -352,7 +360,16 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
           return toolError("Authentication required.", { code: "auth_required" });
         }
         const parsed = z
-          .object({ symbol_id: symbolSchema })
+          .object({
+            symbol_id: symbolSchema,
+            request_id: z
+              .string()
+              .trim()
+              .min(8)
+              .max(128)
+              .regex(/^[A-Za-z0-9._:-]+$/)
+              .optional(),
+          })
           .strict()
           .safeParse(args);
         if (!parsed.success) return validationError(parsed.error);
@@ -361,7 +378,10 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
           OmnigazeViewError,
         } = await import("@/lib/services/omnigaze-view");
         try {
-          const view = await generateOmnigazeView(parsed.data.symbol_id);
+          const view = await generateOmnigazeView(parsed.data.symbol_id, {
+            ownerId: userId,
+            requestId: parsed.data.request_id,
+          });
           return toolContent(view.data, {
             ...view.meta,
             scope: "personal",
@@ -370,6 +390,21 @@ async function callTool(name: string, args: Record<string, unknown>, request: Re
         } catch (error) {
           if (error instanceof OmnigazeViewError) {
             return toolError(error.message, { code: error.code });
+          }
+          const { OmnigazeAiGuardError } = await import(
+            "@/lib/ai/omnigaze-view-guard"
+          );
+          if (error instanceof OmnigazeAiGuardError) {
+            return toolError(error.message, {
+              code: error.code,
+              ...(error.retryAt ? { retryAt: error.retryAt } : {}),
+              ...(error.retryAfterSeconds
+                ? { retryAfterSeconds: error.retryAfterSeconds }
+                : {}),
+              ...(error.budgetReason
+                ? { budgetReason: error.budgetReason }
+                : {}),
+            });
           }
           throw error;
         }

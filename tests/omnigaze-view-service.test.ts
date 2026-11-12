@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OmnigazeAnalysis } from "@/lib/ai/analysis-contract";
+import type {
+  GuardedOmnigazeViewInput,
+  GuardedOmnigazeViewResult,
+} from "@/lib/ai/omnigaze-view-guard";
 import type { CanonicalSymbol } from "@/lib/market-types";
 import type { OrchestratedIntelligenceFeed } from "@/lib/services/live-market-data";
 import { InstrumentResolutionError } from "@/lib/services/instrument-resolution";
@@ -7,6 +11,10 @@ import {
   generateOmnigazeView,
   OmnigazeViewError,
 } from "@/lib/services/omnigaze-view";
+
+type ServiceDependencies = NonNullable<
+  Parameters<typeof generateOmnigazeView>[2]
+>;
 
 const symbolId = "NYSE:IBM" as CanonicalSymbol;
 const now = new Date("2026-11-12T18:00:00.000Z");
@@ -67,6 +75,29 @@ function liveFeed(
 }
 
 function dependencies(feed = liveFeed()) {
+  const execute = vi.fn(
+    async <T>(
+      input: GuardedOmnigazeViewInput<T>,
+    ): Promise<GuardedOmnigazeViewResult<T>> => ({
+      value: await input.generate(),
+      meta: {
+        source: "generated" as const,
+        deduplicated: false,
+        modelConfig: "test-model",
+        evidenceFingerprint: "a".repeat(64),
+        cacheExpiresAt: "2026-11-12T18:05:00.000Z",
+        budget: {
+          charged: true as const,
+          remaining: 19,
+          limit: 20,
+          resetAt: "2026-11-13T00:00:00.000Z",
+        },
+      },
+    }),
+  );
+  const guard = {
+    execute,
+  };
   return {
     isAiConfigured: () => true,
     now: () => now,
@@ -81,6 +112,8 @@ function dependencies(feed = liveFeed()) {
     }),
     getIntelligenceFeed: vi.fn().mockResolvedValue(feed),
     analyze: vi.fn().mockResolvedValue(analysis),
+    guard: guard as ServiceDependencies["guard"],
+    modelConfig: () => "test-model",
   };
 }
 
@@ -98,7 +131,11 @@ describe("generateOmnigazeView", () => {
   it("generates a cited view for an arbitrary verified symbol", async () => {
     const deps = dependencies();
 
-    const result = await generateOmnigazeView(symbolId, deps);
+    const result = await generateOmnigazeView(
+      symbolId,
+      { ownerId: "owner-1", requestId: "request-1" },
+      deps,
+    );
 
     expect(deps.getIntelligenceFeed).toHaveBeenCalledWith({
       symbols: [symbolId],
@@ -114,6 +151,23 @@ describe("generateOmnigazeView", () => {
             publisher: "alpaca",
           }),
         ],
+      }),
+    );
+    expect(deps.guard!.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerId: "owner-1",
+        symbolId,
+        requestId: "request-1",
+        modelConfig: "test-model",
+        fingerprint: {
+          evidence: [
+            expect.objectContaining({
+              id: "evidence:alpaca:news-1",
+              revisionAt: "2026-11-12T17:59:00.000Z",
+              contentHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+            }),
+          ],
+        },
       }),
     );
     expect(result).toMatchObject({
@@ -138,8 +192,70 @@ describe("generateOmnigazeView", () => {
             title: "IBM publishes a material update",
           }),
         ],
+        ai: {
+          source: "generated",
+          budget: { charged: true, remaining: 19, limit: 20 },
+        },
       },
     });
+  });
+
+  it("excludes volatile receipt time from the evidence content fingerprint", async () => {
+    const firstFeed = liveFeed();
+    const secondFeed = liveFeed({
+      data: firstFeed.data.map((item) => ({
+        ...item,
+        receivedAt: "2026-11-12T18:00:00.000Z",
+      })),
+    });
+    const first = dependencies(firstFeed);
+    const second = dependencies(secondFeed);
+
+    await generateOmnigazeView(
+      symbolId,
+      { ownerId: "owner-1", requestId: "request-first" },
+      first,
+    );
+    await generateOmnigazeView(
+      symbolId,
+      { ownerId: "owner-1", requestId: "request-second" },
+      second,
+    );
+
+    const firstInput = vi.mocked(first.guard!.execute).mock.calls[0][0];
+    const secondInput = vi.mocked(second.guard!.execute).mock.calls[0][0];
+    expect(firstInput.fingerprint.evidence).toEqual(
+      secondInput.fingerprint.evidence,
+    );
+  });
+
+  it("revalidates cached analysis citations against the current evidence set", async () => {
+    const deps = dependencies();
+    const execute = deps.guard!.execute.bind(deps.guard);
+    deps.guard!.execute = vi.fn(async (input) => {
+      const result = await execute(input);
+      return {
+        ...result,
+        value: {
+          ...result.value,
+          data: {
+            ...result.value.data,
+            drivers: result.value.data.drivers.map((driver) => ({
+              ...driver,
+              evidenceIds: ["evidence:not-in-current-feed"],
+            })),
+          },
+        },
+      };
+    });
+
+    await expect(
+      generateOmnigazeView(
+        symbolId,
+        { ownerId: "owner-1", requestId: "request-invalid-cache" },
+        deps,
+      ),
+    ).rejects.toThrow("unknown evidence IDs");
   });
 
   it("fails closed before model work when only demo evidence is available", async () => {
@@ -157,7 +273,7 @@ describe("generateOmnigazeView", () => {
     );
 
     await expectViewError(
-      generateOmnigazeView(symbolId, deps),
+      generateOmnigazeView(symbolId, { ownerId: "owner-1" }, deps),
       "live_evidence_required",
     );
     expect(deps.analyze).not.toHaveBeenCalled();
@@ -178,7 +294,7 @@ describe("generateOmnigazeView", () => {
     );
 
     await expectViewError(
-      generateOmnigazeView(symbolId, deps),
+      generateOmnigazeView(symbolId, { ownerId: "owner-1" }, deps),
       "fresh_evidence_required",
     );
     expect(deps.analyze).not.toHaveBeenCalled();
@@ -190,7 +306,7 @@ describe("generateOmnigazeView", () => {
     const deps = dependencies(feed);
 
     await expectViewError(
-      generateOmnigazeView(symbolId, deps),
+      generateOmnigazeView(symbolId, { ownerId: "owner-1" }, deps),
       "insufficient_evidence",
     );
     expect(deps.analyze).not.toHaveBeenCalled();
@@ -203,7 +319,7 @@ describe("generateOmnigazeView", () => {
     );
 
     await expectViewError(
-      generateOmnigazeView(symbolId, deps),
+      generateOmnigazeView(symbolId, { ownerId: "owner-1" }, deps),
       "symbol_not_supported",
     );
     expect(deps.getIntelligenceFeed).not.toHaveBeenCalled();
@@ -213,10 +329,11 @@ describe("generateOmnigazeView", () => {
     const deps = dependencies();
 
     await expectViewError(
-      generateOmnigazeView(symbolId, {
-        ...deps,
-        isAiConfigured: () => false,
-      }),
+      generateOmnigazeView(
+        symbolId,
+        { ownerId: "owner-1" },
+        { ...deps, isAiConfigured: () => false },
+      ),
       "ai_unconfigured",
     );
     expect(deps.resolveInstrument).not.toHaveBeenCalled();

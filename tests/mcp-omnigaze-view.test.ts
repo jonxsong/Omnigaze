@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { OmnigazeAiGuardError } from "@/lib/ai/omnigaze-view-guard";
 
 const mocks = vi.hoisted(() => {
   class MockOmnigazeViewError extends Error {
@@ -22,7 +23,10 @@ vi.mock("@/lib/services/omnigaze-view", () => ({
 
 import { POST } from "@/app/mcp/route";
 
-async function callView(authenticated = true) {
+async function callView(
+  authenticated = true,
+  args: Record<string, unknown> = { symbol_id: "NYSE:IBM" },
+) {
   const response = await POST(
     new Request("https://omnigaze.test/mcp", {
       method: "POST",
@@ -38,7 +42,7 @@ async function callView(authenticated = true) {
         method: "tools/call",
         params: {
           name: "get_omnigaze_view",
-          arguments: { symbol_id: "NYSE:IBM" },
+          arguments: args,
         },
       }),
     }),
@@ -97,9 +101,15 @@ describe("MCP live Omnigaze View parity", () => {
   });
 
   it("returns the same live view contract with authenticated MCP metadata", async () => {
-    const body = await callView();
+    const body = await callView(true, {
+      symbol_id: "NYSE:IBM",
+      request_id: "mcp-request-1",
+    });
 
-    expect(mocks.generateOmnigazeView).toHaveBeenCalledWith("NYSE:IBM");
+    expect(mocks.generateOmnigazeView).toHaveBeenCalledWith("NYSE:IBM", {
+      ownerId: "trusted-user",
+      requestId: "mcp-request-1",
+    });
     expect(body.result.structuredContent).toMatchObject({
       data: { stance: "mixed", confidence: 0.6 },
       meta: {
@@ -124,6 +134,29 @@ describe("MCP live Omnigaze View parity", () => {
     expect(body.result.isError).toBe(true);
     expect(JSON.parse(body.result.content[0].text)).toMatchObject({
       details: { code: "fresh_evidence_required" },
+    });
+  });
+
+  it("preserves safe budget retry metadata", async () => {
+    mocks.generateOmnigazeView.mockRejectedValue(
+      new OmnigazeAiGuardError(
+        "ai_rate_limited",
+        "2026-11-12T18:02:00.000Z",
+        120,
+        "rolling_limit",
+      ),
+    );
+
+    const body = await callView();
+
+    expect(body.result.isError).toBe(true);
+    expect(JSON.parse(body.result.content[0].text)).toMatchObject({
+      details: {
+        code: "ai_rate_limited",
+        retryAt: "2026-11-12T18:02:00.000Z",
+        retryAfterSeconds: 120,
+        budgetReason: "rolling_limit",
+      },
     });
   });
 });

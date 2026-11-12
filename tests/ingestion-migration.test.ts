@@ -40,7 +40,7 @@ describe("global ingestion control-plane migration", () => {
     }>("drizzle/meta/_journal.json");
 
     expect(current.prevId).toBe(previous.id);
-    expect(journal.entries.at(-1)).toEqual({
+    expect(journal.entries.find((entry) => entry.idx === 4)).toEqual({
       idx: 4,
       tag: "0004_ingestion_control_plane_v1",
       version: "6",

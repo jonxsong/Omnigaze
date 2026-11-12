@@ -4,9 +4,9 @@ import { checkDatabaseReadiness } from "@/lib/services/database-readiness";
 const NOW = new Date("2026-11-12T08:00:00.000Z");
 
 describe("database readiness", () => {
-  it("reports ready only when inbox and ingestion schema markers exist", async () => {
+  it("reports ready only when inbox, ingestion, and AI guardrail schema markers exist", async () => {
     const values = vi.fn(async () => [
-      [3, 2, 2, 2, 3, 3, 4, 15, 12, 5, 2, 9],
+      [3, 2, 2, 2, 3, 3, 4, 15, 12, 5, 2, 9, 10, 12],
     ]);
 
     await expect(
@@ -14,7 +14,7 @@ describe("database readiness", () => {
     ).resolves.toEqual({
       status: "ready",
       checkedAt: NOW.toISOString(),
-      schema: "ingestion-control-plane-v1",
+      schema: "ai-guardrails-v1",
     });
     expect(values).toHaveBeenCalledTimes(1);
   });
@@ -23,7 +23,7 @@ describe("database readiness", () => {
     const result = await checkDatabaseReadiness(
       () => ({
         values: async () => [
-          [3, 2, 2, 2, 3, 3, 4, 15, 12, 5, 2, 0],
+          [3, 2, 2, 2, 3, 3, 4, 15, 12, 5, 2, 9, 10, 0],
         ],
       }),
       () => NOW,
@@ -32,7 +32,7 @@ describe("database readiness", () => {
     expect(result).toEqual({
       status: "unavailable",
       checkedAt: NOW.toISOString(),
-      schema: "ingestion-control-plane-v1",
+      schema: "ai-guardrails-v1",
     });
     expect(JSON.stringify(result)).not.toMatch(/table|column|sqlite|query/i);
   });
@@ -46,7 +46,7 @@ describe("database readiness", () => {
     expect(result).toEqual({
       status: "unavailable",
       checkedAt: NOW.toISOString(),
-      schema: "ingestion-control-plane-v1",
+      schema: "ai-guardrails-v1",
     });
   });
 

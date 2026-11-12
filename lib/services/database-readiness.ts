@@ -5,7 +5,7 @@ export type DatabaseReadinessStatus = "ready" | "unavailable";
 export interface DatabaseReadiness {
   status: DatabaseReadinessStatus;
   checkedAt: string;
-  schema: "ingestion-control-plane-v1";
+  schema: "ai-guardrails-v1";
 }
 
 export interface ReadinessDatabase {
@@ -17,7 +17,7 @@ export type ReadinessDatabaseFactory =
 
 const REQUIRED_COLUMN_COUNTS = [
   3, 2, 2, 2, 3, 3, 4,
-  15, 12, 5, 2, 9,
+  15, 12, 5, 2, 9, 10, 12,
 ] as const;
 
 async function runtimeDatabaseFactory(): Promise<ReadinessDatabase> {
@@ -71,6 +71,18 @@ export async function checkDatabaseReadiness(
             'source_event_id', 'provider', 'partition_key', 'payload_policy',
             'provider_revision_at', 'first_ingestion_run_id',
             'last_ingestion_run_id', 'last_seen_at', 'seen_count'
+          )),
+        (SELECT COUNT(*) FROM pragma_table_info('ai_view_cache_entries')
+          WHERE name IN (
+            'cache_key', 'symbol_id', 'prompt_version', 'model_key',
+            'evidence_fingerprint', 'response_json', 'generated_at',
+            'expires_at', 'last_accessed_at', 'hit_count'
+          )),
+        (SELECT COUNT(*) FROM pragma_table_info('ai_model_budget_reservations')
+          WHERE name IN (
+            'reservation_id', 'owner_id', 'request_key_hash', 'operation',
+            'operation_key_hash', 'cost', 'day_start', 'status', 'reserved_at',
+            'lease_expires_at', 'completed_at', 'safe_error_code'
           ))
     `)) as number[][];
     const row = rows[0];
@@ -81,13 +93,13 @@ export async function checkDatabaseReadiness(
     return {
       status: ready ? "ready" : "unavailable",
       checkedAt,
-      schema: "ingestion-control-plane-v1",
+      schema: "ai-guardrails-v1",
     };
   } catch {
     return {
       status: "unavailable",
       checkedAt,
-      schema: "ingestion-control-plane-v1",
+      schema: "ai-guardrails-v1",
     };
   }
 }

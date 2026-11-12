@@ -1,8 +1,17 @@
+import { z } from "zod";
 import {
+  assertGroundedAnalysis,
   OMNIGAZE_ANALYSIS_PROMPT_VERSION,
+  omnigazeAnalysisSchema,
   type OmnigazeAnalysis,
 } from "@/lib/ai/analysis-contract";
 import { buildAnalysisContextFromFeed } from "@/lib/ai/build-analysis-context";
+import {
+  OmnigazeAiGuard,
+  resolveOmnigazeModelConfig,
+  type GuardedOmnigazeViewInput,
+  type GuardedOmnigazeViewResult,
+} from "@/lib/ai/omnigaze-view-guard";
 import type { CanonicalSymbol, Evidence, Instrument } from "@/lib/market-types";
 import type {
   IntelligenceFeedItem,
@@ -14,6 +23,9 @@ import {
   resolveCanonicalInstrument,
   type ResolvedInstrument,
 } from "@/lib/services/instrument-resolution";
+
+const AI_EVIDENCE_MAX_AGE_SECONDS = 24 * 60 * 60;
+const textEncoder = new TextEncoder();
 
 export type OmnigazeViewErrorCode =
   | "ai_unconfigured"
@@ -31,10 +43,7 @@ const errorContract: Record<
     status: 503,
     message: "AI analysis is not configured in this environment.",
   },
-  symbol_not_supported: {
-    status: 404,
-    message: "Symbol not found.",
-  },
+  symbol_not_supported: { status: 404, message: "Symbol not found." },
   asset_catalog_unavailable: {
     status: 503,
     message: "The asset catalog is temporarily unavailable.",
@@ -64,45 +73,73 @@ export class OmnigazeViewError extends Error {
   }
 }
 
-export interface OmnigazeViewCitation {
-  id: string;
-  title: string;
-  publisher: string;
-  publishedAt: string;
-  url: string | null;
-  classification: Evidence["classification"];
-}
+const citationSchema = z
+  .object({
+    id: z.string().min(1),
+    title: z.string().min(1),
+    publisher: z.string().min(1),
+    publishedAt: z.string().datetime({ offset: true }),
+    url: z.string().url().nullable(),
+    classification: z.enum(["fact", "derived", "inference"]),
+  })
+  .strict();
 
-export interface OmnigazeEvidenceCoverage {
-  score: number;
-  label: "limited" | "moderate" | "strong";
-  evidenceCount: number;
-  sourceCount: number;
-}
+const cachedOmnigazeViewSchema = z
+  .object({
+    data: omnigazeAnalysisSchema,
+    meta: z
+      .object({
+        symbolId: z
+          .string()
+          .regex(/^[A-Z0-9._-]+:[A-Z0-9._-]+$/)
+          .transform((value) => value as CanonicalSymbol),
+        dataCutoff: z.string().datetime({ offset: true }),
+        generatedAt: z.string().datetime({ offset: true }),
+        promptVersion: z.string().min(1).max(128),
+        dataMode: z.literal("live"),
+        providerCoverage: z.enum(["complete", "partial"]),
+        freshness: z
+          .object({
+            state: z.literal("fresh"),
+            asOf: z.string().datetime({ offset: true }),
+            ageSeconds: z.number().int().nonnegative(),
+          })
+          .strict(),
+        evidenceCount: z.number().int().positive(),
+        eventCount: z.number().int().positive(),
+        sources: z.array(z.string().min(1)).min(1),
+        evidenceCoverage: z
+          .object({
+            score: z.number().min(0).max(1),
+            label: z.enum(["limited", "moderate", "strong"]),
+            evidenceCount: z.number().int().positive(),
+            sourceCount: z.number().int().positive(),
+          })
+          .strict(),
+        citations: z.array(citationSchema).min(1),
+        confidenceMeaning: z.literal(
+          "evidence_interpretation_not_return_probability",
+        ),
+        disclaimer: z.string().min(1),
+      })
+      .strict(),
+  })
+  .strict();
 
-export interface GeneratedOmnigazeView {
-  data: OmnigazeAnalysis;
-  meta: {
-    symbolId: CanonicalSymbol;
-    dataCutoff: string;
-    generatedAt: string;
-    promptVersion: string;
-    dataMode: "live";
-    providerCoverage: "complete" | "partial";
-    freshness: {
-      state: "fresh";
-      asOf: string;
-      ageSeconds: number;
-    };
-    evidenceCount: number;
-    eventCount: number;
-    sources: string[];
-    evidenceCoverage: OmnigazeEvidenceCoverage;
-    citations: OmnigazeViewCitation[];
-    confidenceMeaning: "evidence_interpretation_not_return_probability";
-    disclaimer: string;
+type CachedOmnigazeView = z.infer<typeof cachedOmnigazeViewSchema>;
+type AiGuardMeta = GuardedOmnigazeViewResult<CachedOmnigazeView>["meta"];
+
+export type GeneratedOmnigazeView = Omit<CachedOmnigazeView, "meta"> & {
+  meta: CachedOmnigazeView["meta"] & {
+    ai: AiGuardMeta & { servedAt: string };
   };
-}
+};
+
+type OmnigazeViewGuard = {
+  execute(
+    input: GuardedOmnigazeViewInput<CachedOmnigazeView>,
+  ): Promise<GuardedOmnigazeViewResult<CachedOmnigazeView>>;
+};
 
 type OmnigazeViewDependencies = {
   resolveInstrument(symbolId: CanonicalSymbol): Promise<ResolvedInstrument>;
@@ -117,8 +154,35 @@ type OmnigazeViewDependencies = {
     events: ReturnType<typeof buildAnalysisContextFromFeed>["events"];
     dataCutoff: string;
   }): Promise<OmnigazeAnalysis>;
+  guard: OmnigazeViewGuard;
+  modelConfig(): string;
   now(): Date;
   isAiConfigured(): boolean;
+};
+
+const cachedViewCodec = {
+  encode(value: CachedOmnigazeView) {
+    return cachedOmnigazeViewSchema.parse(value);
+  },
+  decode(value: unknown) {
+    return cachedOmnigazeViewSchema.parse(value);
+  },
+};
+
+let defaultGuardInstance: OmnigazeAiGuard<CachedOmnigazeView> | null = null;
+const defaultGuard: OmnigazeViewGuard = {
+  async execute(input) {
+    if (!defaultGuardInstance) {
+      const { aiGuardrailsRepository } = await import(
+        "@/lib/ai/guardrails-repository"
+      );
+      defaultGuardInstance = new OmnigazeAiGuard(
+        aiGuardrailsRepository,
+        cachedViewCodec,
+      );
+    }
+    return defaultGuardInstance.execute(input);
+  },
 };
 
 const defaultDependencies: OmnigazeViewDependencies = {
@@ -128,6 +192,8 @@ const defaultDependencies: OmnigazeViewDependencies = {
     const { analyzeEvidence } = await import("@/lib/ai/analyze-evidence");
     return analyzeEvidence(input);
   },
+  guard: defaultGuard,
+  modelConfig: () => resolveOmnigazeModelConfig(process.env.OPENAI_MODEL),
   now: () => new Date(),
   isAiConfigured: () => Boolean(process.env.OPENAI_API_KEY),
 };
@@ -147,18 +213,14 @@ function coverageFor(evidence: Evidence[]) {
   const sourceCount = new Set(evidence.map((item) => item.publisher)).size;
   const evidenceScore = Math.min(evidence.length, 5) / 5;
   const sourceScore = Math.min(sourceCount, 3) / 3;
-  const score = Math.round((0.2 + evidenceScore * 0.5 + sourceScore * 0.3) * 100) / 100;
-  const label: OmnigazeEvidenceCoverage["label"] =
+  const score =
+    Math.round((0.2 + evidenceScore * 0.5 + sourceScore * 0.3) * 100) / 100;
+  const label: "limited" | "moderate" | "strong" =
     score >= 0.75 ? "strong" : score >= 0.5 ? "moderate" : "limited";
-  return {
-    score,
-    label,
-    evidenceCount: evidence.length,
-    sourceCount,
-  } satisfies OmnigazeEvidenceCoverage;
+  return { score, label, evidenceCount: evidence.length, sourceCount };
 }
 
-function citationsFor(evidence: Evidence[]): OmnigazeViewCitation[] {
+function citationsFor(evidence: Evidence[]) {
   return evidence.map((item) => ({
     id: item.id,
     title: item.title,
@@ -169,19 +231,107 @@ function citationsFor(evidence: Evidence[]): OmnigazeViewCitation[] {
   }));
 }
 
-function liveItemsFor(
+function relevantLiveItems(
   items: IntelligenceFeedItem[],
   symbolId: CanonicalSymbol,
 ) {
-  return items.filter(
-    (item) =>
-      item.isLive &&
-      (item.symbolIds.length === 0 || item.symbolIds.includes(symbolId)),
+  const byId = new Map<string, IntelligenceFeedItem>();
+  for (const item of items) {
+    if (
+      !item.isLive ||
+      (item.symbolIds.length > 0 && !item.symbolIds.includes(symbolId))
+    ) {
+      continue;
+    }
+    const current = byId.get(item.id);
+    const itemRevision = Date.parse(item.providerUpdatedAt ?? item.publishedAt);
+    const currentRevision = current
+      ? Date.parse(current.providerUpdatedAt ?? current.publishedAt)
+      : Number.NEGATIVE_INFINITY;
+    if (!current || itemRevision > currentRevision) byId.set(item.id, item);
+  }
+  return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+async function sha256(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", textEncoder.encode(value));
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function fingerprintItems(items: IntelligenceFeedItem[]) {
+  return Promise.all(
+    items.map(async (item) => ({
+      id: `evidence:${item.id}`,
+      revisionAt: item.providerUpdatedAt ?? item.publishedAt,
+      contentHash: await sha256(
+        JSON.stringify({
+          id: item.id,
+          symbolIds: [...new Set(item.symbolIds)].sort(),
+          source: item.source,
+          sourceKind: item.sourceKind,
+          headline: item.headline,
+          summary: item.summary,
+          publishedAt: item.publishedAt,
+          providerUpdatedAt: item.providerUpdatedAt ?? null,
+          sourceUrl: item.sourceUrl,
+          materiality: item.materiality,
+          category: item.category ?? null,
+          claimStatus: item.claimStatus ?? null,
+          causalLink: item.causalLink ?? null,
+          topicTags: [...new Set(item.topicTags ?? [])].sort(),
+          isControversial: item.isControversial === true,
+        }),
+      ),
+    })),
   );
+}
+
+function coreView(
+  analysis: OmnigazeAnalysis,
+  input: {
+    symbolId: CanonicalSymbol;
+    context: ReturnType<typeof buildAnalysisContextFromFeed>;
+    feed: OrchestratedIntelligenceFeed;
+    generatedAt: string;
+  },
+) {
+  return cachedOmnigazeViewSchema.parse({
+    data: analysis,
+    meta: {
+      symbolId: input.symbolId,
+      dataCutoff: input.context.dataCutoff,
+      generatedAt: input.generatedAt,
+      promptVersion: OMNIGAZE_ANALYSIS_PROMPT_VERSION,
+      dataMode: "live",
+      providerCoverage: input.context.sourceMeta.providerCoverage,
+      freshness: {
+        state: "fresh",
+        asOf: input.feed.meta.freshness.asOf,
+        ageSeconds: input.feed.meta.freshness.ageSeconds,
+      },
+      evidenceCount: input.context.evidence.length,
+      eventCount: input.context.events.length,
+      sources: [
+        ...new Set(input.context.evidence.map((item) => item.publisher)),
+      ].sort(),
+      evidenceCoverage: coverageFor(input.context.evidence),
+      citations: citationsFor(input.context.evidence),
+      confidenceMeaning: "evidence_interpretation_not_return_probability",
+      disclaimer: "Research support only. This is not investment advice.",
+    },
+  });
+}
+
+export interface GenerateOmnigazeViewRequest {
+  ownerId: string;
+  requestId?: string;
 }
 
 export async function generateOmnigazeView(
   symbolId: CanonicalSymbol,
+  request: GenerateOmnigazeViewRequest,
   dependencies: Partial<OmnigazeViewDependencies> = {},
 ): Promise<GeneratedOmnigazeView> {
   const deps = { ...defaultDependencies, ...dependencies };
@@ -203,7 +353,6 @@ export async function generateOmnigazeView(
     since: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1_000).toISOString(),
     limit: 30,
   });
-
   if (feed.meta.dataMode !== "live") {
     throw new OmnigazeViewError("live_evidence_required");
   }
@@ -215,7 +364,7 @@ export async function generateOmnigazeView(
     throw new OmnigazeViewError("fresh_evidence_required");
   }
 
-  const liveItems = liveItemsFor(feed.data, resolved.id);
+  const liveItems = relevantLiveItems(feed.data, resolved.id);
   const instrument = instrumentFromResolved(resolved);
   const context = buildAnalysisContextFromFeed({
     instrument,
@@ -226,33 +375,43 @@ export async function generateOmnigazeView(
     throw new OmnigazeViewError("insufficient_evidence");
   }
 
-  const analysis = await deps.analyze(context);
-  const sources = [...new Set(context.evidence.map((item) => item.publisher))].sort();
-  const generatedAt = deps.now().toISOString();
+  const guarded = await deps.guard.execute({
+    ownerId: request.ownerId,
+    symbolId: resolved.id,
+    promptVersion: OMNIGAZE_ANALYSIS_PROMPT_VERSION,
+    modelConfig: deps.modelConfig(),
+    requestId: request.requestId,
+    freshness: {
+      state: "fresh",
+      asOf: feed.meta.freshness.asOf,
+      maximumAgeSeconds: AI_EVIDENCE_MAX_AGE_SECONDS,
+    },
+    fingerprint: { evidence: await fingerprintItems(liveItems) },
+    generate: async () =>
+      coreView(await deps.analyze(context), {
+        symbolId: resolved.id,
+        context,
+        feed,
+        generatedAt: deps.now().toISOString(),
+      }),
+  });
 
+  assertGroundedAnalysis(
+    guarded.value.data,
+    context.evidence.map((item) => item.id),
+  );
+
+  const current = coreView(guarded.value.data, {
+    symbolId: resolved.id,
+    context,
+    feed,
+    generatedAt: guarded.value.meta.generatedAt,
+  });
   return {
-    data: analysis,
+    ...current,
     meta: {
-      symbolId: resolved.id,
-      dataCutoff: context.dataCutoff,
-      generatedAt,
-      promptVersion: OMNIGAZE_ANALYSIS_PROMPT_VERSION,
-      dataMode: "live",
-      providerCoverage: context.sourceMeta.providerCoverage as
-        | "complete"
-        | "partial",
-      freshness: {
-        state: "fresh",
-        asOf: feed.meta.freshness.asOf,
-        ageSeconds: feed.meta.freshness.ageSeconds,
-      },
-      evidenceCount: context.evidence.length,
-      eventCount: context.events.length,
-      sources,
-      evidenceCoverage: coverageFor(context.evidence),
-      citations: citationsFor(context.evidence),
-      confidenceMeaning: "evidence_interpretation_not_return_probability",
-      disclaimer: "Research support only. This is not investment advice.",
+      ...current.meta,
+      ai: { ...guarded.meta, servedAt: deps.now().toISOString() },
     },
   };
 }

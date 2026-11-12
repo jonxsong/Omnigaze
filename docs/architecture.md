@@ -21,6 +21,7 @@ flowchart LR
     Domain[Market-intelligence service]
     InboxService[Inbox reconciliation service]
     Scenarios[Deterministic scenario engine]
+    AIGuard[(D1 AI cache + budget leases)]
     Agent[Evidence-constrained OpenAI agent]
     API[Browser API]
     MCP[MCP 2026-07-28]
@@ -41,10 +42,13 @@ flowchart LR
   D1 --> Domain
   Portfolio --> Domain
   Domain --> Scenarios
-  Domain --> Agent
+  Domain --> AIGuard
+  AIGuard --> Agent
+  Agent --> AIGuard
+  AIGuard --> API
+  AIGuard --> MCP
   Domain --> API --> UI
   InboxService --> API
-  Agent --> API
   Domain --> MCP --> Clients
   InboxService --> MCP
 ```
@@ -54,6 +58,8 @@ flowchart LR
 - Provider credentials and the OpenAI API key exist only as encrypted server secrets.
 - Browser clients receive normalized data plus explicit source, timestamp, delay, and freshness metadata.
 - AI analysis can cite only evidence IDs supplied by the server and is never treated as an order or recommendation.
+- AI generation is manual and authenticated. A fail-closed D1 guard keys cached output by canonical symbol, prompt version, effective model, and stable evidence revisions; volatile response timestamps are excluded. Cached JSON is bounded and rejects raw prompts, messages, credentials, headers, tokens, and provider payloads.
+- Model work requires an atomic owner-scoped reservation. The default policy permits 20 generation attempts per UTC day, 5 per rolling minute, and 2 concurrent leases. Active cross-isolate retries cannot invoke the model twice; an expired lease may be reclaimed with a new reservation identity, so stale completion cannot finalize it.
 - Price zones and share quantities come from deterministic, versioned scenario math. The model can explain supplied evidence, but its schema has no target-price, quantity, or confidence fields.
 - Numeric scenarios are suppressed when quotes are demo, stale, invalid, or lack corroborating evidence. Confidence means evidence coverage—not the probability of a return.
 - User identity is derived at the server boundary; callers cannot choose an `ownerId`.
@@ -69,7 +75,9 @@ Historical charts fail independently from current snapshots. If provider history
 
 The intelligence inbox also degrades independently. If a provider fails or returns demo data, Omnigaze skips persistence and alert evaluation. A successful live check that cannot prove event freshness may record activation/check metadata, but it persists no stale event or alert delivery. Every degraded path returns the existing durable inbox with explicit sync metadata and never replaces saved research with fixtures.
 
-`GET /api/health` remains a liveness response but reports `status: degraded` unless both provider checks and the required D1 inbox schema markers are ready. The schema probe reads metadata only, exposes no rows or binding details, and catches a missing migration before authenticated traffic reaches the inbox.
+AI analysis also degrades independently. Cache and budget reads fail closed before model invocation; a cache hit spends no additional model budget. Cache lifetime is the earlier of five minutes or the current evidence-freshness boundary. The durable ledger stores hashed request and operation keys rather than raw model inputs, and bounded cleanup removes expired cache rows plus old reservation history.
+
+`GET /api/health` remains a liveness response but reports `status: degraded` unless both provider checks and the required D1 inbox, ingestion, and AI-guardrail schema markers are ready. The schema probe reads metadata only, exposes no rows or binding details, and catches a missing migration before authenticated traffic reaches a stateful workflow.
 
 ## Durable intelligence inbox
 

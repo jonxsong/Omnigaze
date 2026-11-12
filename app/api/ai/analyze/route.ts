@@ -1,5 +1,10 @@
 import { z } from "zod";
 import { getChatGPTUser } from "@/app/chatgpt-auth";
+import {
+  OmnigazeAiGuardError,
+  omnigazeAiGuardErrorHeaders,
+  omnigazeAiGuardResultHeaders,
+} from "@/lib/ai/omnigaze-view-guard";
 import type { CanonicalSymbol } from "@/lib/market-types";
 import {
   generateOmnigazeView,
@@ -17,6 +22,13 @@ const requestSchema = z
       .trim()
       .toUpperCase()
       .regex(/^[A-Z0-9._-]+:[A-Z0-9._-]+$/),
+    request_id: z
+      .string()
+      .trim()
+      .min(8)
+      .max(128)
+      .regex(/^[A-Za-z0-9._:-]+$/)
+      .optional(),
   })
   .strict();
 
@@ -43,8 +55,19 @@ export async function POST(request: Request) {
   const symbolId = parsed.data.symbol_id as CanonicalSymbol;
 
   try {
-    const result = await generateOmnigazeView(symbolId);
-    return Response.json(result, { headers: noStore });
+    const result = await generateOmnigazeView(symbolId, {
+      ownerId: user.userId,
+      requestId: parsed.data.request_id,
+    });
+    return Response.json(result, {
+      headers: {
+        ...noStore,
+        ...omnigazeAiGuardResultHeaders({
+          value: result,
+          meta: result.meta.ai,
+        }),
+      },
+    });
   } catch (error) {
     if (error instanceof OmnigazeViewError) {
       return Response.json(
@@ -55,16 +78,36 @@ export async function POST(request: Request) {
         { status: error.status, headers: noStore },
       );
     }
-    const requestId = crypto.randomUUID();
+    if (error instanceof OmnigazeAiGuardError) {
+      return Response.json(
+        {
+          error: error.message,
+          code: error.code,
+          ...(error.retryAt ? { retryAt: error.retryAt } : {}),
+          ...(error.retryAfterSeconds
+            ? { retryAfterSeconds: error.retryAfterSeconds }
+            : {}),
+          ...(error.budgetReason ? { budgetReason: error.budgetReason } : {}),
+        },
+        {
+          status: error.status,
+          headers: {
+            ...noStore,
+            ...omnigazeAiGuardErrorHeaders(error),
+          },
+        },
+      );
+    }
+    const diagnosticRequestId = crypto.randomUUID();
     console.error("Omnigaze analysis failed", {
-      requestId,
+      requestId: diagnosticRequestId,
       errorName: error instanceof Error ? error.name : "UnknownError",
     });
     return Response.json(
       {
         error: "Analysis could not be completed.",
         code: "analysis_failed",
-        requestId,
+        requestId: diagnosticRequestId,
       },
       { status: 502, headers: noStore },
     );

@@ -114,8 +114,39 @@ test.describe("Omnigaze public experience", () => {
 
     const generatedAt = "2026-11-12T18:00:02.000Z";
     let analysisRequests = 0;
+    let abortNextAnalysis = false;
+    let rateLimitNextAnalysis = false;
+    const analysisBodies: Array<{ symbol_id?: unknown; request_id?: unknown }> = [];
     await page.route("**/api/ai/analyze", async (route) => {
       analysisRequests += 1;
+      analysisBodies.push(
+        (route.request().postDataJSON() ?? {}) as {
+          symbol_id?: unknown;
+          request_id?: unknown;
+        },
+      );
+      if (abortNextAnalysis) {
+        abortNextAnalysis = false;
+        await route.abort("failed");
+        return;
+      }
+      if (rateLimitNextAnalysis) {
+        rateLimitNextAnalysis = false;
+        await route.fulfill({
+          status: 429,
+          contentType: "application/json",
+          headers: {
+            "Retry-After": "120",
+            "X-Omnigaze-AI-Budget-Retry-At": "2026-11-12T18:02:00.000Z",
+          },
+          body: JSON.stringify({
+            error: "The AI analysis budget is temporarily exhausted.",
+            code: "ai_rate_limited",
+          }),
+        });
+        return;
+      }
+      const cacheHit = analysisRequests > 2;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -163,6 +194,27 @@ test.describe("Omnigaze public experience", () => {
               url: "https://example.test/nvda",
               classification: "fact",
             }],
+            ai: {
+              source: cacheHit ? "cache" : "generated",
+              deduplicated: false,
+              modelConfig: "openai-agents-sdk-default",
+              evidenceFingerprint: "a".repeat(64),
+              cacheExpiresAt: "2026-11-12T18:05:02.000Z",
+              servedAt: "2026-11-12T18:00:03.000Z",
+              budget: cacheHit
+                ? {
+                    charged: false,
+                    remaining: null,
+                    limit: null,
+                    resetAt: null,
+                  }
+                : {
+                    charged: true,
+                    remaining: 19,
+                    limit: 20,
+                    resetAt: "2026-11-13T00:00:00.000Z",
+                  },
+            },
             confidenceMeaning: "evidence_interpretation_not_return_probability",
             disclaimer: "Research support only. This is not investment advice.",
           },
@@ -185,7 +237,13 @@ test.describe("Omnigaze public experience", () => {
     await expect(dialog.getByRole("heading", { name: "Current evidence is mixed" })).toBeVisible();
     await expect(dialog.getByText("interpretation confidence")).toBeVisible();
     await expect(dialog.getByText("NVIDIA publishes a material update")).toBeVisible();
+    await expect(dialog.getByText("Fresh model analysis generated")).toBeVisible();
+    await expect(dialog.getByText(/19 of 20 remain/)).toBeVisible();
     expect(analysisRequests).toBe(1);
+    expect(analysisBodies[0]).toMatchObject({ symbol_id: "NASDAQ:NVDA" });
+    expect(analysisBodies[0]?.request_id).toEqual(expect.stringMatching(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    ));
     await page.screenshot({
       path: "outputs/omnigaze-live-view-desktop.png",
       fullPage: false,
@@ -200,6 +258,21 @@ test.describe("Omnigaze public experience", () => {
       path: "outputs/omnigaze-live-view-mobile.png",
       fullPage: false,
     });
+
+    abortNextAnalysis = true;
+    await dialog.getByRole("button", { name: "Refresh view" }).click();
+    await expect(dialog.getByRole("button", { name: "Resume request safely" })).toBeVisible();
+    expect(analysisBodies[1]?.request_id).not.toBe(analysisBodies[0]?.request_id);
+    await dialog.getByRole("button", { name: "Resume request safely" }).click();
+    await expect(dialog.getByText("Verified analysis cache reused")).toBeVisible();
+    expect(analysisBodies[2]?.request_id).toBe(analysisBodies[1]?.request_id);
+    rateLimitNextAnalysis = true;
+    await dialog.getByRole("button", { name: "Refresh view" }).click();
+    await expect(dialog.getByText(/Usage becomes available again around/)).toBeVisible();
+    await expect(dialog.getByText(/not investment confidence/)).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Try a new analysis" })).toBeDisabled();
+    expect(analysisBodies[3]?.request_id).not.toBe(analysisBodies[2]?.request_id);
+    expect(analysisRequests).toBe(4);
 
     if (addedForTest) {
       const remove = await context.request.post("/api/watchlists", {

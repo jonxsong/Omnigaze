@@ -37,7 +37,8 @@ This checklist tracks shipped repository capabilities and the next production mi
 - [x] Deterministic review zones and hypothetical share scenarios that withhold numbers when evidence or quotes are inadequate.
 - [x] Browser/API/MCP parity for market data, watchlists, portfolio, inbox, alert rules, provider status, and live Omnigaze Views.
 - [x] Closed operator-only MCP ingestion tool with authenticated identity enforcement.
-- [ ] Add durable AI-result caching and per-user budget/rate controls before expanding public model usage.
+- [x] Durable, model-aware AI-result caching with stable evidence fingerprints, five-minute freshness-bounded TTLs, atomic per-owner budgets, rolling limits, and cross-isolate leases.
+- [x] Daily Brief core contracts, grounded evidence selection, and correction-aware cache identity; no model, API, MCP, or dashboard invocation is enabled yet.
 - [ ] Add a generated cross-watchlist daily brief using the existing personal Today feed.
 
 ## Engineering and operations

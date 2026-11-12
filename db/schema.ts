@@ -237,6 +237,127 @@ export const omnigazeViews = sqliteTable(
   ],
 );
 
+/**
+ * This cache is deliberately separate from the legacy `omnigaze_views`
+ * projection. A cache entry is immutable in identity (symbol + prompt version
+ * + model configuration + evidence fingerprint), short lived, and contains only the validated
+ * evidence-grounded response envelope. It must never contain prompts,
+ * credentials, request headers, or owner-specific portfolio context.
+ */
+export const aiViewCacheEntries = sqliteTable(
+  "ai_view_cache_entries",
+  {
+    cacheKey: text("cache_key").primaryKey(),
+    symbolId: text("symbol_id").notNull(),
+    promptVersion: text("prompt_version").notNull(),
+    modelKey: text("model_key").notNull(),
+    evidenceFingerprint: text("evidence_fingerprint").notNull(),
+    responseJson: text("response_json").notNull(),
+    generatedAt: text("generated_at").notNull(),
+    expiresAt: text("expires_at").notNull(),
+    lastAccessedAt: text("last_accessed_at").notNull(),
+    hitCount: integer("hit_count").notNull().default(0),
+  },
+  (table) => [
+    uniqueIndex("ai_view_cache_entries_identity_idx").on(
+      table.symbolId,
+      table.promptVersion,
+      table.modelKey,
+      table.evidenceFingerprint,
+    ),
+    index("ai_view_cache_entries_expiry_idx").on(table.expiresAt),
+    index("ai_view_cache_entries_symbol_generated_idx").on(
+      table.symbolId,
+      table.generatedAt,
+    ),
+    check(
+      "ai_view_cache_entries_bounded_identity_check",
+      sql.raw(
+        "length(cache_key) = 64 AND length(symbol_id) BETWEEN 3 AND 64 AND length(prompt_version) BETWEEN 1 AND 128 AND length(model_key) BETWEEN 1 AND 128 AND length(evidence_fingerprint) = 64",
+      ),
+    ),
+    check(
+      "ai_view_cache_entries_payload_check",
+      sql.raw(
+        "length(response_json) BETWEEN 2 AND 65536 AND json_valid(response_json)",
+      ),
+    ),
+    check(
+      "ai_view_cache_entries_time_check",
+      sql.raw(
+        "julianday(generated_at) IS NOT NULL AND julianday(expires_at) > julianday(generated_at) AND julianday(last_accessed_at) IS NOT NULL",
+      ),
+    ),
+    check("ai_view_cache_entries_hit_count_check", sql.raw("hit_count >= 0")),
+  ],
+);
+
+/**
+ * One row is one accepted model-generation attempt. Counting accepted rows in
+ * a single INSERT ... SELECT statement makes rolling and UTC-day limits
+ * atomic on SQLite/D1. Failed attempts remain in the ledger intentionally so
+ * retries cannot evade a budget; exact request-key retries reuse the row.
+ */
+export const aiModelBudgetReservations = sqliteTable(
+  "ai_model_budget_reservations",
+  {
+    reservationId: text("reservation_id").primaryKey(),
+    ownerId: text("owner_id").notNull(),
+    requestKeyHash: text("request_key_hash").notNull(),
+    operation: text("operation").notNull(),
+    operationKeyHash: text("operation_key_hash").notNull(),
+    cost: integer("cost").notNull().default(1),
+    dayStart: text("day_start").notNull(),
+    status: text("status").notNull().default("reserved"),
+    reservedAt: text("reserved_at").notNull(),
+    leaseExpiresAt: text("lease_expires_at").notNull(),
+    completedAt: text("completed_at"),
+    safeErrorCode: text("safe_error_code"),
+  },
+  (table) => [
+    uniqueIndex("ai_model_budget_reservations_request_idx").on(
+      table.ownerId,
+      table.requestKeyHash,
+    ),
+    index("ai_model_budget_reservations_owner_day_idx").on(
+      table.ownerId,
+      table.dayStart,
+      table.reservedAt,
+    ),
+    index("ai_model_budget_reservations_owner_time_idx").on(
+      table.ownerId,
+      table.reservedAt,
+    ),
+    index("ai_model_budget_reservations_active_lease_idx").on(
+      table.ownerId,
+      table.status,
+      table.leaseExpiresAt,
+    ),
+    check(
+      "ai_model_budget_reservations_bounded_identity_check",
+      sql.raw(
+        "length(reservation_id) BETWEEN 8 AND 128 AND length(owner_id) BETWEEN 1 AND 256 AND length(request_key_hash) = 64 AND operation = 'omnigaze_view' AND length(operation_key_hash) = 64 AND cost BETWEEN 1 AND 10 AND length(day_start) = 10",
+      ),
+    ),
+    check(
+      "ai_model_budget_reservations_status_check",
+      sql.raw("status IN ('reserved', 'completed', 'failed')"),
+    ),
+    check(
+      "ai_model_budget_reservations_time_check",
+      sql.raw(
+        "julianday(reserved_at) IS NOT NULL AND julianday(lease_expires_at) > julianday(reserved_at) AND (completed_at IS NULL OR julianday(completed_at) >= julianday(reserved_at))",
+      ),
+    ),
+    check(
+      "ai_model_budget_reservations_terminal_check",
+      sql.raw(
+        "(status = 'reserved' AND completed_at IS NULL AND safe_error_code IS NULL) OR (status = 'completed' AND completed_at IS NOT NULL AND safe_error_code IS NULL) OR (status = 'failed' AND completed_at IS NOT NULL AND length(safe_error_code) BETWEEN 1 AND 64)",
+      ),
+    ),
+  ],
+);
+
 export const inboxEvents = sqliteTable(
   "inbox_events",
   {
