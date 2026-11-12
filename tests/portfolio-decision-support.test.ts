@@ -76,6 +76,7 @@ function dependencies(overrides: Record<string, unknown> = {}) {
           symbolId: "NASDAQ:NVDA",
           quantity: "15",
           averageCost: "140",
+          quantityAsOf: "2026-11-10T18:00:00.000Z",
           version: 1,
         },
       ],
@@ -108,10 +109,44 @@ describe("portfolio decision-support orchestration", () => {
     expect(result.context).toMatchObject({
       hasHolding: true,
       holdingQuantity: "15",
+      holding: {
+        symbolId: "NASDAQ:NVDA",
+        quantity: "15",
+        averageCost: "140",
+        quantityAsOf: "2026-11-10T18:00:00.000Z",
+        version: 1,
+      },
+      quote: {
+        price: 160,
+        asOf: snapshot.asOf,
+        freshUntil: "2026-11-12T18:20:00.000Z",
+        provider: "Alpaca iex",
+        marketCoverage: "limited-exchange",
+        isDelayed: false,
+        delaySeconds: 0,
+      },
       evidenceCount: 2,
       independentSourceCount: 2,
+      providerStreamCount: 2,
       marketDataMode: "live",
+      evidenceDataMode: "live",
+      evidenceFreshness: "fresh",
     });
+    expect(result.context.evidence).toEqual([
+      expect.objectContaining({
+        id: "news-1",
+        headline: "Material update",
+        source: "alpaca",
+        sourceKind: "licensed_news",
+        sourceUrl: "https://example.test/evidence",
+        materiality: "high",
+      }),
+      expect.objectContaining({
+        id: "filing-1",
+        source: "sec-edgar",
+        sourceKind: "sec_filing",
+      }),
+    ]);
     expect(result.decision).toMatchObject({
       eligible: true,
       symbolId: "NASDAQ:NVDA",
@@ -153,6 +188,108 @@ describe("portfolio decision-support orchestration", () => {
     expect("zones" in result.decision).toBe(false);
   });
 
+  it("suppresses numeric output when a live quote is stale", async () => {
+    const staleLiveMeta = {
+      ...freshMeta,
+      freshness: {
+        state: "stale" as const,
+        asOf: "2026-11-12T17:00:00.000Z",
+        ageSeconds: 3_600,
+      },
+    };
+    const result = await getPortfolioDecisionSupport(
+      "owner-a",
+      request,
+      dependencies({
+        getSnapshot: vi.fn().mockResolvedValue({
+          data: { ...snapshot, asOf: "2026-11-12T17:00:00.000Z" },
+          meta: staleLiveMeta,
+        }),
+      }),
+    );
+
+    expect(result.decision).toMatchObject({
+      eligible: false,
+      suppressedReasons: ["fresh_market_data_required"],
+    });
+    expect("zones" in result.decision).toBe(false);
+    expect("positionScenarios" in result.decision).toBe(false);
+  });
+
+  it("suppresses numeric output when the intelligence feed is not live and fresh", async () => {
+    const staleDemoMeta = {
+      ...freshMeta,
+      dataMode: "demo" as const,
+      mode: "demo" as const,
+      freshness: {
+        state: "stale" as const,
+        asOf: "2026-11-11T12:00:00.000Z",
+        ageSeconds: 108_000,
+      },
+    };
+    const result = await getPortfolioDecisionSupport(
+      "owner-a",
+      request,
+      dependencies({
+        getIntelligence: vi.fn().mockResolvedValue({
+          data: [
+            evidence("news-1", "alpaca"),
+            evidence("filing-1", "sec-edgar", "sec_filing"),
+          ],
+          meta: staleDemoMeta,
+        }),
+      }),
+    );
+
+    expect(result.decision).toEqual({
+      eligible: false,
+      symbolId: "NASDAQ:NVDA",
+      suppressedReasons: ["live_evidence_required", "fresh_evidence_required"],
+      tradeExecutionAllowed: false,
+      modelOutputRole: "scenario_math_only",
+    });
+    expect("zones" in result.decision).toBe(false);
+    expect(result.context).toMatchObject({
+      evidenceDataMode: "demo",
+      evidenceFreshness: "stale",
+    });
+  });
+
+  it("excludes invalid, future, and out-of-window evidence and bounds citations", async () => {
+    const validEvidence = Array.from({ length: 14 }, (_, index) =>
+      evidence(`valid-${index}`, `provider-${index}`),
+    );
+    const invalidPublished = {
+      ...evidence("invalid", "invalid-provider"),
+      publishedAt: "not-a-date",
+    };
+    const futureReceived = {
+      ...evidence("future", "future-provider"),
+      receivedAt: "2026-11-12T18:06:00.000Z",
+    };
+    const tooOld = {
+      ...evidence("old", "old-provider"),
+      publishedAt: "2026-11-05T17:59:59.999Z",
+    };
+    const result = await getPortfolioDecisionSupport(
+      "owner-a",
+      request,
+      dependencies({
+        getIntelligence: vi.fn().mockResolvedValue({
+          data: [...validEvidence, invalidPublished, futureReceived, tooOld],
+          meta: freshMeta,
+        }),
+      }),
+    );
+
+    expect(result.context.evidenceCount).toBe(14);
+    expect(result.context.providerStreamCount).toBe(14);
+    expect(result.context.evidence).toHaveLength(12);
+    expect(result.context.evidence.map(({ id }) => id)).not.toEqual(
+      expect.arrayContaining(["invalid", "future", "old"]),
+    );
+  });
+
   it("returns an explicit unavailable result rather than inventing a price", async () => {
     const result = await getPortfolioDecisionSupport(
       "owner-a",
@@ -168,6 +305,12 @@ describe("portfolio decision-support orchestration", () => {
       suppressedReasons: ["market_data_unavailable"],
       tradeExecutionAllowed: false,
       modelOutputRole: "scenario_math_only",
+    });
+    expect(result.context).toMatchObject({
+      hasHolding: true,
+      holding: { symbolId: "NASDAQ:NVDA", version: 1 },
+      quote: null,
+      evidence: [],
     });
   });
 

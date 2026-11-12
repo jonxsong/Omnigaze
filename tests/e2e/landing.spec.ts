@@ -455,4 +455,332 @@ test.describe("Omnigaze public experience", () => {
       "true",
     );
   });
+
+  test("signed-in positions reconcile conflicts and remove without untracking", async ({
+    browser,
+    context,
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await expect(page).toHaveURL(/\/dashboard$/);
+
+    const currentPortfolio = await context.request.get("/api/portfolio");
+    expect(currentPortfolio.status()).toBe(200);
+    const portfolioBody = (await currentPortfolio.json()) as {
+      data: { holdings: Array<{ symbolId: string; version: number }> };
+    };
+    const existing = portfolioBody.data.holdings.find(
+      ({ symbolId }) => symbolId === "NASDAQ:NVDA",
+    );
+    if (existing) {
+      const cleanup = await context.request.delete(
+        `/api/portfolio/holdings/NASDAQ%3ANVDA?expected_version=${existing.version}`,
+      );
+      expect([200, 404]).toContain(cleanup.status());
+    }
+
+    const seed = await context.request.put(
+      "/api/portfolio/holdings/NASDAQ%3ANVDA",
+      {
+        data: {
+          quantity: "1",
+          average_cost: null,
+          cost_currency: "USD",
+          quantity_as_of: new Date().toISOString(),
+          expected_version: 0,
+        },
+      },
+    );
+    expect(seed.status()).toBe(200);
+    const seedBody = (await seed.json()) as { data: { version: number } };
+    const unseed = await context.request.delete(
+      `/api/portfolio/holdings/NASDAQ%3ANVDA?expected_version=${seedBody.data.version}`,
+    );
+    expect(unseed.status()).toBe(200);
+
+    await page.reload();
+    await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+    await page.getByRole("button", { name: "Add position" }).click();
+    const workspaceA = page.getByTestId("portfolio-workspace");
+    await workspaceA.getByLabel("Shares owned").fill("15");
+    await workspaceA.getByLabel(/Average cost per share/).fill("147.25");
+    const createResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/portfolio/holdings/") &&
+        response.request().method() === "PUT",
+    );
+    await workspaceA.getByRole("button", { name: "Save position" }).click();
+    expect((await createResponse).status()).toBe(200);
+    await expect(workspaceA.getByText("Position saved to your account.")).toBeVisible();
+
+    const authCookies = await context.cookies();
+    const contextB = await browser.newContext({
+      storageState: { cookies: authCookies, origins: [] },
+    });
+    const pageB = await contextB.newPage();
+    await pageB.goto(`${new URL(page.url()).origin}/dashboard`);
+    await expect(pageB.locator("main")).toHaveAttribute("data-hydrated", "true");
+    await pageB.getByRole("button", { name: /Own 15 shares/ }).click();
+    const workspaceB = pageB.getByTestId("portfolio-workspace");
+    await workspaceB.getByLabel("Shares owned").fill("16");
+    const updateResponse = pageB.waitForResponse(
+      (response) =>
+        response.url().includes("/api/portfolio/holdings/") &&
+        response.request().method() === "PUT",
+    );
+    await workspaceB.getByRole("button", { name: "Save changes" }).click();
+    expect((await updateResponse).status()).toBe(200);
+    await expect(workspaceB.getByText("Position saved to your account.")).toBeVisible();
+
+    await workspaceA.getByLabel("Shares owned").fill("17");
+    const conflictResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/portfolio/holdings/") &&
+        response.request().method() === "PUT",
+    );
+    await workspaceA.getByRole("button", { name: "Save changes" }).click();
+    expect((await conflictResponse).status()).toBe(409);
+    await expect(workspaceA.getByText("This position changed elsewhere.")).toBeVisible();
+    await expect(workspaceA.getByLabel("Shares owned")).toHaveValue("17");
+    await workspaceA.getByRole("button", { name: "Load latest position" }).click();
+    await expect(workspaceA.getByLabel("Shares owned")).toHaveValue("16");
+
+    await workspaceB.getByRole("button", { name: "Remove position" }).click();
+    const deleteResponse = pageB.waitForResponse(
+      (response) =>
+        response.url().includes("/api/portfolio/holdings/") &&
+        response.request().method() === "DELETE",
+    );
+    await workspaceB.getByRole("button", { name: "Remove", exact: true }).click();
+    expect((await deleteResponse).status()).toBe(200);
+    await expect(
+      workspaceB.getByText("Position removed. The stock remains on your watchlist."),
+    ).toBeVisible();
+    await contextB.close();
+
+    await page.getByRole("button", { name: "Close workspace" }).click();
+    await page.reload();
+    await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+    await expect(
+      page.getByRole("button", { name: "Remove NVDA from watchlist" }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add position" })).toBeVisible();
+  });
+
+  test("research scenarios render evidence gates and cited review checkpoints", async ({
+    context,
+    page,
+  }) => {
+    test.setTimeout(75_000);
+    await page.goto("/signin-with-chatgpt?return_to=/dashboard");
+    await expect(page).toHaveURL(/\/dashboard$/);
+
+    const portfolio = await context.request.get("/api/portfolio");
+    const portfolioBody = (await portfolio.json()) as {
+      data: { holdings: Array<{ symbolId: string; version: number }> };
+    };
+    const existing = portfolioBody.data.holdings.find(
+      ({ symbolId }) => symbolId === "NASDAQ:NVDA",
+    );
+    if (existing) {
+      await context.request.delete(
+        `/api/portfolio/holdings/NASDAQ%3ANVDA?expected_version=${existing.version}`,
+      );
+    }
+    const watchlists = await context.request.get("/api/watchlists");
+    const watchlistBody = (await watchlists.json()) as {
+      data: Array<{ items: Array<{ symbolId: string }> }>;
+    };
+    if (
+      !watchlistBody.data.some((list) =>
+        list.items.some(({ symbolId }) => symbolId === "NASDAQ:NVDA"),
+      )
+    ) {
+      const seed = await context.request.put(
+        "/api/portfolio/holdings/NASDAQ%3ANVDA",
+        {
+          data: {
+            quantity: "1",
+            average_cost: null,
+            cost_currency: "USD",
+            quantity_as_of: new Date().toISOString(),
+            expected_version: 0,
+          },
+        },
+      );
+      expect(seed.status()).toBe(200);
+      const seedBody = (await seed.json()) as { data: { version: number } };
+      expect(
+        (
+          await context.request.delete(
+            `/api/portfolio/holdings/NASDAQ%3ANVDA?expected_version=${seedBody.data.version}`,
+          )
+        ).status(),
+      ).toBe(200);
+    }
+
+    const now = new Date().toISOString();
+    await page.route("**/api/market/snapshot?**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            symbolId: "NASDAQ:NVDA",
+            asOf: now,
+            session: "regular",
+            price: 160,
+            previousClose: 158,
+            change: 2,
+            changePercent: 1.27,
+            volume: 1_000,
+            marketCap: "Unavailable",
+            isDelayed: false,
+            delaySeconds: 0,
+            provider: "Alpaca iex",
+            marketCoverage: "limited-exchange",
+          },
+          meta: {
+            dataMode: "live",
+            mode: "live",
+            providerCoverage: "partial",
+            coverage: "partial",
+            generatedAt: now,
+            freshness: { state: "fresh", asOf: now, ageSeconds: 0 },
+            providers: [],
+            notice: "Live provider data.",
+          },
+        }),
+      });
+    });
+
+    let eligible = false;
+    await page.route("**/api/portfolio/decision-support", async (route) => {
+      const decision = eligible
+        ? {
+            eligible: true,
+            symbolId: "NASDAQ:NVDA",
+            asOf: now,
+            preset: "tight",
+            zones: [
+              {
+                kind: "pullback_review",
+                priceMicros: 150_125_000,
+                distanceBps: -300,
+                explanation: "Review whether the evidence still supports the thesis.",
+              },
+            ],
+            positionScenarios: [
+              {
+                kind: "add",
+                label: "25% of entered budget",
+                quantityMicros: 1_250_000,
+                fractionBps: 2_500,
+                basis: "user_budget",
+              },
+            ],
+            evidenceConfidence: {
+              score: 0.65,
+              label: "moderate",
+              meaning: "Evidence coverage only.",
+              evidenceIds: ["news-1", "filing-1"],
+            },
+            assumptions: ["This review range is not a forecast."],
+            tradeExecutionAllowed: false,
+            modelOutputRole: "scenario_math_only",
+          }
+        : {
+            eligible: false,
+            symbolId: "NASDAQ:NVDA",
+            suppressedReasons: ["insufficient_evidence"],
+            tradeExecutionAllowed: false,
+            modelOutputRole: "scenario_math_only",
+          };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          data: {
+            decision,
+            context: {
+              horizon: "near_term",
+              hasHolding: false,
+              holding: null,
+              evidenceCount: eligible ? 2 : 1,
+              independentSourceCount: eligible ? 2 : 1,
+              providerStreamCount: eligible ? 2 : 1,
+              evidence: eligible
+                ? [
+                    {
+                      id: "news-1",
+                      headline: "Material company update",
+                      source: "alpaca",
+                      sourceKind: "licensed_news",
+                      publishedAt: now,
+                      sourceUrl: "https://example.test/news-1",
+                      materiality: "high",
+                    },
+                    {
+                      id: "filing-1",
+                      headline: "Quarterly filing update",
+                      source: "sec-edgar",
+                      sourceKind: "sec_filing",
+                      publishedAt: now,
+                      sourceUrl: "https://example.test/filing-1",
+                      materiality: "high",
+                    },
+                  ]
+                : [],
+              quote: {
+                price: 160,
+                asOf: now,
+                freshUntil: new Date(Date.parse(now) + 20 * 60 * 1_000).toISOString(),
+                provider: "Alpaca iex",
+                marketCoverage: "limited-exchange",
+                isDelayed: false,
+                delaySeconds: 0,
+              },
+            },
+          },
+          meta: {
+            purpose: "research_scenarios",
+            tradeExecutionAllowed: false,
+            generatedAt: now,
+          },
+        }),
+      });
+    });
+
+    await page.reload();
+    await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+    await page
+      .locator(".watchlist-row")
+      .filter({ hasText: "NVDA" })
+      .getByRole("button")
+      .first()
+      .click();
+    await expect(page.locator(".demo-banner.provider")).toBeVisible();
+    await page.getByRole("button", { name: "Ask Omnigaze", exact: true }).click();
+    const workspace = page.getByTestId("portfolio-workspace");
+    await workspace.getByRole("button", { name: "Check evidence & calculate" }).click();
+    const output = workspace.getByTestId("decision-support-state");
+    await expect(output.getByText("Numbers withheld by the evidence gate")).toBeVisible();
+    await expect(output.getByText(/At least two attributable evidence items/)).toBeVisible();
+    await expect(output).not.toContainText("$150.13");
+
+    eligible = true;
+    await workspace.getByRole("radio", { name: "Tight" }).check();
+    await workspace.getByLabel(/Hypothetical USD budget/).fill("1000");
+    await workspace.getByRole("button", { name: "Check evidence & calculate" }).click();
+    await expect(output.getByText("$150.13")).toBeVisible();
+    await expect(output.getByText("1.25 shares")).toBeVisible();
+    await expect(output.getByText("Material company update")).toBeVisible();
+    await expect(output.getByText("evidence coverage", { exact: true })).toBeVisible();
+    await expect(workspace.getByText(/No trade execution/)).toBeVisible();
+    await page.screenshot({
+      path: "outputs/portfolio-workspace-desktop.png",
+      fullPage: false,
+    });
+  });
 });

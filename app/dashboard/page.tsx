@@ -103,6 +103,7 @@ export default async function DashboardPage() {
       costCurrency: holding.costCurrency,
       quantityAsOf: holding.quantityAsOf,
       version: holding.version,
+      persistence: "server" as const,
     }));
   } catch {
     accountPortfolioUnavailable = true;

@@ -103,11 +103,40 @@ describe("portfolio HTTP API", () => {
       ),
       routeContext("NASDAQ%3ANVDA"),
     );
+    const deletion = await deleteHolding(
+      new Request(
+        "https://omnigaze.test/api/portfolio/holdings/NASDAQ%3ANVDA?expected_version=1",
+        { method: "DELETE" },
+      ),
+      routeContext("NASDAQ%3ANVDA"),
+    );
+    const decision = await postDecisionSupport(
+      jsonRequest(
+        "https://omnigaze.test/api/portfolio/decision-support",
+        "POST",
+        {
+          symbol_id: "NASDAQ:NVDA",
+          horizon: "near_term",
+          preset: "balanced",
+        },
+      ),
+    );
 
-    expect([read.status, profile.status, holding.status]).toEqual([401, 401, 401]);
+    expect([
+      read.status,
+      profile.status,
+      holding.status,
+      deletion.status,
+      decision.status,
+    ]).toEqual([401, 401, 401, 401, 401]);
+    for (const response of [read, profile, holding, deletion, decision]) {
+      expect(response.headers.get("cache-control")).toBe("no-store");
+    }
     expect(mocks.getUserPortfolio).not.toHaveBeenCalled();
     expect(mocks.putPortfolioProfile).not.toHaveBeenCalled();
     expect(mocks.putPortfolioHolding).not.toHaveBeenCalled();
+    expect(mocks.deletePortfolioHolding).not.toHaveBeenCalled();
+    expect(mocks.getPortfolioDecisionSupport).not.toHaveBeenCalled();
   });
 
   it("returns an owner-derived, no-store portfolio envelope", async () => {
@@ -266,6 +295,32 @@ describe("portfolio HTTP API", () => {
       3,
     );
   });
+
+  it.each([
+    ["holding_version_conflict", 409, "version_conflict"],
+    ["holding_not_found", 404, "holding_not_found"],
+  ] as const)(
+    "maps delete repository error %s to a sanitized response",
+    async (repositoryCode, expectedStatus, expectedCode) => {
+      mocks.deletePortfolioHolding.mockRejectedValue(
+        new mocks.PortfolioRepositoryError(repositoryCode),
+      );
+
+      const response = await deleteHolding(
+        new Request(
+          "https://omnigaze.test/api/portfolio/holdings/NASDAQ%3ANVDA?expected_version=3",
+          { method: "DELETE" },
+        ),
+        routeContext("NASDAQ%3ANVDA"),
+      );
+      const body = (await response.json()) as { code: string; error: string };
+
+      expect(response.status).toBe(expectedStatus);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(body.code).toBe(expectedCode);
+      expect(body.error).not.toContain(repositoryCode);
+    },
+  );
 
   it("keeps decision support scenario-only and explicitly non-executing", async () => {
     mocks.getPortfolioDecisionSupport.mockResolvedValue({

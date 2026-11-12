@@ -242,6 +242,9 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 2px solid 
 .ticker-line button { display: grid; padding: 2px; border: 0; background: transparent; color: #5c6d7f; cursor: pointer; }
 .symbol-identity p { overflow: hidden; max-width: 380px; margin: 2px 0 0; color: #657688; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .position-context { display: inline-flex; width: fit-content; margin-top: 7px; padding: 4px 7px; border: 1px solid rgb(98 217 255 / 15%); border-radius: 999px; background: rgb(98 217 255 / 5%); color: #86bbca; font-size: 8px; font-variant-numeric: tabular-nums; }
+.position-context-button { gap: 5px; cursor: pointer; }
+.position-context-button:hover { border-color: rgb(98 217 255 / 32%); color: #a7e6f7; }
+.side-nav button:disabled { cursor: not-allowed; opacity: .45; }
 .quote-block { display: grid; justify-items: end; gap: 1px; }
 .quote-block strong { font-size: 20px; font-weight: 690; letter-spacing: -.02em; }
 .quote-block span { gap: 5px; font-size: 10px; font-weight: 620; }

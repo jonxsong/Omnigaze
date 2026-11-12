@@ -69,6 +69,12 @@ import {
   MAX_AVERAGE_COST_MICROS,
   MAX_QUANTITY_MICROS,
 } from "@/lib/portfolio/decimal";
+import {
+  PortfolioWorkspaceDialog,
+  type PortfolioAvailability,
+  type PortfolioWorkspaceHolding,
+  type WorkspaceQuoteState,
+} from "@/components/portfolio-workspace-dialog";
 
 const timeframes = ["1D", "1W", "1M", "3M", "1Y"] as const;
 type Timeframe = (typeof timeframes)[number];
@@ -86,18 +92,7 @@ export interface DashboardInstrument {
   currency: "USD";
 }
 
-export interface DashboardHolding {
-  symbolId: CanonicalSymbol;
-  ticker?: string;
-  exchange?: string;
-  name?: string;
-  quantity: string;
-  averageCost: string | null;
-  totalCostBasis?: string | null;
-  costCurrency?: string;
-  quantityAsOf?: string;
-  version?: number;
-}
+export type DashboardHolding = PortfolioWorkspaceHolding;
 
 export interface DashboardPreferences {
   version: typeof DASHBOARD_PREFERENCES_VERSION;
@@ -552,6 +547,13 @@ export function MarketDashboard({
   const [showSearch, setShowSearch] = useState(false);
   const [showMobileWatchlist, setShowMobileWatchlist] = useState(false);
   const [insightTab, setInsightTab] = useState<"view" | "evidence">("view");
+  const [portfolioWorkspaceOpen, setPortfolioWorkspaceOpen] = useState(false);
+  const [portfolioWorkspaceInitialView, setPortfolioWorkspaceInitialView] =
+    useState<"position" | "research">("position");
+  const [portfolioAvailability, setPortfolioAvailability] =
+    useState<PortfolioAvailability>(
+      accountPortfolioUnavailable ? "unavailable" : "ready",
+    );
   const [showDataStatus, setShowDataStatus] = useState(false);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -687,6 +689,8 @@ export function MarketDashboard({
             symbolId: position.symbolId,
             quantity: position.shares,
             averageCost: position.averageCost || null,
+            version: null,
+            persistence: "browser" as const,
           }))
         : [];
       setHoldings((current) =>
@@ -1265,6 +1269,36 @@ export function MarketDashboard({
     persistAnonymousPreferences(watchlist, selectedSymbol, nextTimeframe);
   }
 
+  function openPortfolioWorkspace(view: "position" | "research") {
+    if (!hasMarketSelection) return;
+    setPortfolioWorkspaceInitialView(view);
+    setPortfolioWorkspaceOpen(true);
+  }
+
+  function upsertHolding(nextHolding: PortfolioWorkspaceHolding) {
+    setHoldings((current) => {
+      const remaining = current.filter(
+        ({ symbolId }) => symbolId !== nextHolding.symbolId,
+      );
+      return [...remaining, nextHolding].sort((left, right) =>
+        left.symbolId.localeCompare(right.symbolId),
+      );
+    });
+    setPortfolioAvailability("ready");
+  }
+
+  function removeHolding(symbolId: CanonicalSymbol) {
+    setHoldings((current) =>
+      current.filter((holding) => holding.symbolId !== symbolId),
+    );
+    setPortfolioAvailability("ready");
+  }
+
+  function reloadPortfolio(nextHoldings: PortfolioWorkspaceHolding[]) {
+    setHoldings(nextHoldings);
+    setPortfolioAvailability("ready");
+  }
+
   return (
     <main ref={shellRef} className="omnigaze-shell" data-hydrated="false">
       <header className="topbar">
@@ -1759,7 +1793,13 @@ export function MarketDashboard({
 
           <nav className="side-nav" aria-label="Application">
             <button type="button"><Layers3 size={16} /> Intelligence feed</button>
-            <button type="button"><MessageSquareText size={16} /> Ask Omnigaze</button>
+            <button
+              type="button"
+              disabled={!hasMarketSelection}
+              onClick={() => openPortfolioWorkspace("research")}
+            >
+              <MessageSquareText size={16} /> Ask Omnigaze
+            </button>
             <Link href="/onboarding"><Settings2 size={16} /> Preferences</Link>
             {session.isAuthenticated && (
               <a href={session.signOutPath} target="_top">
@@ -1803,11 +1843,11 @@ export function MarketDashboard({
             <div className="overview-metrics" aria-label="Watchlist overview">
               <span><strong>{watchlist.length}</strong> tracked</span>
               <span>
-                <strong>{accountPortfolioUnavailable ? "—" : holdings.length}</strong> held
+                <strong>{portfolioAvailability === "unavailable" ? "—" : holdings.length}</strong> held
               </span>
               <span><strong>{materialEventCount}</strong> material events</span>
               <span className={`overview-source ${sourceState}`}><i />{dataModeLabel}</span>
-              {session.isAuthenticated && accountPortfolioUnavailable && (
+              {session.isAuthenticated && portfolioAvailability === "unavailable" && (
                 <span><TriangleAlert size={11} /> Holdings sync unavailable</span>
               )}
             </div>
@@ -1840,14 +1880,23 @@ export function MarketDashboard({
                   </button>
                 </div>
                 <p>{selectedInstrument.name}</p>
-                {selectedHolding && (
-                  <span className="position-context">
-                    Own {selectedHolding.quantity} shares
-                    {hasSelectedAverageCost
-                      ? ` · ${formatPrice(selectedAverageCost)} average cost`
-                      : ""}
-                  </span>
-                )}
+                <button
+                  type="button"
+                  className="position-context position-context-button"
+                  onClick={() => openPortfolioWorkspace("position")}
+                >
+                  <Settings2 size={11} />
+                  {selectedHolding ? (
+                    <>
+                      Own {selectedHolding.quantity} shares
+                      {hasSelectedAverageCost
+                        ? ` · ${formatPrice(selectedAverageCost)} average cost`
+                        : ""}
+                    </>
+                  ) : (
+                    <>Add position</>
+                  )}
+                </button>
               </div>
             </div>
             <div className="quote-block">
@@ -2159,7 +2208,11 @@ export function MarketDashboard({
                 ))}
               </div>
 
-              <button type="button" className="ask-button">
+              <button
+                type="button"
+                className="ask-button"
+                onClick={() => openPortfolioWorkspace("research")}
+              >
                 <Sparkles size={16} /> Ask Omnigaze about {selectedInstrument.ticker}
               </button>
             </div>
@@ -2198,7 +2251,13 @@ export function MarketDashboard({
             </span>
             <strong>{viewHeadline}</strong>
           </div>
-          <button type="button"><ChevronRight size={18} /></button>
+          <button
+            type="button"
+            aria-label={`Open research scenarios for ${selectedInstrument.ticker}`}
+            onClick={() => openPortfolioWorkspace("research")}
+          >
+            <ChevronRight size={18} />
+          </button>
         </section>
       )}
 
@@ -2217,6 +2276,34 @@ export function MarketDashboard({
         ))}
         <span className="ticker-time">Illustrative index fixture · not live</span>
       </footer>
+
+      {hasMarketSelection && (
+        <PortfolioWorkspaceDialog
+          open={portfolioWorkspaceOpen}
+          onOpenChange={setPortfolioWorkspaceOpen}
+          initialView={portfolioWorkspaceInitialView}
+          instrument={selectedInstrument}
+          holding={selectedHolding}
+          session={session}
+          portfolioAvailability={portfolioAvailability}
+          quoteState={
+            (sourceState === "provider"
+              ? "fresh"
+              : sourceState === "stale"
+                ? "stale"
+                : sourceState === "fixture" || sourceState === "fallback"
+                  ? "fixture"
+                  : sourceState === "loading"
+                    ? "loading"
+                    : "unavailable") satisfies WorkspaceQuoteState
+          }
+          quoteLabel={`${sourceLabel} · ${freshness}`}
+          onPortfolioAvailabilityChange={setPortfolioAvailability}
+          onHoldingUpsert={upsertHolding}
+          onHoldingRemoved={removeHolding}
+          onPortfolioReloaded={reloadPortfolio}
+        />
+      )}
 
       {showMobileWatchlist && (
         <button

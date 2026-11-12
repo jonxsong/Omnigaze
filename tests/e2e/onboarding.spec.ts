@@ -75,4 +75,44 @@ test.describe("Omnigaze onboarding", () => {
       fullPage: true,
     });
   });
+
+  test("keeps anonymous position context device-local and sign-in gated", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/dashboard");
+    await page.evaluate(() => window.localStorage.clear());
+    await page.reload();
+    await expect(page.locator("main")).toHaveAttribute("data-hydrated", "true");
+
+    await page.getByRole("button", { name: "Add position" }).click();
+    const workspace = page.getByTestId("portfolio-workspace");
+    await expect(workspace).toBeVisible();
+    await expect(workspace.getByText("Sign in to save positions")).toBeVisible();
+    await expect(workspace.getByRole("link", { name: /Sign in to sync/ })).toHaveAttribute(
+      "href",
+      /return_to=%2Fdashboard/,
+    );
+
+    await workspace.getByRole("tab", { name: "Research scenarios" }).click();
+    await expect(
+      workspace.getByText("Sign in to run evidence-gated scenarios"),
+    ).toBeVisible();
+    await page.screenshot({
+      path: "outputs/portfolio-workspace-mobile.png",
+      fullPage: false,
+    });
+
+    const dimensions = await page.evaluate(() => ({
+      viewport: document.documentElement.clientWidth,
+      document: document.documentElement.scrollWidth,
+      body: document.body.scrollWidth,
+    }));
+    expect(dimensions.document, JSON.stringify(dimensions)).toBeLessThanOrEqual(
+      dimensions.viewport + 1,
+    );
+    expect(dimensions.body, JSON.stringify(dimensions)).toBeLessThanOrEqual(
+      dimensions.viewport + 1,
+    );
+  });
 });
