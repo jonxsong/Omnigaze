@@ -571,16 +571,33 @@ function d1Adapter(sqlite: DatabaseSync) {
   return {
     prepare(query: string) {
       let values: SQLInputValue[] = [];
+      const parameterIndexes: number[] = [];
+      const sqliteQuery = query.replace(/\?([1-9]\d*)/g, (_match, index: string) => {
+        parameterIndexes.push(Number(index) - 1);
+        return "?";
+      });
+      const sqliteValues = () =>
+        parameterIndexes.length === 0
+          ? values
+          : parameterIndexes.map((index) => {
+              if (index >= values.length) {
+                throw new Error("Missing D1 adapter binding.");
+              }
+              return values[index]!;
+            });
       const prepared = {
         bind(...next: SQLInputValue[]) {
           values = next;
           return prepared;
         },
         async first<T>() {
-          return (sqlite.prepare(query).get(...values) ?? null) as T | null;
+          return (sqlite.prepare(sqliteQuery).get(...sqliteValues()) ??
+            null) as T | null;
         },
         async all<T>() {
-          return { results: sqlite.prepare(query).all(...values) as T[] };
+          return {
+            results: sqlite.prepare(sqliteQuery).all(...sqliteValues()) as T[],
+          };
         },
       };
       return prepared;
