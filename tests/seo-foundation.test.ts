@@ -15,13 +15,13 @@ describe("SEO discovery foundation", () => {
       "https://omnigaze.app/",
     );
     expect(resolvePublicSiteUrl("http://omnigaze.app").toString()).toBe(
-      "https://omnigaze.perkyaisle4.chatgpt.site/",
+      "https://omnigaze.jonzhang.dev/",
     );
     expect(resolvePublicSiteUrl("https://127.0.0.1:3000").toString()).toBe(
-      "https://omnigaze.perkyaisle4.chatgpt.site/",
+      "https://omnigaze.jonzhang.dev/",
     );
     expect(resolvePublicSiteUrl("https://user:secret@omnigaze.app").toString()).toBe(
-      "https://omnigaze.perkyaisle4.chatgpt.site/",
+      "https://omnigaze.jonzhang.dev/",
     );
   });
 

@@ -7,7 +7,7 @@
   <p>Track the market. Understand the context. Inspect the evidence. Ask better questions.</p>
 
   <p>
-    <a href="https://omnigaze.perkyaisle4.chatgpt.site"><img alt="Status: Controlled Beta" src="https://img.shields.io/badge/status-controlled%20beta-62d9ff?labelColor=071018"></a>
+    <a href="https://omnigaze.jonzhang.dev"><img alt="Status: Controlled Beta" src="https://img.shields.io/badge/status-controlled%20beta-62d9ff?labelColor=071018"></a>
     <a href="https://github.com/jonxsong/omnigaze/actions/workflows/ci.yml"><img alt="Omnigaze CI" src="https://github.com/jonxsong/omnigaze/actions/workflows/ci.yml/badge.svg"></a>
     <img alt="TypeScript strict" src="https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white">
     <img alt="Cloudflare Workers" src="https://img.shields.io/badge/Cloudflare-Workers%20%2B%20D1-F38020?logo=cloudflare&logoColor=white">
@@ -15,10 +15,10 @@
   </p>
 
   <p>
-    <a href="https://omnigaze.perkyaisle4.chatgpt.site"><strong>Open the live beta</strong></a>
+    <a href="https://omnigaze.jonzhang.dev"><strong>Open the live beta</strong></a>
     · <a href="docs/architecture.md">Architecture</a>
     · <a href="docs/product-status.md">Product status</a>
-    · <a href="https://omnigaze.perkyaisle4.chatgpt.site/data-and-deletion">Data controls</a>
+    · <a href="https://omnigaze.jonzhang.dev/data-and-deletion">Data controls</a>
   </p>
 </div>
 
@@ -223,9 +223,9 @@ Wider commercial-launch work—including streaming, verified unattended collecti
 
 ## Trust surfaces
 
-- [Privacy](https://omnigaze.perkyaisle4.chatgpt.site/privacy)
-- [Terms](https://omnigaze.perkyaisle4.chatgpt.site/terms)
-- [Data export and deletion](https://omnigaze.perkyaisle4.chatgpt.site/data-and-deletion)
+- [Privacy](https://omnigaze.jonzhang.dev/privacy)
+- [Terms](https://omnigaze.jonzhang.dev/terms)
+- [Data export and deletion](https://omnigaze.jonzhang.dev/data-and-deletion)
 - [Scheduled-ingestion contract](docs/scheduled-ingestion.md)
 
 ---

@@ -1,5 +1,5 @@
 const DEFAULT_PUBLIC_SITE_ORIGIN =
-  "https://omnigaze.perkyaisle4.chatgpt.site";
+  "https://omnigaze.jonzhang.dev";
 
 const NON_PUBLIC_HOSTS = new Set(["localhost", "0.0.0.0", "127.0.0.1", "::1"]);
 
